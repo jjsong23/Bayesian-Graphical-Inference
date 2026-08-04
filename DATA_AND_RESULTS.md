@@ -1,0 +1,34 @@
+# Data and results handoff
+
+The GitHub repository intentionally omits `data/`, `results/`, `outputs/`, large spreadsheets, compressed source files, and the incremental SQLite cache. They are retained in the complete project ZIP prepared for OneDrive.
+
+## Restore the complete workspace
+
+1. Clone the GitHub repository.
+2. Extract the complete project archive.
+3. Copy or merge the archive's `data/`, `results/`, `outputs/`, and root-level `.xlsx` files into the repository root.
+4. Preserve the relative paths. The evidence registry and analysis scripts resolve inputs from those paths.
+5. Start the workbench with `gui/run_workbench.ps1`.
+
+The archive is a point-in-time research record. Do not overwrite an older archive when publishing a revised one; use a dated filename and retain its SHA-256 checksum.
+
+## Data layout
+
+- `data/node_selection/`: signaling-universe definitions, GO terms, abundance/transcript evidence, and node-level Bayes-factor tables.
+- `data/kinase_predictor/` and `data/pka_ko/`: kinase-model resources and PKA-knockout phosphoproteomic inputs.
+- `data/edge_characterization/`: edge evidence, raw-source downloads, compatibility tables, factor catalogs, and the incremental unordered-pair cache.
+- `data/colocalization/`: localization profiles and scientist-reviewable compartment compatibility matrices.
+- `data/experimental_ppi/`: STRING/BioGRID/IntAct-derived prior-support resources and evidence tiers.
+- `results/`: versioned node, edge, colocalization, AlphaFold-candidate, path, and GUI-run outputs.
+- `outputs/`: auxiliary generated output files.
+
+## External sources represented
+
+The working data tree includes derived or downloaded material from resources such as Gene Ontology, UniProt, Human Protein Atlas, STRING, STITCH, OmniPath, COMPARTMENTS, BioGRID, IntAct, PhosphoSitePlus-derived site annotations where available, KinasePredictor, mpkCCD localization/proteomics, principal-cell RNA sequencing, and the PKA-knockout phosphoproteomic study data supplied for this project.
+
+This file is an inventory, not a redistribution license. Before public sharing, verify the current terms, required citations, and redistribution permissions for every external source. In particular, keep restricted datasets in controlled OneDrive storage if their terms do not permit GitHub redistribution.
+
+## Reproducibility convention
+
+Each GUI run creates a new directory under `results/gui_runs/` with its configuration, node posterior table, selected universe, edge matrix, supported edge list, path tables, eligibility audit, and summary. Treat these directories as immutable records. The SQLite edge cache stores raw pair-level observations for reuse; changes to weights or normalization settings rescore cached observations without recomputing unchanged source lookups.
+

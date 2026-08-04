@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "node_streams": [
+    {
+      "id": "protein_abundance",
+      "label": "mpkCCD protein abundance",
+      "description": "Back-transformed mpkCCD protein abundance with the current complement-of-minimum factor.",
+      "column": "protein_factor",
+      "neutral_value": 0.5,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "protein_abundance",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "q75 = 1.263034e9 linear abundance",
+        "help": "Multiplies the empirical q75 threshold calculated from all finite back-transformed protein abundances."
+      }
+    },
+    {
+      "id": "pc_transcript",
+      "label": "Principal-cell RNA",
+      "description": "Positive principal-cell median TPM values; zero measurements remain neutral/missing.",
+      "column": "pc_transcript_factor",
+      "neutral_value": 0.5,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "pc_transcript",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "q75 = 7.1225 TPM",
+        "help": "Multiplies the empirical q75 threshold calculated from positive principal-cell TPM values; zero measurements remain neutral."
+      }
+    },
+    {
+      "id": "kinase_activity",
+      "label": "PKA-KO kinase activity",
+      "description": "Absolute-LFC kinase-profile evidence from the top-ten KinasePredictor analysis.",
+      "column": "kinase_relative_multiplier",
+      "neutral_value": 1.0,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "dependence_group": "pka_ko_phosphoproteomics",
+      "normalization": {
+        "handler": "kinase_activity",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "q75 = 0.17 absolute LFC",
+        "help": "Multiplies the q75 threshold from all kinase-level absolute median phosphosite LFC values."
+      }
+    },
+    {
+      "id": "phosphoprotein_response",
+      "label": "PKA-KO phosphoprotein response",
+      "description": "Maximum absolute raw phosphosite LFC assigned to the phosphorylated protein.",
+      "column": "phosphoprotein_relative_multiplier",
+      "neutral_value": 1.0,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "dependence_group": "pka_ko_phosphoproteomics",
+      "normalization": {
+        "handler": "phosphoprotein_response",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "site-count-matched q^(1/n) thresholds",
+        "help": "Multiplies each protein's site-count-matched threshold; proteins without detected sites remain neutral."
+      }
+    }
+  ],
+  "edge_streams": [
+    {
+      "id": "mpkccd_localization",
+      "label": "mpkCCD localization",
+      "description": "Differential-fraction localization similarity.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/mpkccd_localization_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": "mpkccd_bayes_factor",
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "mpkccd_localization",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "per-node q75 dot-product thresholds",
+        "help": "Multiplies every node-specific q75 localization threshold before reciprocal symmetrization."
+      }
+    },
+    {
+      "id": "kinase_predictor",
+      "label": "KinasePredictor",
+      "description": "Observed/curated phosphosite kinase-to-protein predictions.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/kinase_predictor_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": "kinasepredictor_bayes_factor",
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "kinase_predictor",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "per-phosphosite q75 motif-score thresholds",
+        "help": "Multiplies each observed phosphosite's motif-score threshold before top-ten kinase hits are combined."
+      }
+    },
+    {
+      "id": "string_v12",
+      "label": "STRING v12",
+      "description": "Mouse functional associations from STRING v12.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/string_v12_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": "string_bayes_factor",
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "string_v12",
+        "control_label": "Ref ×",
+        "default_multiplier": 1.0,
+        "reference": "STRING prior/reference score = 0.041",
+        "help": "STRING uses a reference odds score rather than the Gaussian Tq kernel. This multiplier changes that reference score."
+      }
+    },
+    {
+      "id": "hpa_primary",
+      "label": "HPA primary localization",
+      "description": "Enhanced, Supported, and Approved HPA localization calls.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/hpa_primary_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": "hpa_bayes_factor",
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "exclusive_group": "hpa_localization",
+      "normalization": {
+        "handler": "hpa_primary",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "per-node q75 cosine-similarity thresholds",
+        "help": "Multiplies HPA primary-profile thresholds before reciprocal symmetrization."
+      }
+    },
+    {
+      "id": "hpa_high_confidence",
+      "label": "HPA high confidence",
+      "description": "Enhanced and Supported HPA calls only; sensitivity alternative to HPA primary.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/hpa_high_confidence_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": null,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "exclusive_group": "hpa_localization",
+      "normalization": {
+        "handler": "hpa_high_confidence",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "per-node q75 cosine-similarity thresholds",
+        "help": "Multiplies HPA Enhanced/Supported-profile thresholds before reciprocal symmetrization."
+      }
+    },
+    {
+      "id": "omnipath_core",
+      "label": "OmniPath core",
+      "description": "Core mouse signaling interactions collapsed to unsigned, undirected pairs.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/omnipath_core_bf_gt1.tsv.gz",
+      "factor_column": "omnipath_bayes_factor",
+      "target_factor_column": "omnipath_bayes_factor",
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "omnipath_core",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "q75 curation effort = 6",
+        "help": "Multiplies the q75 curation-effort threshold from all mouse OmniPath pairs."
+      }
+    },
+    {
+      "id": "stitch_secondary_messenger",
+      "label": "STITCH v5 messenger–protein",
+      "description": "Mouse protein–chemical associations for the curated secondary-messenger nodes.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/stitch_secondary_messenger_bf_gt1.tsv.gz",
+      "factor_column": "stitch_bayes_factor",
+      "target_factor_column": null,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "normalization": {
+        "handler": "stitch_secondary_messenger",
+        "control_label": "Ref ×",
+        "default_multiplier": 1.0,
+        "reference": "STITCH reporting-floor score = 0.150",
+        "help": "STITCH uses combined-score odds relative to its 0.150 reporting floor. This multiplier changes that reference score; missing records remain neutral."
+      }
+    },
+    {
+      "id": "scaffold_triadic_closure",
+      "label": "Scaffold-mediated closure",
+      "description": "Fixed one-pass evidence for protein pairs that each have a strong edge to the same adaptor/scaffold.",
+      "derived": true,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "derived_from_selected_edge_graph",
+      "parameters": [
+        {
+          "id": "anchor_probability_cutoff",
+          "label": "Anchor >",
+          "default": 0.9,
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "step": 0.01,
+          "help": "A protein-scaffold edge must exceed this pre-closure probability before it can support closure."
+        },
+        {
+          "id": "closure_likelihood",
+          "label": "Support L",
+          "default": 0.9,
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "step": 0.01,
+          "help": "Likelihood assigned to every qualifying pair. Relative to the neutral likelihood 0.5, the default 0.90 gives BF = 1.8."
+        }
+      ],
+      "normalization": {
+        "handler": "scaffold_triadic_closure",
+        "user_control": false,
+        "control_label": "",
+        "default_multiplier": 1.0,
+        "reference": "Binary shared-scaffold rule; no empirical Tq or scaffold-degree penalty",
+        "help": "Closure uses the Anchor and Support L controls and is calculated once without recursive feedback."
+      }
+    }
+  ],
+  "path_ontology_classes": [
+    {
+      "id": "receptor",
+      "label": "Receptor",
+      "roots": ["GO:0060089", "GO:0038023"],
+      "description": "Proteins annotated under molecular transducer activity or signaling receptor activity.",
+      "default_enabled": true
+    },
+    {
+      "id": "receptor_regulator",
+      "label": "Receptor regulator",
+      "roots": ["GO:0030545"],
+      "description": "Regulators of receptor activity.",
+      "default_enabled": true
+    },
+    {
+      "id": "ligand",
+      "label": "Ligand",
+      "roots": ["GO:0048018", "GO:0005102"],
+      "description": "Receptor ligands and signaling-receptor binding proteins.",
+      "default_enabled": true
+    },
+    {
+      "id": "kinase",
+      "label": "Kinase",
+      "roots": ["GO:0016301"],
+      "description": "Kinase activity and its descendants.",
+      "default_enabled": true
+    },
+    {
+      "id": "phosphatase",
+      "label": "Phosphatase",
+      "roots": ["GO:0016791"],
+      "description": "Phosphatase activity and its descendants.",
+      "default_enabled": true
+    },
+    {
+      "id": "cyclase",
+      "label": "Cyclase",
+      "roots": ["GO:0004016", "GO:0004383"],
+      "description": "Adenylate and guanylate cyclase activities.",
+      "default_enabled": true
+    },
+    {
+      "id": "phosphodiesterase",
+      "label": "Phosphodiesterase",
+      "roots": ["GO:0004112"],
+      "description": "Cyclic-nucleotide phosphodiesterase activity.",
+      "default_enabled": true
+    },
+    {
+      "id": "phospholipase",
+      "label": "Phospholipase",
+      "roots": ["GO:0120548"],
+      "description": "Phosphatidylinositol phospholipase C activity and its descendants.",
+      "default_enabled": true
+    },
+    {
+      "id": "nos",
+      "label": "Nitric-oxide synthase",
+      "roots": ["GO:0004517"],
+      "description": "Nitric-oxide synthase activity.",
+      "default_enabled": true
+    },
+    {
+      "id": "gtpase",
+      "label": "GTPase",
+      "roots": ["GO:0003924"],
+      "description": "GTPase activity and its descendants.",
+      "default_enabled": true
+    },
+    {
+      "id": "gtpase_regulator",
+      "label": "GTPase regulator",
+      "roots": ["GO:0030695", "GO:0005085", "GO:0005096"],
+      "description": "GTPase regulatory, exchange-factor, and activating activities.",
+      "default_enabled": true
+    },
+    {
+      "id": "kinase_phosphatase_binding",
+      "label": "Kinase/phosphatase binding",
+      "roots": ["GO:0019900", "GO:0019902", "GO:0051018"],
+      "description": "Kinase, phosphatase, and protein kinase A binding activities.",
+      "default_enabled": true
+    },
+    {
+      "id": "second_messenger_binding",
+      "label": "Second-messenger binding",
+      "roots": ["GO:0030551", "GO:0005516"],
+      "description": "Cyclic-nucleotide and calmodulin binding activities.",
+      "default_enabled": true
+    },
+    {
+      "id": "signaling_process",
+      "label": "Signaling process",
+      "roots": ["GO:0023052", "GO:0007165", "GO:0035556", "GO:0007154"],
+      "description": "Broad signaling, signal transduction, intracellular signaling, and cell communication processes.",
+      "default_enabled": true
+    },
+    {
+      "id": "signaling_regulation",
+      "label": "Signaling regulation",
+      "roots": ["GO:0009966"],
+      "description": "Regulation of signal transduction.",
+      "default_enabled": true
+    },
+    {
+      "id": "second_messenger",
+      "label": "Second messenger",
+      "roots": [],
+      "description": "Curated non-protein second-messenger molecules; this class is not derived from a GO root.",
+      "default_enabled": true
+    },
+    {
+      "id": "adaptor_scaffold",
+      "label": "Adaptor/scaffold",
+      "roots": ["GO:0060090", "GO:0140378"],
+      "description": "Molecular adaptor and molecular scaffold activity. Disabled by default but available for sensitivity analyses.",
+      "default_enabled": false
+    }
+  ],
+  "defaults": {
+    "include_second_messengers": true,
+    "node_non_neutral_tolerance": 1e-12,
+    "edge_prior_probability": 0.5,
+    "edge_probability_cutoff": 0.5,
+    "start_node": "Prkaca",
+    "target_node": "Aqp2",
+    "top_k_paths": 25,
+    "maximum_hops": 6,
+    "path_minimum_edge_probability": 0.5,
+    "signaling_intermediates_only": true,
+    "exclude_multirole_scaffolds": false
+  }
+}

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Configure and run the graphical Bayesian signaling workflow." />
+    <title>Graphical Bayesian Inference</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Knepper Lab · Bayesian signaling</p>
+        <h1>Graphical Bayesian Inference</h1>
+      </div>
+      <div class="project-state"><span class="status-dot"></span><span>Local workbench</span></div>
+    </header>
+
+    <main class="workspace">
+      <form id="workflow-form" class="configuration" aria-label="Workflow configuration">
+        <section class="stage" aria-labelledby="node-title">
+          <div class="stage-heading">
+            <span class="stage-number">01</span>
+            <div>
+              <h2 id="node-title">Select nodes</h2>
+              <p>Choose evidence that establishes the signaling universe.</p>
+            </div>
+          </div>
+          <div id="node-streams" class="stream-list"></div>
+          <div class="parameter-grid compact-grid">
+            <label class="check-field span-two">
+              <input id="include-messengers" type="checkbox" />
+              <span>Include curated second messengers</span>
+            </label>
+            <label>
+              <span>Neutral tolerance</span>
+              <input id="node-tolerance" type="number" min="0" max="0.1" step="0.000000000001" />
+            </label>
+          </div>
+          <p class="scientific-note">Tq × scales each dataset's stored empirical threshold; 1.00 reproduces the current analysis. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source.</p>
+        </section>
+
+        <section class="stage" aria-labelledby="edge-title">
+          <div class="stage-heading">
+            <span class="stage-number">02</span>
+            <div>
+              <h2 id="edge-title">Characterize edges</h2>
+              <p>Combine selected pairwise Bayes factors as undirected evidence.</p>
+            </div>
+          </div>
+          <div id="edge-streams" class="stream-list"></div>
+          <p class="scientific-note">Localization and motif streams scale their node- or site-specific Tq values. STRING and STITCH use Ref × because their normalizations use reference odds. Optional scaffold closure applies one fixed likelihood when both proteins have an edge above Anchor to the same annotated scaffold; it has no degree penalty or empirical Tq. Cached raw evidence is rescored when controls change.</p>
+          <div class="parameter-grid">
+            <label>
+              <span>Edge prior</span>
+              <input id="edge-prior" type="number" min="0.000001" max="0.999999" step="0.01" />
+            </label>
+            <label>
+              <span>Output cutoff</span>
+              <input id="edge-cutoff" type="number" min="0" max="1" step="0.01" />
+            </label>
+          </div>
+        </section>
+
+        <section class="stage" aria-labelledby="path-title">
+          <div class="stage-heading path-heading">
+            <span class="stage-number">03</span>
+            <div>
+              <h2 id="path-title">Find paths</h2>
+              <p>Extend the graph to a target and rank supported routes.</p>
+            </div>
+            <label class="switch" title="Enable path finding">
+              <input id="path-enabled" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+          <div id="path-controls">
+            <div class="parameter-grid">
+              <label>
+                <span>Starting node</span>
+                <input id="path-start" type="text" autocomplete="off" placeholder="Prkaca" />
+              </label>
+              <label>
+                <span>Target</span>
+                <input id="path-target" type="text" autocomplete="off" placeholder="Aqp2" />
+              </label>
+              <label>
+                <span>Top paths</span>
+                <input id="path-top-k" type="number" min="1" max="500" step="1" />
+              </label>
+              <label>
+                <span>Maximum hops</span>
+                <input id="path-max-hops" type="number" min="1" max="12" step="1" />
+              </label>
+              <label>
+                <span>Path edge cutoff</span>
+                <input id="path-cutoff" type="number" min="0" max="0.999999" step="0.01" />
+              </label>
+            </div>
+            <div class="path-rules">
+              <label class="check-field">
+                <input id="signal-only" type="checkbox" />
+                <span>Signaling-component intermediates only</span>
+              </label>
+              <label class="check-field">
+                <input id="exclude-multirole-scaffolds" type="checkbox" />
+                <span>Also exclude multi-role kinase/scaffolds</span>
+              </label>
+            </div>
+            <fieldset id="ontology-selector" class="ontology-selector">
+              <legend>Allowed intermediate ontology roles</legend>
+              <div class="ontology-actions" aria-label="Ontology selection shortcuts">
+                <button id="ontology-all" type="button">Select all</button>
+                <button id="ontology-none" type="button">Clear</button>
+              </div>
+              <p>Select which node annotations qualify a protein or molecule to relay a path.</p>
+              <div id="path-ontology-classes" class="ontology-grid"></div>
+            </fieldset>
+            <p class="scientific-note">The sensitivity-oriented default includes ligand, binding, generic signaling-process, catalytic, regulatory, and second-messenger roles. Adaptor/scaffold is available but off by default. A multi-role node is eligible when any selected role matches; the separate scaffold override excludes all scaffold-tagged intermediates. Endpoints are always exempt. Up to 500 paths can be requested.</p>
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <button id="reset-button" type="button" class="secondary-button">Reset</button>
+          <button id="run-button" type="submit" class="primary-button">
+            <span>Run workflow</span><span aria-hidden="true">→</span>
+          </button>
+        </div>
+      </form>
+
+      <aside class="results" aria-live="polite">
+        <div id="empty-state" class="empty-state">
+          <div class="graph-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <p class="eyebrow">Ready</p>
+          <h2>One configuration.<br />One reproducible run.</h2>
+          <p>Select evidence streams and integration settings, then run the complete node-to-path workflow.</p>
+          <dl class="catalog-stats">
+            <div><dt id="catalog-nodes">891</dt><dd>validated seed nodes</dd></div>
+            <div><dt id="catalog-pairs">396,495</dt><dd>cached pair hypotheses</dd></div>
+          </dl>
+        </div>
+
+        <div id="job-state" class="job-state hidden">
+          <div class="job-header">
+            <div><p class="eyebrow">Analysis status</p><h2 id="job-message">Starting</h2></div>
+            <span id="job-percent">0%</span>
+          </div>
+          <div class="progress-track"><div id="progress-bar"></div></div>
+          <p id="job-detail" class="muted">The workbench reuses cached pairs and characterizes only new node combinations.</p>
+        </div>
+
+        <div id="result-state" class="result-state hidden">
+          <div class="result-heading">
+            <div><p class="eyebrow">Completed run</p><h2>Bayesian workflow result</h2></div>
+            <span class="complete-badge">Complete</span>
+          </div>
+          <div class="metric-row">
+            <div><strong id="metric-nodes">—</strong><span>selected nodes</span></div>
+            <div><strong id="metric-edges">—</strong><span>supported edges</span></div>
+            <div><strong id="metric-paths">—</strong><span>ranked paths</span></div>
+          </div>
+          <div id="warning-box" class="warning-box hidden"></div>
+          <div class="table-heading"><h3>Most likely paths</h3><span>Product score</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Rank</th><th>Route</th><th>Hops</th><th>Score</th></tr></thead>
+              <tbody id="paths-body"></tbody>
+            </table>
+          </div>
+          <div class="download-block">
+            <h3>Run files</h3>
+            <div id="download-links" class="download-links"></div>
+          </div>
+        </div>
+
+        <div id="error-state" class="error-state hidden">
+          <p class="eyebrow">Run stopped</p>
+          <h2>Configuration needs attention</h2>
+          <p id="error-message"></p>
+          <button id="dismiss-error" type="button" class="secondary-button">Return to settings</button>
+        </div>
+      </aside>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
