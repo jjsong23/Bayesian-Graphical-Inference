@@ -352,6 +352,8 @@
   "defaults": {
     "include_second_messengers": true,
     "node_non_neutral_tolerance": 1e-12,
+    "node_prior_probability": 0.5,
+    "node_probability_cutoff": 0.5,
     "edge_prior_probability": 0.5,
     "edge_probability_cutoff": 0.5,
     "start_node": "Prkaca",

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import sys
 from io import StringIO
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -18,6 +19,8 @@ import pandas as pd
 
 
 PROJECT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT / "code"))
+from bayes_factors import binary_bayes_factor_update  # noqa: E402
 BASE_POSTERIOR = PROJECT / "results" / "node_selection_protein_pc_transcript_posterior.tsv"
 UNIVERSE_TABLE = PROJECT / "data" / "node_selection" / "mouse_signaling_nodes_liberal.tsv"
 KINASE_DIR = PROJECT / "results" / "kinase_predictor" / "absolute_lfc_bayes_factors"
@@ -154,9 +157,11 @@ def main() -> None:
     integrated["kinase_signed_profile_classification"] = selected["signed_profile_classification"].reindex(integrated.index)
     integrated["kinase_signed_profile_bh_fdr"] = selected["signed_profile_bh_fdr"].reindex(integrated.index)
     integrated["posterior_before_kinase"] = integrated["posterior_probability"]
-    integrated["unnormalized_after_kinase"] = integrated["posterior_before_kinase"] * integrated["kinase_relative_multiplier"]
-    normalization_constant = float(integrated["unnormalized_after_kinase"].sum())
-    integrated["posterior_after_kinase"] = integrated["unnormalized_after_kinase"] / normalization_constant
+    integrated["posterior_after_kinase"] = binary_bayes_factor_update(
+        integrated["posterior_before_kinase"],
+        integrated["kinase_relative_multiplier"],
+        missing_factor=1.0,
+    )
     integrated["posterior_change"] = integrated["posterior_after_kinase"] - integrated["posterior_before_kinase"]
     integrated["posterior_fold_change"] = integrated["posterior_after_kinase"] / integrated["posterior_before_kinase"]
     integrated["rank_before_kinase"] = integrated["posterior_before_kinase"].rank(method="min", ascending=False).astype(int)
@@ -176,8 +181,10 @@ def main() -> None:
         "minimum_factor": minimum_factor,
         "non_kinase_multiplier": 1.0,
         "kinase_multiplier_formula": "raw evidence factor / minimum factor",
-        "normalization_constant": normalization_constant,
-        "posterior_sum": float(integrated["posterior_after_kinase"].sum()),
+        "posterior_probabilities_are_independent": True,
+        "posterior_minimum": float(integrated["posterior_after_kinase"].min()),
+        "posterior_mean": float(integrated["posterior_after_kinase"].mean()),
+        "posterior_maximum": float(integrated["posterior_after_kinase"].max()),
         "kinase_metadata_source": FAMILY_URL,
         "base_posterior_file": str(BASE_POSTERIOR),
         "kinase_factor_file": str(KINASE_RESULTS),

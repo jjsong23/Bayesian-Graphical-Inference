@@ -21,13 +21,18 @@ protein pairs submitted to structural prediction. This
 identify protein pairs with sufficient spatial compatibility for potential
 interaction.
 
-These analyses used related Bayesian-style calculations but should not be
-described as one single model:
+These analyses used related Bayesian-style calculations. As of the 2026-08-10
+model revision, node and edge selection use the same hypothesis structure:
 
-- Node-selection probabilities were normalized across all candidate proteins
-  and therefore represented relative weights within the candidate universe.
-- Edge probabilities were updated independently for each unordered node pair
-  as separate Bernoulli hypotheses.
+- Each protein is an independent Bernoulli hypothesis comparing presence in
+  the signaling system with absence from it.
+- Each unordered edge is an independent Bernoulli hypothesis comparing the
+  presence and absence of a relationship.
+- Both begin at prior probability 0.5 by default and are updated in odds space.
+  Neither probability vector is normalized across proteins or pairs.
+- Earlier stored node-posterior artifacts used a sum-to-one relative-weight
+  normalization. Those files are historical and should not be interpreted as
+  outputs of the revised binary node model.
 - The AlphaFold filter used localization, experimental prior knowledge, and
   scaffold classification as screening criteria rather than treating all three
   as calibrated interaction-probability measurements.
@@ -85,13 +90,15 @@ symbol to produce 9,170 candidates. Downstream metadata joins retained the
 first symbol-matched record rather than merging all duplicated metadata; this
 should be disclosed if isoform-level distinctions become important.
 
-The initial node prior was uniform:
+The initial node prior is the objective two-hypothesis prior:
 
 $$
-P_i^{(0)}=\frac{1}{9170}
+P_i^{(0)}=0.5
 $$
 
-for every candidate protein \(i\).
+for every candidate protein \(i\). This does not constrain the expected number
+of present nodes to one; every protein has its own present-versus-absent
+hypothesis.
 
 ## 2. General node-evidence scoring function
 
@@ -113,23 +120,31 @@ The minimum score was fixed at 0.5. Consequently:
 - No stream generated a score below 0.5, so none supplied explicit negative
   evidence.
 
-For ordinary node evidence, the prior was updated by multiplication and
-normalization:
+The source score is converted to a conventional Bayes factor by comparing it
+with the neutral likelihood 0.5:
 
 $$
-P_i^{\mathrm{new}}
-=
-\frac{P_i^{\mathrm{old}}f_i}
-{\sum_j P_j^{\mathrm{old}}f_j}
+BF_i=\frac{f_i}{0.5}.
 $$
 
-Missing measurements received the neutral factor rather than being interpreted
-as evidence that the protein was absent from signaling.
+Thus, a source score of 0.5 becomes neutral \(BF=1\), while a score approaching
+1 becomes \(BF\approx2\). Each node is updated independently:
 
-These quantities were called “Bayes factors” during the project, but the most
-technically precise description is **Bayes-factor-like likelihood scores**. The
-values between 0.5 and 1 were used as relative evidence weights; they were not
-conventional unrestricted Bayes factors.
+$$
+O_i^{\mathrm{new}}
+=O_i^{\mathrm{old}}BF_i^w,
+\qquad
+P_i^{\mathrm{new}}=\frac{O_i^{\mathrm{new}}}{1+O_i^{\mathrm{new}}}.
+$$
+
+Missing measurements receive \(BF=1\) rather than being interpreted as
+evidence that the protein is absent. Posterior probabilities are not divided
+by a sum over other proteins.
+
+The stored values between 0.5 and 1 are most precisely described as
+**Bayes-factor-like likelihood scores**. The revised integrator explicitly
+divides them by their neutral value before updating odds, so the operational
+Bayes factors are neutral at 1.
 
 ## 3. mpkCCD protein-abundance evidence
 
@@ -168,7 +183,9 @@ Of the 9,170 signaling candidates:
 - 1,723 measured signaling candidates remained at the 0.5 floor.
 - Unmeasured candidates received 0.5 during posterior integration.
 
-The posterior was normalized across all 9,170 candidate proteins.
+Each candidate's posterior is updated independently from 0.5. Neutral or
+missing abundance evidence leaves that candidate at its pre-stream
+probability; abundance evidence for another protein cannot lower it.
 
 A methodological detail worth reporting is that no additional normalization
 was introduced. The only preprocessing step was the inverse log10 transform
@@ -213,10 +230,11 @@ transcript evidence. After these two streams:
 - 655 proteins had at least one protein-or-PC factor above the neutral floor.
 - 8,515 proteins had both protein and PC factors at the neutral floor.
 
-All posterior values remained mathematically positive. Therefore, the
-project’s historical term “nonzero nodes” should be interpreted as **nodes with
-at least one evidence factor above the neutral floor**, not nodes with a
-posterior greater than zero.
+Under the revised model, a protein with only neutral evidence remains at
+posterior 0.5, while positive evidence raises it above 0.5. The project's
+historical term “nonzero nodes” should therefore be interpreted as **nodes with
+posterior above the neutral baseline**, not nodes with a posterior greater than
+zero.
 
 ## 5. KinasePredictor annotation of the PKA-knockout phosphoproteome
 
@@ -347,13 +365,9 @@ were used where necessary. Of the 185 predictor labels:
 - When multiple labels mapped to one gene, the largest evidence factor was
   selected; ties were resolved using absolute LFC, hit count, and label.
 
-Every non-kinase received multiplier 1. This means kinase evidence did not
-change the non-kinase’s unnormalized evidentiary weight. However, because the
-final vector was normalized to sum to one, the numerical posterior of
-non-kinases could decrease slightly when supported kinases gained relative
-mass. It is therefore most accurate to say that non-kinases received **no
-direct kinase evidence**, rather than saying their normalized posterior was
-numerically identical.
+Every non-kinase receives multiplier 1. Under the revised independent binary
+model, this leaves its posterior numerically unchanged. Evidence supporting a
+kinase cannot lower a non-kinase merely by reallocating probability mass.
 
 ## 6. Differential-phosphoprotein evidence
 
@@ -421,17 +435,16 @@ m_i^{\mathrm{phosphoprotein}}
 $$
 
 $$
-P_i^{\mathrm{final}}
+O_i^{\mathrm{final}}
 =
-\frac{
-P_i^{\mathrm{protein+PC}}
-m_i^{\mathrm{combined}}
-}{
-\sum_j
-P_j^{\mathrm{protein+PC}}
-m_j^{\mathrm{combined}}
-}
+O_i^{\mathrm{protein+PC}}
+m_i^{\mathrm{combined}},
+\qquad
+P_i^{\mathrm{final}}
+=\frac{O_i^{\mathrm{final}}}{1+O_i^{\mathrm{final}}}.
 $$
+
+No across-node normalization is applied.
 
 A node was retained when at least one of the following was above its neutral
 floor:
@@ -1346,9 +1359,11 @@ application:
 - a node-selection evidence-factor catalog
 - an edge-characterization evidence-factor catalog
 
-The node catalog covered 9,170 protein candidates plus 20 curated molecules and
-reproduced the final node posterior with maximum absolute error approximately
-\(1.2\times10^{-16}\).
+The node catalog covers 9,170 protein candidates plus 20 curated molecules and
+stores the source scores needed to reproduce node evidence. Historical catalog
+posterior columns may reflect the former normalized-relative-weight model; the
+current workbench recomputes independent binary posteriors from the source
+scores and their declared neutral values.
 
 The edge catalog covered all 376,278 unordered pairs and stored the separate
 localization, KinasePredictor, STRING, and HPA evidence streams. It
@@ -1359,11 +1374,11 @@ approximately \(1.5\times10^{-9}\).
 
 For scientific accuracy:
 
-- Do not call the node posterior an independent probability that a protein
-  participates in signaling. It is a normalized relative weight across the
-  9,170-candidate universe.
-- Do not say “nonzero posterior.” All candidate posteriors were positive; the
-  selection criterion was evidence above the neutral floor.
+- Current node posteriors are independent binary-model probabilities. Do not
+  claim they are empirically calibrated frequencies; the 0.5 prior is an
+  objective symmetry choice and the evidence mappings remain model choices.
+- Do not say “nonzero posterior.” Neutral candidates remain at 0.5; the default
+  selection criterion is posterior strictly greater than 0.5.
 - Do not say missing data indicated absence. Missing node or edge evidence was
   treated as neutral.
 - Do not describe STRING relationships as experimentally demonstrated physical

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from bayes_factors import bayes_update, signaling_bayes_factors
+from bayes_factors import binary_bayes_factor_update, signaling_bayes_factors
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -78,21 +78,28 @@ def main() -> None:
     protein_factors = protein_table.set_index("gene_symbol")["bayes_factor"]
 
     initial_prior = pd.Series(
-        1.0 / len(universe_index),
+        0.5,
         index=universe_index,
         name="initial_prior",
     )
-    after_protein = bayes_update(initial_prior, protein_factors, missing_factor=0.5)
-    final_posterior = bayes_update(
+    protein_bayes_factors = protein_factors / 0.5
+    transcript_bayes_factors = transcript_factors / 0.5
+    after_protein = binary_bayes_factor_update(
+        initial_prior, protein_bayes_factors, missing_factor=1.0
+    )
+    final_posterior = binary_bayes_factor_update(
         after_protein,
-        transcript_factors,
-        missing_factor=0.5,
+        transcript_bayes_factors,
+        missing_factor=1.0,
     )
 
     combined = pd.DataFrame(index=universe_index)
     combined["initial_prior"] = initial_prior
     combined["protein_observed"] = combined.index.isin(protein_factors.index)
     combined["protein_factor"] = protein_factors.reindex(combined.index).fillna(0.5)
+    combined["protein_bayes_factor"] = protein_bayes_factors.reindex(
+        combined.index
+    ).fillna(1.0)
     combined["posterior_after_protein"] = after_protein
     combined["pc_transcript_measurement_available"] = combined.index.isin(
         pc_tpm_all.index
@@ -102,6 +109,9 @@ def main() -> None:
     )
     combined["pc_transcript_observed"] = combined.index.isin(transcript_factors.index)
     combined["pc_transcript_factor"] = transcript_factors.reindex(combined.index).fillna(0.5)
+    combined["pc_transcript_bayes_factor"] = transcript_bayes_factors.reindex(
+        combined.index
+    ).fillna(1.0)
     combined["posterior_probability"] = final_posterior
     combined["posterior_to_prior_ratio"] = final_posterior / initial_prior
     combined = combined.sort_values(
@@ -147,8 +157,13 @@ def main() -> None:
                 == transcript_factors.attrs["minimum_factor"]
             ).sum()
         ),
-        "zero_or_missing_pc_values_integration_factor": 0.5,
-        "posterior_sum": float(final_posterior.sum()),
+        "node_prior_probability": 0.5,
+        "zero_or_missing_pc_values_source_factor": 0.5,
+        "zero_or_missing_pc_values_bayes_factor": 1.0,
+        "posterior_probabilities_are_independent": True,
+        "posterior_minimum": float(final_posterior.min()),
+        "posterior_mean": float(final_posterior.mean()),
+        "posterior_maximum": float(final_posterior.max()),
         "protein_factor_file": str(PROTEIN_RESULTS),
         "transcript_factor_file": str(TRANSCRIPT_RESULTS),
         "combined_output_file": str(COMBINED_RESULTS),
@@ -162,7 +177,7 @@ def main() -> None:
     print(f"PC T_q: {transcript_factors.attrs['T_q']:.12g}")
     print(f"PC candidates above neutral: {summary['candidates_above_neutral']}")
     print(f"combined posterior nodes: {len(combined)}")
-    print(f"posterior sum: {combined['posterior_probability'].sum():.12f}")
+    print("posterior probabilities are independent and are not normalized across nodes")
     print("top five combined nodes:")
     print(
         combined[

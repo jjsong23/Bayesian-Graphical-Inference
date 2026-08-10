@@ -102,7 +102,32 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(len(selected), 891)
         self.assertEqual(summary["selected_protein_count"], 871)
         self.assertEqual(summary["curated_second_messenger_count"], 20)
-        self.assertAlmostEqual(float(factors["gui_posterior"].sum()), 1.0)
+        self.assertTrue(summary["posterior_probabilities_are_independent"])
+        self.assertEqual(summary["node_prior_probability"], 0.5)
+        self.assertEqual(summary["node_output_probability_cutoff"], 0.5)
+        self.assertTrue((factors["initial_prior"] == 0.5).all())
+        self.assertTrue((factors["gui_initial_prior_probability"] == 0.5).all())
+        self.assertTrue((factors["gui_posterior"] >= 0.5).all())
+        self.assertEqual(
+            int((factors["gui_posterior"] > 0.5).sum()),
+            summary["selected_protein_count"],
+        )
+        self.assertGreater(float(factors["gui_posterior"].sum()), 1.0)
+
+    def test_neutral_node_evidence_preserves_independent_half_priors(self) -> None:
+        config = normalize_configuration(None, self.registry)
+        for state in config["node_streams"].values():
+            state["enabled"] = False
+
+        factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
+
+        self.assertTrue(np.array_equal(
+            factors["gui_posterior"].to_numpy(float),
+            np.full(len(factors), 0.5),
+        ))
+        self.assertEqual(summary["selected_protein_count"], 0)
+        self.assertEqual(summary["neutral_posterior_count"], len(factors))
+        self.assertEqual(len(selected), 20)
 
     def test_protein_and_pc_only_configuration_is_valid_subset(self) -> None:
         supplied = default_configuration(self.registry)

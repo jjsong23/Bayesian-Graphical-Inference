@@ -1,7 +1,8 @@
-"""Build the active node universe from revised node-selection evidence.
+"""Build the active node universe from independent binary node posteriors.
 
-Gene/protein nodes are retained when at least one evidence stream is above its
-neutral floor. Curated second-messenger nodes are then appended unchanged.
+At the default 0.5 prior and with positive-or-neutral evidence only, a protein
+has posterior greater than 0.5 exactly when at least one evidence stream is
+above its neutral floor. Curated second-messenger nodes are appended unchanged.
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ def main() -> None:
     genes["node_type"] = "protein"
     genes["stable_id"] = "MGI_SYMBOL:" + selected["gene_symbol"].astype(str)
     genes["scope_tier"] = "bayesian_selected"
-    genes["selection_basis"] = "bayesian_non_neutral"
+    genes["selection_basis"] = "binary_node_posterior_above_0.5"
     genes["bayesian_score_status"] = "scored"
     genes["included_by_curated_rule"] = False
     genes["source_url"] = ""
@@ -209,8 +210,11 @@ def main() -> None:
             all_nodes["phosphoprotein_non_neutral"].sum()
         ),
         "selection_rule": (
-            "Retain a gene/protein when at least one evidence stream is above "
-            "its neutral floor, then append all curated second messengers."
+            "Retain a gene/protein when its independent present-versus-absent "
+            "posterior is strictly above 0.5, then append all curated second "
+            "messengers. With the current positive-or-neutral evidence, this "
+            "is equivalent to at least one evidence stream being above its "
+            "neutral floor."
         ),
         "protein_preprocessing": (
             "10 ** supplied Log10 Abundance before empirical-threshold scoring"

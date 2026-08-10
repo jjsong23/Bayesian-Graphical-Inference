@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from bayes_factors import bayes_update, complement_minimum_factors
+from bayes_factors import binary_bayes_factor_update, complement_minimum_factors
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -88,7 +88,7 @@ def main() -> None:
     base_indexed = base.set_index("gene_symbol")
     prior = base_indexed["posterior_probability"]
     relative_factors = protein["relative_multiplier"]
-    updated = bayes_update(prior, relative_factors, missing_factor=1.0)
+    updated = binary_bayes_factor_update(prior, relative_factors, missing_factor=1.0)
 
     integrated = base_indexed.copy()
     integrated["node_name"] = universe_info["name"].reindex(integrated.index)
@@ -106,8 +106,6 @@ def main() -> None:
         integrated[column] = protein[column].reindex(integrated.index)
     integrated["relative_multiplier"] = integrated["relative_multiplier"].fillna(1.0)
     integrated["posterior_before_phosphosite"] = prior
-    integrated["unnormalized_after_phosphosite"] = prior * integrated["relative_multiplier"]
-    normalization_constant = float(integrated["unnormalized_after_phosphosite"].sum())
     integrated["posterior_after_phosphosite"] = updated
     integrated["posterior_change"] = integrated["posterior_after_phosphosite"] - prior
     integrated["posterior_fold_change"] = integrated["posterior_after_phosphosite"] / prior
@@ -152,8 +150,10 @@ def main() -> None:
         "non_detected_multiplier": 1.0,
         "protein_statistic": "maximum absolute raw phosphosite LFC per mouse gene",
         "matched_threshold_method": "T_q(n) is the empirical absolute-site-LFC quantile at q^(1/n), the analytical maximum-of-n background adjustment",
-        "normalization_constant": normalization_constant,
-        "posterior_sum": float(updated.sum()),
+        "posterior_probabilities_are_independent": True,
+        "posterior_minimum": float(updated.min()),
+        "posterior_mean": float(updated.mean()),
+        "posterior_maximum": float(updated.max()),
         "base_posterior_file": str(BASE_POSTERIOR),
         "site_data_file": str(SITE_DATA),
     }

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from bayes_factors import bayes_update
+from bayes_factors import binary_bayes_factor_update
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -42,9 +42,13 @@ def main() -> None:
     kinase_multiplier = kinase["kinase_relative_multiplier"].fillna(1.0)
     phosphoprotein_multiplier = phospho["relative_multiplier"].fillna(1.0)
 
-    posterior_after_kinase = bayes_update(base["posterior_probability"], kinase_multiplier, missing_factor=1.0)
+    posterior_after_kinase = binary_bayes_factor_update(
+        base["posterior_probability"], kinase_multiplier, missing_factor=1.0
+    )
     combined_multiplier = kinase_multiplier * phosphoprotein_multiplier
-    posterior_after_both = bayes_update(base["posterior_probability"], combined_multiplier, missing_factor=1.0)
+    posterior_after_both = binary_bayes_factor_update(
+        base["posterior_probability"], combined_multiplier, missing_factor=1.0
+    )
 
     result = base.copy()
     result["node_name"] = kinase["node_name"].combine_first(phospho["node_name"])
@@ -92,9 +96,12 @@ def main() -> None:
         "kinase_non_neutral": len(kinase_supported),
         "phosphoprotein_non_neutral": len(phospho_supported),
         "kinase_and_phosphoprotein_overlap": len(kinase_supported & phospho_supported),
-        "combined_normalization_constant": float((base["posterior_probability"] * combined_multiplier).sum()),
-        "posterior_sum": float(posterior_after_both.sum()),
-        "combination_rule": "kinase relative multiplier multiplied by phosphoprotein relative multiplier, followed by normalization",
+        "node_prior_probability": 0.5,
+        "posterior_probabilities_are_independent": True,
+        "posterior_minimum": float(posterior_after_both.min()),
+        "posterior_mean": float(posterior_after_both.mean()),
+        "posterior_maximum": float(posterior_after_both.max()),
+        "combination_rule": "kinase BF multiplied by phosphoprotein BF, then applied to each node's independent prior odds without cross-node normalization",
         "dependence_caveat": "Both multipliers derive from the same phosphoproteomic experiment; the combined result is provisional and may overstate evidence if treated as independent.",
         "non_zero_definition": "A node is plotted when at least one evidence factor is above its neutral floor (0.5 for protein/PC factors; 1 after rescaling for kinase/phosphoprotein multipliers).",
         "stage_order": ["protein abundance", "PC transcript", "kinase activity", "phosphoprotein evidence"],

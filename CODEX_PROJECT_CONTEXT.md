@@ -34,7 +34,7 @@ The validated seed graph contains **891 nodes: 871 proteins and 20 curated secon
 - The common continuous-evidence transformation uses a source-specific threshold `T_q`. The GUI permits independent normalization multipliers for each applicable dataset.
 - STRING and STITCH instead use score odds relative to configurable reference scores, not the Gaussian-complement threshold kernel.
 - The historical phrase "complement of the minimum Bayes factor" refers to converting complementary tail evidence into positive likelihood/Bayes support while preserving a neutral floor. Confirm the exact implementation in `code/bayes_factors.py` before describing equations.
-- Node posteriors are relative weights across the candidate universe; edge probabilities are Bernoulli odds updates. Do not describe ranked whole-path products as calibrated biological probabilities.
+- Node and edge posteriors are independent Bernoulli updates. Every protein and every edge begins at probability 0.5 by default, and posterior values are not normalized across candidates or pairs. Do not describe ranked whole-path products as calibrated biological probabilities.
 
 ## Node selection streams
 
@@ -44,6 +44,15 @@ The selectable streams currently include:
 - principal-cell RNA expression, using raw abundance with zero-valued observations excluded from the evidence-background calculation;
 - inferred kinase activity from PKA-knockout phosphosite changes; and
 - protein-level differential phosphorylation after PKA deletion.
+
+For every protein, the active model compares `present in the signaling system`
+with `not present`. The default prior assigns probability 0.5 to each
+hypothesis. Protein/RNA source scores have a neutral floor of 0.5 and are
+divided by 0.5 to obtain a conventional neutral Bayes factor of 1; kinase and
+phosphoprotein multipliers are already neutral at 1. Weighted factors multiply
+each protein's prior odds independently. A protein is selected when its
+posterior is strictly greater than the configured node cutoff, which defaults
+to 0.5. There is no across-protein sum-to-one normalization.
 
 Non-kinases remain neutral under kinase-activity evidence. Proteins with no detected phosphosite remain neutral under phosphoprotein evidence. Curated secondary messengers are inserted separately because they are not gene products measured by the protein/RNA screens.
 
@@ -127,4 +136,3 @@ The full data/results tree is not stored in GitHub. Restore it from the dated co
 - A database association can represent functional linkage or co-complex support rather than direct physical binding.
 - Preserve raw score, mapping, direction/sign, threshold, and source columns in audits even when the active graph simplifies them.
 - Do not silently change node identifiers, species mappings, zero handling, threshold backgrounds, neutral defaults, edge directionality, or path eligibility semantics.
-

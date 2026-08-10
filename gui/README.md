@@ -21,11 +21,14 @@ loopback interface by default.
 
 1. **Select nodes.** Enable any subset of protein abundance, principal-cell
    RNA, kinase activity, and phosphoprotein-response evidence. Each enabled
-   factor can be raised to a nonnegative user weight. Proteins with at least one
-   non-neutral enabled stream are selected; curated second messengers can be
-   included separately. Candidates outside the validated 891-node seed are now
-   inserted after incremental edge characterization. Every node dataset also
-   has its own `Tq ×` control.
+   factor can be raised to a nonnegative user weight. Every protein is an
+   independent present-versus-absent hypothesis with prior probability 0.5 by
+   default. Weighted Bayes factors update its odds without normalization across
+   proteins. Proteins whose posterior is strictly above the selected node
+   cutoff (default 0.5) are retained; curated second messengers can be included
+   separately. Candidates outside the validated 891-node seed are inserted
+   after incremental edge characterization. Every node dataset also has its
+   own `Tq ×` control.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
    KinasePredictor, STRING, HPA, OmniPath, STITCH, and the optional derived
    scaffold-closure stream. Edge prior odds are multiplied by
@@ -126,8 +129,10 @@ the standard factor table.
 ## Scientific safeguards
 
 - Missing sparse edge evidence is neutral (`BF = 1`), not evidence of absence.
-- Node posteriors are normalized relative weights across the 9,170 protein
-  candidates.
+- Node posteriors are independent Bernoulli probabilities and are not
+  normalized across the 9,170 protein candidates.
+- Protein/RNA source scores use 0.5 as their neutral likelihood floor and are
+  divided by 0.5 before integration, making neutral evidence BF = 1.
 - Edge probabilities are independent Bernoulli updates from the selected prior.
 - Kinase activity and phosphoprotein response share a source and are visibly
   marked as dependent.

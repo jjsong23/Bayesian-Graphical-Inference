@@ -185,6 +185,56 @@ def bayes_update(
     return posterior
 
 
+def binary_bayes_factor_update(
+    prior: pd.Series,
+    factors: pd.Series,
+    *,
+    missing_factor: float = 1.0,
+) -> pd.Series:
+    """Update independent binary hypotheses with aligned Bayes factors.
+
+    Each row represents its own ``present`` versus ``not present`` hypothesis.
+    Probabilities are therefore *not* normalized across rows::
+
+        posterior_odds = prior_odds * Bayes_factor
+
+    A missing or inapplicable observation is neutral by default (BF = 1).
+    This is the appropriate update for the current node-presence model and for
+    any other collection of independent Bernoulli hypotheses.
+    """
+    if not isinstance(prior, pd.Series) or not isinstance(factors, pd.Series):
+        raise TypeError("prior and factors must be pandas Series")
+    if prior.index.has_duplicates or factors.index.has_duplicates:
+        raise ValueError("prior and factors must have unique indices")
+    if not np.isfinite(float(missing_factor)) or missing_factor <= 0.0:
+        raise ValueError("missing_factor must be positive and finite")
+
+    numeric_prior = pd.to_numeric(prior, errors="coerce").astype(float)
+    if numeric_prior.isna().any() or not np.isfinite(numeric_prior.to_numpy()).all():
+        raise ValueError("prior must contain only finite numeric values")
+    if ((numeric_prior <= 0.0) | (numeric_prior >= 1.0)).any():
+        raise ValueError("binary prior probabilities must be strictly between 0 and 1")
+
+    aligned = pd.to_numeric(factors, errors="coerce").reindex(numeric_prior.index)
+    aligned = aligned.fillna(float(missing_factor)).astype(float)
+    if not np.isfinite(aligned.to_numpy()).all() or (aligned <= 0.0).any():
+        raise ValueError("Bayes factors must be positive finite values")
+
+    numerator = numeric_prior * aligned
+    denominator = numerator + (1.0 - numeric_prior)
+    posterior = numerator / denominator
+    posterior.name = "posterior_probability"
+    posterior.attrs.update(
+        {
+            "missing_factor": float(missing_factor),
+            "observed_factor_count": int(factors.index.intersection(prior.index).size),
+            "hypothesis_model": "independent binary present versus not present",
+            "normalized_across_rows": False,
+        }
+    )
+    return posterior
+
+
 def binary_edge_bayes_update(
     prior: pd.Series,
     link_likelihood: pd.Series,

@@ -179,6 +179,8 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
         "node_integration": {
             "include_second_messengers": bool(defaults["include_second_messengers"]),
             "non_neutral_tolerance": float(defaults["node_non_neutral_tolerance"]),
+            "prior_probability": float(defaults["node_prior_probability"]),
+            "output_probability_cutoff": float(defaults["node_probability_cutoff"]),
         },
         "edge_streams": {
             stream["id"]: {
@@ -292,6 +294,18 @@ def normalize_configuration(
         "node non-neutral tolerance",
         0.0,
         0.1,
+    )
+    node_integration["prior_probability"] = _number(
+        node_integration["prior_probability"],
+        "node prior probability",
+        1e-9,
+        1 - 1e-9,
+    )
+    node_integration["output_probability_cutoff"] = _number(
+        node_integration["output_probability_cutoff"],
+        "node output cutoff",
+        0.0,
+        1.0,
     )
     edge_integration = config["edge_integration"]
     edge_integration["prior_probability"] = _number(
@@ -471,8 +485,15 @@ def select_nodes(
     universe = pd.read_csv(project / UNIVERSE_RELATIVE, sep="\t", dtype=str).fillna("")
     stream_defs = {stream["id"]: stream for stream in registry["node_streams"]}
     tolerance = config["node_integration"]["non_neutral_tolerance"]
-    log_weight = np.log(pd.to_numeric(factors["initial_prior"], errors="raise").to_numpy(float))
+    prior_probability = float(config["node_integration"]["prior_probability"])
+    output_cutoff = float(config["node_integration"]["output_probability_cutoff"])
+    prior_log_odds = math.log(prior_probability / (1.0 - prior_probability))
+    log_odds = np.full(len(factors), prior_log_odds, dtype=float)
+    if "initial_prior" in factors.columns:
+        factors["catalog_historical_initial_prior"] = factors["initial_prior"]
+    factors["initial_prior"] = prior_probability
     any_non_neutral = np.zeros(len(factors), dtype=bool)
+    any_positive_support = np.zeros(len(factors), dtype=bool)
     active_streams: list[dict[str, Any]] = []
     for stream_id, state in config["node_streams"].items():
         if not state["enabled"] or state["weight"] <= 0:
@@ -481,13 +502,21 @@ def select_nodes(
         values = node_stream_values(project, factors, definition, state)
         if (values <= 0).any():
             raise ValueError(f"node stream {stream_id} contains a non-positive factor")
+        neutral_value = float(definition["neutral_value"])
+        if not math.isfinite(neutral_value) or neutral_value <= 0.0:
+            raise ValueError(f"node stream {stream_id} has an invalid neutral value")
+        bayes_factors = values / neutral_value
         weight = float(state["weight"])
-        log_weight += weight * np.log(values)
-        non_neutral = np.abs(values - float(definition["neutral_value"])) > tolerance
+        weighted_log_bf = weight * np.log(bayes_factors)
+        log_odds += weighted_log_bf
+        non_neutral = np.abs(bayes_factors - 1.0) > tolerance
+        positive_support = bayes_factors > 1.0 + tolerance
         any_non_neutral |= non_neutral
+        any_positive_support |= positive_support
         factors[f"gui_{stream_id}_non_neutral"] = non_neutral
         factors[f"gui_{stream_id}_factor"] = values
-        factors[f"gui_{stream_id}_weighted_log_factor"] = weight * np.log(values)
+        factors[f"gui_{stream_id}_bayes_factor"] = bayes_factors
+        factors[f"gui_{stream_id}_weighted_log_bayes_factor"] = weighted_log_bf
         active_streams.append(
             {
                 "id": stream_id,
@@ -496,27 +525,32 @@ def select_nodes(
                 "tq_multiplier": _stream_multiplier(state),
                 "normalization_reference": definition["normalization"]["reference"],
                 "non_neutral_candidates": int(non_neutral.sum()),
+                "positive_support_candidates": int(positive_support.sum()),
+                "source_neutral_value": neutral_value,
             }
         )
-    scaled = np.exp(log_weight - float(log_weight.max()))
-    posterior = scaled / scaled.sum()
+    posterior = stable_expit(log_odds)
+    selected_probability = posterior > output_cutoff
+    factors["gui_initial_prior_probability"] = prior_probability
     factors["gui_posterior"] = posterior
     factors["gui_rank"] = (
         pd.Series(posterior).rank(method="min", ascending=False).astype(int).to_numpy()
     )
     factors["gui_any_selected_stream_non_neutral"] = any_non_neutral
+    factors["gui_any_selected_stream_positive_support"] = any_positive_support
+    factors["gui_above_node_probability_cutoff"] = selected_probability
 
     seed_symbols = set(universe["symbol"])
     selected_protein_symbols = set(
-        factors.loc[any_non_neutral, "gene_symbol"].astype(str)
+        factors.loc[selected_probability, "gene_symbol"].astype(str)
     )
     selected_seed_symbols = selected_protein_symbols.intersection(seed_symbols)
     added_symbols = selected_protein_symbols.difference(seed_symbols)
     factors["gui_available_in_edge_catalog"] = factors["gene_symbol"].isin(seed_symbols)
-    factors["gui_selected_in_graph"] = any_non_neutral
+    factors["gui_selected_in_graph"] = selected_probability
     include_messengers = config["node_integration"]["include_second_messengers"]
     selected_rows = universe[universe["symbol"].isin(selected_seed_symbols)].copy()
-    selected_rows["gui_selection_reason"] = "selected_evidence_non_neutral"
+    selected_rows["gui_selection_reason"] = "posterior_above_node_cutoff"
     if added_symbols:
         liberal = pd.read_csv(
             project / "data/node_selection/mouse_signaling_nodes_liberal.tsv",
@@ -539,7 +573,7 @@ def select_nodes(
                 "node_type": "protein",
                 "stable_id": "",
                 "scope_tier": "incrementally_characterized",
-                "selection_basis": "bayesian_non_neutral",
+                "selection_basis": "binary_node_posterior_above_cutoff",
                 "bayesian_score_status": "scored",
                 "included_by_curated_rule": False,
                 "source_url": "",
@@ -549,7 +583,7 @@ def select_nodes(
         dynamic_rows["selected_uniprot"] = dynamic_rows["symbol"].map(
             liberal["uniprot"]
         ).fillna("")
-        dynamic_rows["gui_selection_reason"] = "selected_evidence_non_neutral_incremental"
+        dynamic_rows["gui_selection_reason"] = "posterior_above_node_cutoff_incremental"
         selected_rows = pd.concat([selected_rows, dynamic_rows], ignore_index=True)
     if include_messengers:
         messengers = universe[universe["node_type"] == "molecule"].copy()
@@ -578,11 +612,22 @@ def select_nodes(
         ),
         "selected_node_count": int(len(selected_rows)),
         "active_streams": active_streams,
-        "posterior_sum": float(posterior.sum()),
+        "node_prior_probability": prior_probability,
+        "node_output_probability_cutoff": output_cutoff,
+        "posterior_minimum": float(posterior.min()),
+        "posterior_mean": float(posterior.mean()),
+        "posterior_maximum": float(posterior.max()),
+        "neutral_posterior_count": int(
+            np.isclose(posterior, prior_probability, rtol=0.0, atol=tolerance).sum()
+        ),
+        "posterior_probabilities_are_independent": True,
         "selection_rule": (
-            "A protein is selected when at least one enabled, positive-weight node "
-            "stream differs from its neutral floor. Enabled factors are exponentiated "
-            "by their user weights, multiplied with the uniform prior, and normalized."
+            "Each protein is an independent present-versus-absent hypothesis. Every "
+            "protein begins at the configured Bernoulli prior (default 0.5). Source "
+            "scores are divided by their neutral values to obtain BF=1 at neutrality; "
+            "weighted Bayes factors multiply prior odds. A protein is selected when "
+            "its posterior is strictly above the configured node cutoff (default 0.5). "
+            "Posteriors are not normalized across proteins."
         ),
         "catalog_constraint": (
             "The validated 891-node graph is the immutable seed. Newly non-neutral "

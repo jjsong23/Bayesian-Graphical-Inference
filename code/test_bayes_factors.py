@@ -5,6 +5,7 @@ import pandas as pd
 
 from bayes_factors import (
     bayes_update,
+    binary_bayes_factor_update,
     binary_edge_bayes_update,
     complement_minimum_factors,
     signaling_bayes_factors,
@@ -85,6 +86,39 @@ class SignalingBayesFactorTests(unittest.TestCase):
 
         forward = bayes_update(bayes_update(prior, first), second)
         reverse = bayes_update(bayes_update(prior, second), first)
+
+        pd.testing.assert_series_equal(forward, reverse)
+
+    def test_binary_bayes_factor_update_preserves_neutral_prior(self):
+        prior = pd.Series([0.5, 0.5], index=["A", "B"])
+        factors = pd.Series([1.0, 2.0], index=prior.index)
+
+        posterior = binary_bayes_factor_update(prior, factors)
+
+        self.assertEqual(posterior["A"], 0.5)
+        self.assertAlmostEqual(posterior["B"], 2.0 / 3.0)
+
+    def test_binary_bayes_factor_update_does_not_normalize_across_nodes(self):
+        prior = pd.Series([0.5, 0.5], index=["A", "B"])
+        factors = pd.Series([2.0, 2.0], index=prior.index)
+
+        posterior = binary_bayes_factor_update(prior, factors)
+
+        self.assertAlmostEqual(posterior["A"], 2.0 / 3.0)
+        self.assertAlmostEqual(posterior["B"], 2.0 / 3.0)
+        self.assertGreater(posterior.sum(), 1.0)
+
+    def test_binary_bayes_factor_sequential_updates_are_commutative(self):
+        prior = pd.Series([0.5, 0.5], index=["A", "B"])
+        first = pd.Series([1.5, 2.0], index=prior.index)
+        second = pd.Series([3.0, 1.0], index=prior.index)
+
+        forward = binary_bayes_factor_update(
+            binary_bayes_factor_update(prior, first), second
+        )
+        reverse = binary_bayes_factor_update(
+            binary_bayes_factor_update(prior, second), first
+        )
 
         pd.testing.assert_series_equal(forward, reverse)
 

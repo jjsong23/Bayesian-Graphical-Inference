@@ -33,11 +33,15 @@
               <span>Include curated second messengers</span>
             </label>
             <label>
-              <span>Neutral tolerance</span>
-              <input id="node-tolerance" type="number" min="0" max="0.1" step="0.000000000001" />
+              <span>Node prior</span>
+              <input id="node-prior" type="number" min="0.000001" max="0.999999" step="0.01" />
+            </label>
+            <label>
+              <span>Selection cutoff</span>
+              <input id="node-cutoff" type="number" min="0" max="1" step="0.01" />
             </label>
           </div>
-          <p class="scientific-note">Tq × scales each dataset's stored empirical threshold; 1.00 reproduces the current analysis. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source.</p>
+          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source.</p>
         </section>
 
         <section class="stage" aria-labelledby="edge-title">

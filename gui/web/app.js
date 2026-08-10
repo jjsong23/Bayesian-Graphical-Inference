@@ -91,7 +91,8 @@ function populateControls() {
   renderStreams("edge");
   const node = state.defaults.node_integration;
   $("include-messengers").checked = node.include_second_messengers;
-  $("node-tolerance").value = node.non_neutral_tolerance;
+  $("node-prior").value = node.prior_probability;
+  $("node-cutoff").value = node.output_probability_cutoff;
   const edge = state.defaults.edge_integration;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
@@ -130,7 +131,8 @@ function collectConfiguration() {
     node_streams: collectStreams("node"),
     node_integration: {
       include_second_messengers: $("include-messengers").checked,
-      non_neutral_tolerance: Number($("node-tolerance").value),
+      prior_probability: Number($("node-prior").value),
+      output_probability_cutoff: Number($("node-cutoff").value),
     },
     edge_streams: collectStreams("edge"),
     edge_integration: {
