@@ -20,7 +20,8 @@ loopback interface by default.
 ## Workflow
 
 1. **Select nodes.** Enable any subset of protein abundance, principal-cell
-   RNA, kinase activity, and phosphoprotein-response evidence. Each enabled
+   RNA, kinase activity, phosphoprotein response, and the six lab-specific
+   collecting-duct streams (proteome and RNA for CCD, OMCD, and IMCD). Each enabled
    factor can be raised to a nonnegative user weight. Every protein is an
    independent present-versus-absent hypothesis with prior probability 0.5 by
    default. Weighted Bayes factors update its odds without normalization across
@@ -29,6 +30,8 @@ loopback interface by default.
    separately. Candidates outside the validated 891-node seed are inserted
    after incremental edge characterization. Every node dataset also has its
    own `Tq ×` control.
+   The six collecting-duct streams are off in the generic default so the
+   validated 891-node baseline remains exactly reproducible.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
    KinasePredictor, STRING, HPA, OmniPath, STITCH, and the optional derived
    scaffold-closure stream. Edge prior odds are multiplied by
@@ -66,10 +69,11 @@ final eligibility decision.
 
 ## Per-dataset normalization
 
-`Tq × = 1.00` reproduces the finalized analysis. A value below 1 lowers a
+`Tq × = 1.00` reproduces the finalized analysis for any enabled stream. A value below 1 lowers a
 dataset's threshold and increases sensitivity; a value above 1 raises the
 threshold and is more stringent. Scalar thresholds (protein, RNA, kinase
-activity, and OmniPath) and observation-specific thresholds (phosphoprotein,
+activity, the six collecting-duct abundance streams, and OmniPath) and
+observation-specific thresholds (phosphoprotein,
 mpkCCD localization, KinasePredictor, and HPA) are all recomputed from their
 stored raw statistics. The multiplier is applied to every threshold belonging
 to that dataset before its likelihood and Bayes factor are recalculated.
@@ -108,6 +112,15 @@ so adding more nodes does not silently alter an earlier pair. Dynamic
 KinasePredictor evidence uses global top-ten model rank for the same reason.
 The run summary reports requested pairs, cache hits, newly characterized pairs,
 source signature, and database totals.
+
+The collecting-duct extension derives each segment's q75 from positive values
+only; zeros are nondetections and stay neutral. Rat proteome rows are mapped to
+mouse genes with Ensembl release 116 orthology (UniProt first, rat-symbol
+fallback), and every mapping decision is audited. Enabling all six new streams
+in addition to the existing four selects 3,296 proteins, or 3,316 nodes after
+the 20 curated second messengers. The three segment streams within each assay
+share a source experiment and are tagged as dependent even though they remain
+separately selectable as requested.
 
 ## Extending evidence streams
 

@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 from workflow_engine import (
     PROJECT_ROOT,
+    WorkflowCancelled,
     default_configuration,
     load_registry,
     run_workflow,
@@ -41,11 +42,13 @@ class Job:
     summary: dict[str, Any] | None = None
     output_directory: str | None = None
     error: str | None = None
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
 ANALYSIS_LOCK = threading.Lock()
+TERMINAL_JOB_STATUSES = {"complete", "failed", "cancelled"}
 
 
 def public_job(job: Job) -> dict[str, Any]:
@@ -58,29 +61,47 @@ def public_job(job: Job) -> dict[str, Any]:
         "summary": job.summary,
         "files": job.preview.get("files", []) if job.preview else [],
         "error": job.error,
+        "cancel_requested": job.cancel_event.is_set(),
     }
 
 
 def execute_job(job_id: str) -> None:
     with JOBS_LOCK:
         job = JOBS[job_id]
-        job.status = "running"
-        job.message = "Starting"
+
+    def check_cancel() -> None:
+        if job.cancel_event.is_set():
+            raise WorkflowCancelled("Analysis cancelled by user")
 
     def progress(message: str, fraction: float) -> None:
+        check_cancel()
         with JOBS_LOCK:
             current = JOBS[job_id]
             current.message = message
             current.progress = max(0.0, min(1.0, float(fraction)))
 
+    lock_acquired = False
     try:
-        with ANALYSIS_LOCK:
-            result = run_workflow(
-                job.configuration,
-                project_root=PROJECT_ROOT,
-                run_id=job_id,
-                progress=progress,
-            )
+        while not ANALYSIS_LOCK.acquire(timeout=0.2):
+            check_cancel()
+            with JOBS_LOCK:
+                current = JOBS[job_id]
+                current.status = "queued"
+                current.message = "Waiting for current analysis"
+        lock_acquired = True
+        check_cancel()
+        with JOBS_LOCK:
+            current = JOBS[job_id]
+            current.status = "running"
+            current.message = "Starting"
+        result = run_workflow(
+            job.configuration,
+            project_root=PROJECT_ROOT,
+            run_id=job_id,
+            progress=progress,
+            cancel_requested=job.cancel_event.is_set,
+        )
+        check_cancel()
         with JOBS_LOCK:
             job = JOBS[job_id]
             job.status = "complete"
@@ -89,6 +110,12 @@ def execute_job(job_id: str) -> None:
             job.preview = result.preview
             job.summary = result.summary
             job.output_directory = str(result.output_directory)
+    except WorkflowCancelled:
+        with JOBS_LOCK:
+            job = JOBS[job_id]
+            job.status = "cancelled"
+            job.message = "Cancelled"
+            job.error = None
     except Exception as exc:  # noqa: BLE001 - boundary must report scientific failures
         traceback.print_exc()
         with JOBS_LOCK:
@@ -96,6 +123,9 @@ def execute_job(job_id: str) -> None:
             job.status = "failed"
             job.message = "Analysis failed"
             job.error = str(exc)
+    finally:
+        if lock_acquired:
+            ANALYSIS_LOCK.release()
 
 
 class WorkbenchHandler(BaseHTTPRequestHandler):
@@ -132,10 +162,20 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path == "/api/config":
             registry = load_registry(PROJECT_ROOT)
             cache = current_cache_counts(PROJECT_ROOT)
+            with JOBS_LOCK:
+                active_job = next(
+                    (
+                        public_job(job)
+                        for job in JOBS.values()
+                        if job.status not in TERMINAL_JOB_STATUSES
+                    ),
+                    None,
+                )
             self.send_json(
                 {
                     "registry": registry,
                     "defaults": default_configuration(registry),
+                    "active_job": active_job,
                     "project": {
                         "name": "Graphical Bayesian Inference",
                         "node_candidates": 9170,
@@ -149,6 +189,18 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     },
                 }
             )
+            return
+        if path == "/api/jobs/active":
+            with JOBS_LOCK:
+                active_job = next(
+                    (
+                        public_job(job)
+                        for job in JOBS.values()
+                        if job.status not in TERMINAL_JOB_STATUSES
+                    ),
+                    None,
+                )
+            self.send_json({"active_job": active_job})
             return
         if path.startswith("/api/jobs/"):
             parts = [part for part in path.split("/") if part]
@@ -171,7 +223,27 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self.send_static(path)
 
     def do_POST(self) -> None:  # noqa: N802
-        if urlparse(self.path).path != "/api/jobs":
+        path = unquote(urlparse(self.path).path)
+        parts = [part for part in path.split("/") if part]
+        if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
+            job_id = parts[2]
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+                if job is None:
+                    payload = None
+                elif job.status not in TERMINAL_JOB_STATUSES:
+                    job.cancel_event.set()
+                    job.status = "cancelling"
+                    job.message = "Cancellation requested"
+                    payload = public_job(job)
+                else:
+                    payload = public_job(job)
+            if payload is None:
+                self.send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                self.send_json(payload, HTTPStatus.ACCEPTED)
+            return
+        if path != "/api/jobs":
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
         try:
@@ -182,10 +254,34 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             job_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
             job = Job(job_id=job_id, configuration=configuration)
             with JOBS_LOCK:
-                JOBS[job_id] = job
+                active = next(
+                    (
+                        current
+                        for current in JOBS.values()
+                        if current.status not in TERMINAL_JOB_STATUSES
+                    ),
+                    None,
+                )
+                if active is None:
+                    JOBS[job_id] = job
+                    conflict = None
+                else:
+                    conflict = public_job(active)
+            if conflict is not None:
+                self.send_json(
+                    {
+                        "error": (
+                            "Another analysis is already active. Cancel it before "
+                            "starting a new run."
+                        ),
+                        "active_job": conflict,
+                    },
+                    HTTPStatus.CONFLICT,
+                )
+                return
             thread = threading.Thread(target=execute_job, args=(job_id,), daemon=True)
-            thread.start()
             self.send_json(public_job(job), HTTPStatus.ACCEPTED)
+            thread.start()
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 

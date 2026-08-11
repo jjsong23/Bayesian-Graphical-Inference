@@ -26,6 +26,12 @@ ontology-constrained, product-ranked loopless paths
 
 The validated seed graph contains **891 nodes: 871 proteins and 20 curated secondary messengers**. The GUI is no longer capped at 891: newly selected protein nodes are characterized against the active universe and added as needed. Raw observations for new unordered pairs are cached so later runs calculate only previously unseen pairs under the current source signature.
 
+A lab-specific Aqp2/collecting-duct profile additionally enables proteome and
+RNA abundance for CCD, OMCD, and IMCD. All six new streams plus the existing
+four select **3,296 proteins**, or **3,316 total nodes** with second messengers.
+This large profile is stored separately; the generic GUI defaults remain at the
+validated 891-node baseline.
+
 ## Bayesian conventions
 
 - Node and edge evidence are represented as positive Bayes factors (BFs).
@@ -43,7 +49,10 @@ The selectable streams currently include:
 - mpkCCD protein abundance;
 - principal-cell RNA expression, using raw abundance with zero-valued observations excluded from the evidence-background calculation;
 - inferred kinase activity from PKA-knockout phosphosite changes; and
-- protein-level differential phosphorylation after PKA deletion.
+- protein-level differential phosphorylation after PKA deletion;
+- rat proteome abundance for CCD, OMCD, and IMCD, harmonized to mouse with
+  audited Ensembl release 116 orthology; and
+- mouse renal-tubule RNA abundance for CCD, OMCD, and IMCD.
 
 For every protein, the active model compares `present in the signaling system`
 with `not present`. The default prior assigns probability 0.5 to each
@@ -55,6 +64,16 @@ posterior is strictly greater than the configured node cutoff, which defaults
 to 0.5. There is no across-protein sum-to-one normalization.
 
 Non-kinases remain neutral under kinase-activity evidence. Proteins with no detected phosphosite remain neutral under phosphoprotein evidence. Curated secondary messengers are inserted separately because they are not gene products measured by the protein/RNA screens.
+
+For the six collecting-duct streams, zero is nondetection and receives BF=1;
+each q75 uses all positive finite source values in that assay segment before
+candidate filtering. Rat mapping uses UniProt first and rat-symbol fallback,
+prefers high-confidence orthologs, flags low-confidence fallbacks, retains valid
+multi-ortholog relationships, and aggregates duplicate contributions by the
+maximum abundance. The three segment streams within each assay share a
+dependence group. Entry points are
+`code/node_selection/build_collecting_duct_evidence.py` and
+`code/node_selection/run_collecting_duct_node_selection.py`.
 
 The canonical symbol field is `symbol`; duplicate symbols were removed when the original liberal signaling universe was consolidated.
 
@@ -116,7 +135,8 @@ The registry drives the cards and generic factor combination. A genuinely new ra
 - Ranked paths: `results/path_finding/ranked_paths/`
 - Current methods: `docs/full_project_methods.md`
 - Current edge methods: `docs/edge_characterization_methods_891.md`
-- Recent decisions: `docs/lab_notebook/2026-08-03.md` and `2026-08-04.md`
+- Collecting-duct node results: `results/collecting_duct_node_selection/`
+- Recent decisions: `docs/lab_notebook/2026-08-10.md`
 
 The full data/results tree is not stored in GitHub. Restore it from the dated complete-project archive described in `DATA_AND_RESULTS.md`, preserving paths.
 

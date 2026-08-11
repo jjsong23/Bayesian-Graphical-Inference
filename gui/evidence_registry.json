@@ -66,6 +66,132 @@
         "reference": "site-count-matched q^(1/n) thresholds",
         "help": "Multiplies each protein's site-count-matched threshold; proteins without detected sites remain neutral."
       }
+    },
+    {
+      "id": "collecting_duct_proteome_ccd",
+      "label": "Collecting duct proteome - CCD",
+      "description": "Rat CCD protein abundance mapped to mouse genes with audited Ensembl orthology.",
+      "factor_file": "data/node_selection/collecting_duct/processed/collecting_duct_node_factors.tsv.gz",
+      "column": "cd_proteome_ccd_factor",
+      "raw_value_column": "cd_proteome_ccd_value",
+      "observed_column": "cd_proteome_ccd_observed",
+      "tq_column": "cd_proteome_ccd_tq",
+      "neutral_value": 0.5,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "ktea_collecting_duct_proteome",
+      "normalization": {
+        "handler": "collecting_duct_abundance",
+        "control_label": "Tq x",
+        "default_multiplier": 1.0,
+        "reference": "positive-value q75 = 66565.7131 abundance units",
+        "help": "Multiplies the CCD-specific q75 derived from all positive rat-proteome measurements; zero/nondetected values stay neutral."
+      }
+    },
+    {
+      "id": "collecting_duct_proteome_omcd",
+      "label": "Collecting duct proteome - OMCD",
+      "description": "Rat OMCD protein abundance mapped to mouse genes with audited Ensembl orthology.",
+      "factor_file": "data/node_selection/collecting_duct/processed/collecting_duct_node_factors.tsv.gz",
+      "column": "cd_proteome_omcd_factor",
+      "raw_value_column": "cd_proteome_omcd_value",
+      "observed_column": "cd_proteome_omcd_observed",
+      "tq_column": "cd_proteome_omcd_tq",
+      "neutral_value": 0.5,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "ktea_collecting_duct_proteome",
+      "normalization": {
+        "handler": "collecting_duct_abundance",
+        "control_label": "Tq x",
+        "default_multiplier": 1.0,
+        "reference": "positive-value q75 = 70816.4444 abundance units",
+        "help": "Multiplies the OMCD-specific q75 derived from all positive rat-proteome measurements; zero/nondetected values stay neutral."
+      }
+    },
+    {
+      "id": "collecting_duct_proteome_imcd",
+      "label": "Collecting duct proteome - IMCD",
+      "description": "Rat IMCD protein abundance mapped to mouse genes with audited Ensembl orthology.",
+      "factor_file": "data/node_selection/collecting_duct/processed/collecting_duct_node_factors.tsv.gz",
+      "column": "cd_proteome_imcd_factor",
+      "raw_value_column": "cd_proteome_imcd_value",
+      "observed_column": "cd_proteome_imcd_observed",
+      "tq_column": "cd_proteome_imcd_tq",
+      "neutral_value": 0.5,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "ktea_collecting_duct_proteome",
+      "normalization": {
+        "handler": "collecting_duct_abundance",
+        "control_label": "Tq x",
+        "default_multiplier": 1.0,
+        "reference": "positive-value q75 = 65193.9136 abundance units",
+        "help": "Multiplies the IMCD-specific q75 derived from all positive rat-proteome measurements; zero/nondetected values stay neutral."
+      }
+    },
+    {
+      "id": "collecting_duct_rna_ccd",
+      "label": "Collecting duct RNA - CCD",
+      "description": "Mouse CCD segment RNA abundance from the renal-tubule RNA-seq table.",
+      "factor_file": "data/node_selection/collecting_duct/processed/collecting_duct_node_factors.tsv.gz",
+      "column": "cd_rna_ccd_factor",
+      "raw_value_column": "cd_rna_ccd_value",
+      "observed_column": "cd_rna_ccd_observed",
+      "tq_column": "cd_rna_ccd_tq",
+      "neutral_value": 0.5,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "mouse_renal_tubule_rna_seq",
+      "normalization": {
+        "handler": "collecting_duct_abundance",
+        "control_label": "Tq x",
+        "default_multiplier": 1.0,
+        "reference": "positive-value q75 = 22.9 RNA abundance units",
+        "help": "Multiplies the CCD-specific q75 derived from all positive RNA measurements; zero/nondetected values stay neutral."
+      }
+    },
+    {
+      "id": "collecting_duct_rna_omcd",
+      "label": "Collecting duct RNA - OMCD",
+      "description": "Mouse OMCD segment RNA abundance from the renal-tubule RNA-seq table.",
+      "factor_file": "data/node_selection/collecting_duct/processed/collecting_duct_node_factors.tsv.gz",
+      "column": "cd_rna_omcd_factor",
+      "raw_value_column": "cd_rna_omcd_value",
+      "observed_column": "cd_rna_omcd_observed",
+      "tq_column": "cd_rna_omcd_tq",
+      "neutral_value": 0.5,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "mouse_renal_tubule_rna_seq",
+      "normalization": {
+        "handler": "collecting_duct_abundance",
+        "control_label": "Tq x",
+        "default_multiplier": 1.0,
+        "reference": "positive-value q75 = 9.2 RNA abundance units",
+        "help": "Multiplies the OMCD-specific q75 derived from all positive RNA measurements; zero/nondetected values stay neutral."
+      }
+    },
+    {
+      "id": "collecting_duct_rna_imcd",
+      "label": "Collecting duct RNA - IMCD",
+      "description": "Mouse IMCD segment RNA abundance from the renal-tubule RNA-seq table.",
+      "factor_file": "data/node_selection/collecting_duct/processed/collecting_duct_node_factors.tsv.gz",
+      "column": "cd_rna_imcd_factor",
+      "raw_value_column": "cd_rna_imcd_value",
+      "observed_column": "cd_rna_imcd_observed",
+      "tq_column": "cd_rna_imcd_tq",
+      "neutral_value": 0.5,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "mouse_renal_tubule_rna_seq",
+      "normalization": {
+        "handler": "collecting_duct_abundance",
+        "control_label": "Tq x",
+        "default_multiplier": 1.0,
+        "reference": "positive-value q75 = 11.7 RNA abundance units",
+        "help": "Multiplies the IMCD-specific q75 derived from all positive RNA measurements; zero/nondetected values stay neutral."
+      }
     }
   ],
   "edge_streams": [

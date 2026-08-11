@@ -8,6 +8,13 @@ This research codebase builds and explores a probabilistic, undirected signaling
 
 The current local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, ontology-based path constraints, external-target insertion, and auditable ranked paths.
 
+For the lab-specific Aqp2 analysis, node selection additionally exposes rat
+proteome and mouse RNA abundance for CCD, OMCD, and IMCD as six separate
+streams. They are off in the generic default profile so the validated 891-node
+baseline remains reproducible; the all-collecting-duct profile and its mapping
+audits are under `results/collecting_duct_node_selection/` and
+`data/node_selection/collecting_duct/` in the companion data archive.
+
 ## Repository and data archive
 
 GitHub contains the source code, tests, interface, documentation, and configuration. Large datasets and generated results are intentionally excluded from Git history and distributed separately in the complete project archive. Extract that archive so that `data/`, `results/`, and `outputs/` sit beside `code/` and `gui/`.

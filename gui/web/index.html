@@ -34,14 +34,14 @@
             </label>
             <label>
               <span>Node prior</span>
-              <input id="node-prior" type="number" min="0.000001" max="0.999999" step="0.01" />
+              <input id="node-prior" type="number" min="0.000001" max="0.999999" step="any" inputmode="decimal" />
             </label>
             <label>
               <span>Selection cutoff</span>
               <input id="node-cutoff" type="number" min="0" max="1" step="0.01" />
             </label>
           </div>
-          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source.</p>
+          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source. The CCD/OMCD/IMCD streams are separately selectable, but the three streams within each assay share one experimental source; they are off in the generic default profile.</p>
         </section>
 
         <section class="stage" aria-labelledby="edge-title">
@@ -57,7 +57,7 @@
           <div class="parameter-grid">
             <label>
               <span>Edge prior</span>
-              <input id="edge-prior" type="number" min="0.000001" max="0.999999" step="0.01" />
+              <input id="edge-prior" type="number" min="0.000001" max="0.999999" step="any" inputmode="decimal" />
             </label>
             <label>
               <span>Output cutoff</span>
@@ -151,6 +151,9 @@
           </div>
           <div class="progress-track"><div id="progress-bar"></div></div>
           <p id="job-detail" class="muted">The workbench reuses cached pairs and characterizes only new node combinations.</p>
+          <div class="job-actions">
+            <button id="cancel-job-button" type="button" class="danger-button">Cancel analysis</button>
+          </div>
         </div>
 
         <div id="result-state" class="result-state hidden">

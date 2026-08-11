@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 
 import numpy as np
@@ -19,7 +20,11 @@ from workflow_engine import (
     scaffold_triadic_closure_factors,
     select_nodes,
 )
-from incremental_edge_cache import ensure_incremental_pairs
+from incremental_edge_cache import (
+    ensure_incremental_pairs,
+    incremental_pair_count,
+    iter_incremental_pairs,
+)
 
 
 class WorkflowEngineTests(unittest.TestCase):
@@ -76,6 +81,50 @@ class WorkflowEngineTests(unittest.TestCase):
             config["edge_streams"]["scaffold_triadic_closure"]["parameters"],
             {"anchor_probability_cutoff": 0.9, "closure_likelihood": 0.9},
         )
+
+    def test_exact_half_priors_are_valid_html_values(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        for field_id in ("node-prior", "edge-prior"):
+            match = re.search(rf'<input id="{field_id}"[^>]*>', html)
+            self.assertIsNotNone(match, field_id)
+            tag = match.group(0)
+            self.assertIn('min="0.000001"', tag)
+            self.assertIn('max="0.999999"', tag)
+            self.assertIn('step="any"', tag)
+
+    def test_gui_exposes_cooperative_cancellation(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        self.assertIn('id="cancel-job-button"', html)
+        self.assertIn("async function cancelRun()", javascript)
+        self.assertIn("/cancel`, { method: \"POST\" }", javascript)
+        self.assertIn('job.status === "cancelled"', javascript)
+        self.assertIn('/api/jobs/active', javascript)
+
+    def test_incremental_pairs_stream_without_materializing_full_graph(self) -> None:
+        symbols = ["SeedA", "AddedA", "SeedB", "AddedB"]
+        base = {"SeedA", "SeedB"}
+        pairs = list(iter_incremental_pairs(symbols, {"AddedA", "AddedB"}))
+        self.assertEqual(incremental_pair_count(symbols, base), 5)
+        self.assertEqual(len(pairs), 5)
+        self.assertEqual(len(set(pairs)), 5)
+        self.assertNotIn(("SeedA", "SeedB"), set(pairs))
+
+    def test_all_collecting_duct_streams_have_a_large_but_valid_graph(self) -> None:
+        supplied = default_configuration(self.registry)
+        collecting_duct_streams = {
+            stream_id
+            for stream_id in supplied["node_streams"]
+            if stream_id.startswith("collecting_duct_")
+        }
+        self.assertEqual(len(collecting_duct_streams), 6)
+        for stream_id in collecting_duct_streams:
+            supplied["node_streams"][stream_id]["enabled"] = True
+        supplied["edge_streams"]["scaffold_triadic_closure"]["enabled"] = True
+        config = normalize_configuration(supplied, self.registry)
+        _, selected, _ = select_nodes(PROJECT_ROOT, self.registry, config)
+        self.assertEqual(len(selected), 3316)
+        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 5_496_270)
 
     def test_path_ontology_class_selection_is_normalized_and_validated(self) -> None:
         supplied = default_configuration(self.registry)
@@ -195,6 +244,40 @@ class WorkflowEngineTests(unittest.TestCase):
             )
             self.assertTrue(np.isfinite(rescored).all(), stream_id)
             self.assertTrue((rescored > 0).all(), stream_id)
+
+    def test_collecting_duct_streams_are_neutral_for_nondetection(self) -> None:
+        config = normalize_configuration(None, self.registry)
+        factors, _, _ = select_nodes(PROJECT_ROOT, self.registry, config)
+        definitions = {
+            item["id"]: item
+            for item in self.registry["node_streams"]
+            if item["id"].startswith("collecting_duct_")
+        }
+        self.assertEqual(len(definitions), 6)
+        self.assertTrue(
+            all(not config["node_streams"][stream_id]["enabled"] for stream_id in definitions)
+        )
+        self.assertEqual(
+            {
+                item["dependence_group"]
+                for item in definitions.values()
+            },
+            {"ktea_collecting_duct_proteome", "mouse_renal_tubule_rna_seq"},
+        )
+        for stream_id, definition in definitions.items():
+            original = pd.to_numeric(
+                factors[definition["column"]], errors="raise"
+            ).to_numpy(float)
+            observed = factors[definition["observed_column"]].astype(bool).to_numpy()
+            self.assertTrue(np.all(original[~observed] == 0.5), stream_id)
+            self.assertTrue(np.all((original >= 0.5) & (original <= 1.0)), stream_id)
+            sensitive_state = dict(config["node_streams"][stream_id])
+            sensitive_state["tq_multiplier"] = 0.8
+            sensitive = node_stream_values(
+                PROJECT_ROOT, factors, definition, sensitive_state
+            )
+            self.assertTrue(np.all(sensitive >= original - 1e-14), stream_id)
+            self.assertTrue(np.any(sensitive > original + 1e-14), stream_id)
 
     def test_each_edge_stream_can_be_rescored_from_raw_evidence(self) -> None:
         config = normalize_configuration(None, self.registry)
@@ -322,6 +405,7 @@ class WorkflowEngineTests(unittest.TestCase):
             sep="\t",
             dtype=str,
         )["symbol"].tolist()
+        ensure_incremental_pairs(PROJECT_ROOT, selected, seed)
         update = ensure_incremental_pairs(PROJECT_ROOT, selected, seed)
         self.assertEqual(update.requested_incremental_pairs, 7156)
         self.assertEqual(update.newly_characterized_pairs, 0)

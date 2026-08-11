@@ -392,6 +392,7 @@ def target_phosphosites(
     project: Path,
     target_symbol: str,
     target_entry: dict[str, str],
+    audit_table: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     sequence = normalized_sequence(target_entry["Sequence"])
     target_uniprot = clean(target_entry["Entry"])
@@ -436,7 +437,11 @@ def target_phosphosites(
 
     audit_path = project / "results/phosphoprotein_evidence/phosphosite_audit.tsv"
     if audit_path.exists():
-        audit = pd.read_csv(audit_path, sep="\t", dtype=str).fillna("")
+        audit = (
+            audit_table.fillna("")
+            if audit_table is not None
+            else pd.read_csv(audit_path, sep="\t", dtype=str).fillna("")
+        )
         target_rows = audit.loc[
             audit["gene_symbol"].str.casefold().eq(target_symbol.casefold())
             | audit["uniprot"].str.casefold().eq(target_uniprot.casefold())

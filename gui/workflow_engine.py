@@ -49,6 +49,13 @@ from incremental_edge_cache import (  # noqa: E402
 
 
 ProgressCallback = Callable[[str, float], None]
+CancellationCallback = Callable[[], bool]
+
+
+class WorkflowCancelled(RuntimeError):
+    """Raised when a user requests cooperative workflow cancellation."""
+
+
 NODE_FACTORS_RELATIVE = Path(
     "results/combined_kinase_phosphoprotein_evidence/combined_all_nodes.tsv"
 )
@@ -125,6 +132,12 @@ def validate_registry(registry: dict[str, Any], project: Path) -> None:
         ids = [stream.get("id") for stream in streams]
         if not streams or None in ids or len(ids) != len(set(ids)):
             raise ValueError(f"invalid or duplicate IDs in {group_name}")
+    for stream in registry["node_streams"]:
+        factor_file = stream.get("factor_file")
+        if factor_file and not (project / factor_file).exists():
+            raise FileNotFoundError(
+                f"node factor table is missing: {project / factor_file}"
+            )
     for stream in registry["edge_streams"]:
         if stream.get("derived"):
             continue
@@ -473,7 +486,73 @@ def node_stream_values(
             values[observed], thresholds[observed] * multiplier
         ) / NEUTRAL_LIKELIHOOD
         return result
+    if handler == "collecting_duct_abundance":
+        values = pd.to_numeric(
+            factors[definition["raw_value_column"]], errors="coerce"
+        ).to_numpy(float)
+        observed_series = factors[definition["observed_column"]]
+        if pd.api.types.is_bool_dtype(observed_series):
+            observed = observed_series.fillna(False).to_numpy(bool).copy()
+        else:
+            observed = (
+                observed_series.fillna("")
+                .astype(str)
+                .str.strip()
+                .str.casefold()
+                .isin({"true", "1", "yes"})
+                .to_numpy(bool)
+            )
+        base_tq_values = pd.to_numeric(
+            factors[definition["tq_column"]], errors="coerce"
+        ).dropna()
+        if base_tq_values.empty:
+            raise ValueError(
+                f"node stream {definition['id']} has no stored positive Tq"
+            )
+        base_tq = float(base_tq_values.iloc[0])
+        observed &= np.isfinite(values) & (values > 0)
+        result = np.full(len(factors), NEUTRAL_LIKELIHOOD)
+        result[observed] = complement_minimum_likelihood(
+            values[observed], base_tq * multiplier
+        )
+        return result
     raise ValueError(f"unsupported node normalization handler: {handler}")
+
+
+def load_node_factor_catalog(
+    project: Path,
+    registry: dict[str, Any],
+) -> pd.DataFrame:
+    """Load the core node catalog and merge each distinct auxiliary table once."""
+    factors = pd.read_csv(project / NODE_FACTORS_RELATIVE, sep="\t")
+    loaded_paths: set[Path] = set()
+    for definition in registry["node_streams"]:
+        relative = definition.get("factor_file")
+        if not relative:
+            continue
+        path = (project / relative).resolve()
+        if path in loaded_paths:
+            continue
+        auxiliary = pd.read_csv(path, sep="\t")
+        if "gene_symbol" not in auxiliary.columns:
+            raise ValueError(f"node factor table lacks gene_symbol: {path}")
+        if auxiliary["gene_symbol"].duplicated().any():
+            raise ValueError(f"node factor table has duplicate gene symbols: {path}")
+        collisions = set(factors.columns).intersection(auxiliary.columns) - {
+            "gene_symbol"
+        }
+        if collisions:
+            raise ValueError(
+                f"node factor table has conflicting columns {sorted(collisions)}: {path}"
+            )
+        factors = factors.merge(
+            auxiliary,
+            on="gene_symbol",
+            how="left",
+            validate="one_to_one",
+        )
+        loaded_paths.add(path)
+    return factors
 
 
 def select_nodes(
@@ -481,7 +560,7 @@ def select_nodes(
     registry: dict[str, Any],
     config: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-    factors = pd.read_csv(project / NODE_FACTORS_RELATIVE, sep="\t")
+    factors = load_node_factor_catalog(project, registry)
     universe = pd.read_csv(project / UNIVERSE_RELATIVE, sep="\t", dtype=str).fillna("")
     stream_defs = {stream["id"]: stream for stream in registry["node_streams"]}
     tolerance = config["node_integration"]["non_neutral_tolerance"]
@@ -524,6 +603,7 @@ def select_nodes(
                 "weight": weight,
                 "tq_multiplier": _stream_multiplier(state),
                 "normalization_reference": definition["normalization"]["reference"],
+                "dependence_group": definition.get("dependence_group"),
                 "non_neutral_candidates": int(non_neutral.sum()),
                 "positive_support_candidates": int(positive_support.sum()),
                 "source_neutral_value": neutral_value,
@@ -589,6 +669,23 @@ def select_nodes(
         messengers = universe[universe["node_type"] == "molecule"].copy()
         messengers["gui_selection_reason"] = "curated_second_messenger"
         selected_rows = pd.concat([selected_rows, messengers], ignore_index=True)
+    current_node_scores = factors[
+        [
+            "gene_symbol",
+            "gui_initial_prior_probability",
+            "gui_posterior",
+            "gui_rank",
+            "gui_any_selected_stream_non_neutral",
+            "gui_any_selected_stream_positive_support",
+            "gui_above_node_probability_cutoff",
+        ]
+    ].rename(columns={"gene_symbol": "symbol"})
+    selected_rows = selected_rows.merge(
+        current_node_scores,
+        on="symbol",
+        how="left",
+        validate="many_to_one",
+    )
     order = {symbol: index for index, symbol in enumerate(universe["symbol"])}
     selected_rows["gui_universe_index"] = selected_rows["symbol"].map(order)
     dynamic_order = {
@@ -1514,6 +1611,7 @@ def run_workflow(
     project_root: Path | str = PROJECT_ROOT,
     run_id: str | None = None,
     progress: ProgressCallback | None = None,
+    cancel_requested: CancellationCallback | None = None,
 ) -> WorkflowResult:
     project = Path(project_root).resolve()
     registry = load_registry(project)
@@ -1524,7 +1622,12 @@ def run_workflow(
     output = project / RUNS_RELATIVE / safe_name(run_id)
     output.mkdir(parents=True, exist_ok=False)
 
+    def check_cancel() -> None:
+        if cancel_requested is not None and cancel_requested():
+            raise WorkflowCancelled("Analysis cancelled by user")
+
     def update(message: str, fraction: float) -> None:
+        check_cancel()
         if progress:
             progress(message, fraction)
 
@@ -1593,10 +1696,11 @@ def run_workflow(
                     if progress
                     else None
                 ),
+                cancel_check=check_cancel,
             )
             cache_summary = cache_update.as_dict()
 
-        update("Integrating edge evidence", 0.30)
+        update("Integrating edge evidence", 0.62)
         derived_audits: dict[str, pd.DataFrame] = {}
         matrix, edge_summary = combine_edge_factors(
             project,
@@ -1635,10 +1739,15 @@ def run_workflow(
         matrix_path = output / "edge_adjacency_matrix.tsv"
         supported_path = output / "supported_edges.tsv.gz"
         summary_path = output / "analysis_summary.json"
+        check_cancel()
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        check_cancel()
         node_factors.to_csv(node_factors_path, sep="\t", index=False, compression="gzip")
+        check_cancel()
         selected_nodes.to_csv(selected_nodes_path, sep="\t", index=False)
+        check_cancel()
         matrix.to_csv(matrix_path, sep="\t", float_format="%.9g")
+        check_cancel()
         supported.to_csv(supported_path, sep="\t", index=False, compression="gzip")
         files = [
             config_path,
@@ -1648,10 +1757,12 @@ def run_workflow(
             supported_path,
         ]
         for stream_id, audit in derived_audits.items():
+            check_cancel()
             audit_path = output / f"{safe_name(stream_id)}_audit.tsv.gz"
             audit.to_csv(audit_path, sep="\t", index=False, compression="gzip")
             files.append(audit_path)
         if config["path"]["enabled"]:
+            check_cancel()
             paths_path = output / "ranked_paths.tsv"
             path_edges_path = output / "ranked_path_edges.tsv"
             eligibility_path = output / "intermediate_node_eligibility.tsv"

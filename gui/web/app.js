@@ -18,7 +18,10 @@ function streamCard(stream, group, current) {
   const copy = document.createElement("label");
   copy.className = "stream-copy";
   copy.htmlFor = toggle.id;
-  copy.innerHTML = `<strong>${stream.label}</strong><span>${stream.description}</span><small>${stream.normalization.reference}</small>`;
+  const dependence = stream.dependence_group
+    ? `<small>Shared-source group: ${stream.dependence_group.replaceAll("_", " ")}</small>`
+    : "";
+  copy.innerHTML = `<strong>${stream.label}</strong><span>${stream.description}</span><small>${stream.normalization.reference}</small>${dependence}`;
   const weight = document.createElement("label");
   weight.className = "weight-field";
   weight.innerHTML = `<span>Weight</span><input class="stream-weight stream-setting" type="number" min="0" max="10" step="0.1" value="${current.weight}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} weight" />`;
@@ -179,7 +182,15 @@ function updateJob(job) {
   const percent = Math.round((job.progress || 0) * 100);
   $("job-percent").textContent = `${percent}%`;
   $("progress-bar").style.width = `${percent}%`;
-  $("job-detail").textContent = job.status === "queued" ? "Your analysis is queued locally." : "Results are written to a new audited run folder as each stage completes.";
+  const detail = {
+    queued: "Your analysis is waiting for the local analysis worker.",
+    cancelling: "Stopping at the next safe checkpoint. Completed cache writes will be preserved.",
+    cancelled: "This analysis was cancelled. You can adjust the configuration and run again.",
+  };
+  $("job-detail").textContent = detail[job.status] || "Results are written to a new audited run folder as each stage completes.";
+  const terminal = ["complete", "failed", "cancelled"].includes(job.status);
+  $("cancel-job-button").disabled = terminal || job.status === "cancelling" || !state.jobId;
+  $("cancel-job-button").textContent = job.status === "cancelling" ? "Cancelling…" : "Cancel analysis";
 }
 
 function renderResult(job) {
@@ -223,13 +234,21 @@ async function pollJob() {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
       $("run-button").disabled = false;
+      $("cancel-job-button").disabled = true;
       renderResult(job);
     } else if (job.status === "failed") {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
       $("run-button").disabled = false;
+      $("cancel-job-button").disabled = true;
       $("error-message").textContent = job.error || "The analysis could not be completed.";
       showPanel("error-state");
+    } else if (job.status === "cancelled") {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+      $("run-button").disabled = false;
+      $("cancel-job-button").disabled = true;
+      updateJob(job);
     }
   } catch (error) {
     clearInterval(state.pollTimer);
@@ -240,9 +259,30 @@ async function pollJob() {
   }
 }
 
+async function cancelRun() {
+  if (!state.jobId) return;
+  const button = $("cancel-job-button");
+  button.disabled = true;
+  button.textContent = "Cancelling…";
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/cancel`, { method: "POST" });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || "Unable to cancel analysis");
+    updateJob(job);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Cancel analysis";
+    $("error-message").textContent = error.message;
+    showPanel("error-state");
+  }
+}
+
 async function startRun(event) {
   event.preventDefault();
   $("run-button").disabled = true;
+  state.jobId = null;
+  $("cancel-job-button").disabled = true;
+  $("cancel-job-button").textContent = "Cancel analysis";
   showPanel("job-state");
   updateJob({ message: "Submitting configuration", progress: 0, status: "queued" });
   try {
@@ -252,12 +292,33 @@ async function startRun(event) {
       body: JSON.stringify({ configuration: collectConfiguration() }),
     });
     const job = await response.json();
+    if (response.status === 409 && job.active_job) {
+      state.jobId = job.active_job.job_id;
+      updateJob(job.active_job);
+      state.pollTimer = setInterval(pollJob, 700);
+      pollJob();
+      return;
+    }
     if (!response.ok) throw new Error(job.error || "Unable to start analysis");
     state.jobId = job.job_id;
+    $("cancel-job-button").disabled = false;
     updateJob(job);
     state.pollTimer = setInterval(pollJob, 700);
     pollJob();
   } catch (error) {
+    try {
+      const recoveryResponse = await fetch("/api/jobs/active", { cache: "no-store" });
+      const recovery = await recoveryResponse.json();
+      if (recoveryResponse.ok && recovery.active_job) {
+        state.jobId = recovery.active_job.job_id;
+        updateJob(recovery.active_job);
+        state.pollTimer = setInterval(pollJob, 700);
+        pollJob();
+        return;
+      }
+    } catch (_) {
+      // Preserve the original submission error when recovery is unavailable.
+    }
     $("run-button").disabled = false;
     $("error-message").textContent = error.message;
     showPanel("error-state");
@@ -274,6 +335,13 @@ async function initialize() {
     $("catalog-nodes").textContent = formatInt(payload.project.seed_catalog_nodes);
     $("catalog-pairs").textContent = formatInt(payload.project.cached_pair_hypotheses);
     populateControls();
+    if (payload.active_job) {
+      state.jobId = payload.active_job.job_id;
+      showPanel("job-state");
+      updateJob(payload.active_job);
+      state.pollTimer = setInterval(pollJob, 700);
+      pollJob();
+    }
   } catch (error) {
     $("error-message").textContent = error.message;
     showPanel("error-state");
@@ -281,6 +349,7 @@ async function initialize() {
 }
 
 $("workflow-form").addEventListener("submit", startRun);
+$("cancel-job-button").addEventListener("click", cancelRun);
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));
 $("signal-only").addEventListener("change", () => setOntologyControls($("path-enabled").checked));

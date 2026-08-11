@@ -504,6 +504,110 @@ labeled `signaling_process`, 227 `kinase_phosphatase_binding`, 195
 multi-class protein in every class assigned to it; the class counts are
 therefore not mutually exclusive.
 
+## 8A. Collecting-duct extension for the Aqp2-focused analysis
+
+The generic 891-node result above remains the reproducible baseline. A separate
+lab-specific node-selection profile was created to represent Aqp2 signaling
+throughout the collecting duct rather than only the cortical collecting duct.
+Six additional evidence streams were defined by crossing two assays with three
+anatomical segments:
+
+- rat proteome: CCD, OMCD, and IMCD;
+- mouse renal-tubule RNA-seq: CCD, OMCD, and IMCD.
+
+Each assay/segment combination was retained as a distinct, independently
+selectable GUI stream. The three segment streams within an assay were also
+tagged with a shared dependence group because they originate from one source
+experiment. Treating them as separate Bayes-factor updates follows the
+requested sensitivity-oriented analysis, but their common experimental source
+means that the resulting posterior magnitudes should not be interpreted as if
+all six measurements were fully independent experiments.
+
+### Rat-to-mouse identifier harmonization
+
+The proteome contained 7,429 unique rat UniProt accessions and 7,429 unique rat
+gene symbols. Rat proteins were harmonized to mouse genes with Ensembl BioMart
+release 116 orthology data. Mapping was performed in the following order:
+
+1. Match the rat UniProt accession to an Ensembl rat gene and then follow its
+   mouse orthology relationship.
+2. If no accession mapping was available, match the supplied official rat gene
+   symbol to the Ensembl rat gene symbol.
+3. If one or more high-confidence mouse orthologs were available for that rat
+   protein, retain only those high-confidence mappings.
+4. If no high-confidence mapping existed, retain the available low-confidence
+   mapping(s) and label them explicitly as a fallback.
+5. Retain all selected one-to-one, one-to-many, or many-to-many orthologs rather
+   than inventing a single representative for a valid multi-gene relationship.
+
+This procedure produced at least one named mouse ortholog for 7,107 of 7,429
+rat proteins. Of these, 5,892 had a selected high-confidence ortholog and 2,678
+mapped into the 9,170-protein signaling-candidate universe. The remaining 322
+rat proteins were retained in an unmapped-protein audit. When more than one rat
+protein or retained ortholog contributed to the same mouse candidate, the
+maximum segment abundance was used. Abundances were not summed across proteins
+or orthologs.
+
+### Segment-specific backgrounds and Bayes factors
+
+Zeros were common in both input tables and were interpreted as nondetection,
+not evidence that a signaling node is absent. For each of the six streams,
+\(T_{75}\) was calculated from all strictly positive finite measurements in
+that source segment before restriction to the signaling-candidate universe.
+Zero, missing, or nonmapped candidate values were excluded from the background
+and received neutral evidence. For positive abundance \(x\), the source
+likelihood and neutral-relative Bayes factor were:
+
+$$
+L(x)=\max\left(0.5,1-\exp\left[-\frac{1}{2}
+\left(\frac{x}{T_{75}}\right)^2\right]\right),
+\qquad
+BF(x)=\frac{L(x)}{0.5}.
+$$
+
+Thus, nondetection gives \(L=0.5\) and \(BF=1\), while increasingly large
+positive abundances approach \(BF=2\). No cross-node normalization was applied.
+The empirical backgrounds and candidate counts were:
+
+| Stream | Positive background values | Zero source rows | \(T_{75}\) | Observed signaling candidates | Non-neutral candidates |
+|---|---:|---:|---:|---:|---:|
+| Rat proteome CCD | 6,550 | 879 | 66,565.7131 | 2,391 | 521 |
+| Rat proteome OMCD | 4,395 | 3,034 | 70,816.4444 | 1,643 | 325 |
+| Rat proteome IMCD | 5,621 | 1,808 | 65,193.9136 | 2,128 | 476 |
+| Mouse RNA CCD | 25,161 | 29,371 | 22.9 | 5,449 | 1,933 |
+| Mouse RNA OMCD | 38,933 | 15,599 | 9.2 | 6,428 | 3,005 |
+| Mouse RNA IMCD | 31,140 | 23,392 | 11.7 | 5,774 | 2,351 |
+
+The mouse RNA file contained 100 duplicated nonempty gene symbols represented
+by 203 rows. As with the proteome mappings, the maximum reported abundance for
+each mouse symbol and segment was used; duplicated rows were not summed.
+
+### Integration result
+
+The six new factors were added to the same independent present-versus-absent
+node model as the four existing streams. All nodes began with prior probability
+0.5, source likelihoods were converted to neutral-relative Bayes factors, and
+weighted Bayes factors multiplied node-specific prior odds. With all ten node
+streams enabled at unit weight and their default \(T_q\) multipliers, cumulative
+selection was:
+
+| Stage | Selected proteins | New proteins at stage |
+|---|---:|---:|
+| Existing four streams | 871 | -- |
+| + proteome CCD | 1,062 | 191 |
+| + proteome OMCD | 1,069 | 7 |
+| + proteome IMCD | 1,119 | 50 |
+| + RNA CCD | 2,314 | 1,195 |
+| + RNA OMCD | 3,227 | 913 |
+| + RNA IMCD | **3,296** | 69 |
+
+Adding the 20 curated second messengers produced a lab-specific collecting-duct
+universe of 3,316 total nodes. This result is stored separately from the
+generic 891-node baseline; the additional six streams are selectable but off
+in the generic GUI default configuration. The preprocessing and execution
+entry points are `code/node_selection/build_collecting_duct_evidence.py` and
+`code/node_selection/run_collecting_duct_node_selection.py`, respectively.
+
 ## 9. Historical alternate protein-plus-PC universe
 
 Before the 2026-07-30 preprocessing revision, an alternate universe was

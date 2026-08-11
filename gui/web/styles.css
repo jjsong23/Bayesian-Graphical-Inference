@@ -123,11 +123,14 @@ input:disabled { opacity: .45; background: #f0f1ed; }
 .switch input:checked + span::after { transform: translateX(16px); }
 
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 24px; }
-.primary-button, .secondary-button { min-height: 42px; border-radius: 8px; padding: 0 16px; font-weight: 750; border: 1px solid transparent; }
+.primary-button, .secondary-button, .danger-button { min-height: 42px; border-radius: 8px; padding: 0 16px; font-weight: 750; border: 1px solid transparent; }
 .primary-button { display: inline-flex; align-items: center; gap: 34px; background: var(--green); color: #fff; }
 .primary-button:hover { background: #193b2f; }
 .primary-button:disabled { cursor: wait; opacity: .55; }
 .secondary-button { border-color: var(--line); background: transparent; color: var(--ink); }
+.danger-button { border-color: #b95d55; background: transparent; color: #8b312b; }
+.danger-button:hover { background: #f8e9e7; }
+.danger-button:disabled { cursor: wait; opacity: .5; }
 
 .results { background: var(--surface); padding: clamp(34px, 5vw, 72px); position: relative; overflow: hidden; }
 .results::before { content: ""; position: absolute; width: 440px; height: 440px; border: 1px solid rgba(35,76,61,.07); border-radius: 50%; right: -220px; top: -160px; }
@@ -156,6 +159,7 @@ input:disabled { opacity: .45; background: #f0f1ed; }
 .progress-track { height: 5px; border-radius: 4px; overflow: hidden; background: #dce0dc; margin: 25px 0 16px; }
 #progress-bar { height: 100%; width: 0; background: var(--green); transition: width .3s ease; }
 .muted { color: var(--muted); font-size: 13px; }
+.job-actions { display: flex; justify-content: flex-end; margin-top: 24px; }
 
 .complete-badge { padding: 6px 9px; border-radius: 20px; background: var(--green-soft); color: var(--green); font-size: 10px; font-weight: 800; text-transform: uppercase; }
 .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); margin: 28px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }

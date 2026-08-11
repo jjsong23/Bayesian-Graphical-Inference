@@ -55,6 +55,9 @@ NEUTRAL = 0.5
 STRING_REFERENCE = 0.041
 STITCH_REFERENCE = 0.150
 ProgressCallback = Callable[[str, float], None]
+CancellationCheckpoint = Callable[[], None]
+PairFilter = Callable[[tuple[str, str]], bool]
+PAIR_INSERT_BATCH_SIZE = 5_000
 
 
 @dataclass
@@ -95,6 +98,25 @@ def canonical_pair(left: str, right: str) -> tuple[str, str]:
     if left == right:
         raise ValueError("self-pairs are not cached")
     return tuple(sorted((str(left), str(right)), key=lambda value: (value.casefold(), value)))
+
+
+def incremental_pair_count(symbols: list[str], base_symbols: set[str]) -> int:
+    """Count unordered graph pairs incident to at least one non-seed node."""
+    base_selected = sum(symbol in base_symbols for symbol in symbols)
+    return (
+        len(symbols) * (len(symbols) - 1) // 2
+        - base_selected * (base_selected - 1) // 2
+    )
+
+
+def iter_incremental_pairs(
+    symbols: list[str], dynamic_symbols: set[str]
+) -> Iterable[tuple[str, str]]:
+    """Stream each unordered pair incident to an added node exactly once."""
+    for left_index, left in enumerate(symbols[:-1]):
+        for right in symbols[left_index + 1 :]:
+            if left in dynamic_symbols or right in dynamic_symbols:
+                yield canonical_pair(left, right)
 
 
 def cache_path(project: Path) -> Path:
@@ -369,7 +391,10 @@ def _profile_new_nodes(
     signature: str,
     metadata: pd.DataFrame,
     base_profiles: dict[str, dict[str, Any]],
+    cancel_check: CancellationCheckpoint | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, str]], int]:
+    if cancel_check:
+        cancel_check()
     symbols = metadata["symbol"].astype(str).tolist()
     placeholders = ",".join("?" for _ in symbols)
     cached_rows = connection.execute(
@@ -443,7 +468,9 @@ def _profile_new_nodes(
     primary_index = {symbol: index for index, symbol in enumerate(protein_missing["symbol"].astype(str))}
 
     insert_rows: list[tuple[Any, ...]] = []
-    for row in missing.to_dict(orient="records"):
+    for index_number, row in enumerate(missing.to_dict(orient="records")):
+        if cancel_check and index_number % 25 == 0:
+            cancel_check()
         symbol = str(row["symbol"])
         node_type = str(row.get("node_type", "protein"))
         classes = str(row.get("classes", ""))
@@ -503,6 +530,8 @@ def _profile_new_nodes(
                 utc_now(),
             )
         )
+    if cancel_check:
+        cancel_check()
     connection.executemany(
         """
         INSERT OR REPLACE INTO node_profiles(
@@ -514,14 +543,17 @@ def _profile_new_nodes(
         """,
         insert_rows,
     )
+    if cancel_check:
+        cancel_check()
     connection.commit()
     return profiles, entries, len(missing)
 
 
 def _scan_string(
     project: Path,
-    missing: set[tuple[str, str]],
+    pair_filter: PairFilter,
     profiles: dict[str, dict[str, Any]],
+    cancel_check: CancellationCheckpoint | None = None,
 ) -> dict[tuple[str, str], float]:
     id_to_symbol = {
         str(value["string_id"]): symbol
@@ -536,7 +568,9 @@ def _scan_string(
         header = handle.readline().split()
         if len(header) != 10 or header[-1] != "combined_score":
             raise ValueError(f"Unexpected STRING detailed-links header: {header}")
-        for line in handle:
+        for line_number, line in enumerate(handle):
+            if cancel_check and line_number % 50_000 == 0:
+                cancel_check()
             fields = line.split()
             if len(fields) != 10:
                 continue
@@ -545,7 +579,7 @@ def _scan_string(
             if not left or not right or left == right:
                 continue
             pair = canonical_pair(left, right)
-            if pair not in missing:
+            if not pair_filter(pair):
                 continue
             score = int(fields[9]) / 1000.0
             result[pair] = max(score, result.get(pair, 0.0))
@@ -554,8 +588,9 @@ def _scan_string(
 
 def _omnipath_effort(
     project: Path,
-    missing: set[tuple[str, str]],
+    pair_filter: PairFilter,
     profiles: dict[str, dict[str, Any]],
+    cancel_check: CancellationCheckpoint | None = None,
 ) -> dict[tuple[str, str], float]:
     raw = pd.read_csv(
         project / "data/edge_characterization/omnipath/2026-07-30/raw/omnipath_mouse_core_post_translational.tsv",
@@ -573,13 +608,15 @@ def _omnipath_effort(
         return symbol_ci.get(str(symbol).casefold(), accession_to_symbol.get(str(accession), ""))
 
     result: dict[tuple[str, str], float] = {}
-    for row in raw.to_dict(orient="records"):
+    for row_number, row in enumerate(raw.to_dict(orient="records")):
+        if cancel_check and row_number % 10_000 == 0:
+            cancel_check()
         left = endpoint(row["source_genesymbol"], row["source"])
         right = endpoint(row["target_genesymbol"], row["target"])
         if not left or not right or left == right:
             continue
         pair = canonical_pair(left, right)
-        if pair not in missing:
+        if not pair_filter(pair):
             continue
         effort = float(row["curation_effort"])
         result[pair] = max(effort, result.get(pair, 0.0))
@@ -588,8 +625,9 @@ def _omnipath_effort(
 
 def _stitch_scores(
     project: Path,
-    missing: set[tuple[str, str]],
+    pair_filter: PairFilter,
     profiles: dict[str, dict[str, Any]],
+    cancel_check: CancellationCheckpoint | None = None,
 ) -> dict[tuple[str, str], float]:
     string_to_symbol = {
         str(value.get("string_id", "")): symbol
@@ -604,13 +642,15 @@ def _stitch_scores(
         sep="\t",
     )
     result: dict[tuple[str, str], float] = {}
-    for row in evidence.to_dict(orient="records"):
+    for row_number, row in enumerate(evidence.to_dict(orient="records")):
+        if cancel_check and row_number % 10_000 == 0:
+            cancel_check()
         protein = string_to_symbol.get(str(row["protein"]), "")
         messenger = str(row["messenger_node"])
         if not protein or messenger not in profiles or protein == messenger:
             continue
         pair = canonical_pair(protein, messenger)
-        if pair not in missing:
+        if not pair_filter(pair):
             continue
         score = float(row["stitch_score"])
         result[pair] = max(score, result.get(pair, 0.0))
@@ -619,10 +659,12 @@ def _stitch_scores(
 
 def _kinase_hits(
     project: Path,
-    missing: set[tuple[str, str]],
+    pair_filter: PairFilter,
     metadata: pd.DataFrame,
     dynamic_symbols: set[str],
     entries: dict[str, dict[str, str]],
+    cancel_check: CancellationCheckpoint | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:
     from build_target_adjacency_vector import target_phosphosites
 
@@ -651,32 +693,55 @@ def _kinase_hits(
     target_symbols = set(dynamic_symbols).intersection(set(protein_metadata["symbol"]))
     if dynamic_kinases:
         target_symbols.update(protein_metadata["symbol"].astype(str))
+    ordered_targets = sorted(target_symbols, key=str.casefold)
+    audit_table = None
+    if any(target in dynamic_symbols for target in ordered_targets):
+        audit_path = project / "results/phosphoprotein_evidence/phosphosite_audit.tsv"
+        if audit_path.exists():
+            audit_table = pd.read_csv(audit_path, sep="\t", dtype=str).fillna("")
     result: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for target in sorted(target_symbols, key=str.casefold):
+    score_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    for target_number, target in enumerate(ordered_targets, start=1):
+        if cancel_check:
+            cancel_check()
+        if progress and (target_number == 1 or target_number % 25 == 0):
+            progress(
+                f"Scoring kinase–protein relationships "
+                f"({target_number:,} of {len(ordered_targets):,} proteins)",
+                0.44 + 0.02 * target_number / max(len(ordered_targets), 1),
+            )
         if target in dynamic_symbols:
             entry = entries.get(target)
             if entry is None:
                 continue
-            sites = target_phosphosites(project, target, entry)
+            sites = target_phosphosites(
+                project, target, entry, audit_table=audit_table
+            )
         else:
             sites = observed.loc[observed["symbol"].eq(target)].copy()
             if not sites.empty:
                 sites["kinasepredictor_scorable"] = sites["kinasepredictor_scorable"].str.casefold().eq("true")
         if sites.empty:
             continue
-        for site in sites.to_dict(orient="records"):
+        for site_number, site in enumerate(sites.to_dict(orient="records")):
+            if cancel_check and site_number % 100 == 0:
+                cancel_check()
             if not bool(site.get("kinasepredictor_scorable", False)):
                 continue
             sequence = str(site.get("centralized_sequence_13mer", "")).strip().upper()
             residue = str(site.get("residue", "")).strip().upper()
             if len(sequence) != 13 or sequence[6] != residue:
                 continue
-            if residue in {"S", "T"}:
-                scored = score_site(sequence, st_labels, st_matrices, st_mapping, 10)
-            elif residue == "Y":
-                scored = score_site(sequence, tyr_labels, tyr_matrices, tyr_mapping, 10)
-            else:
-                continue
+            cache_key = (residue, sequence)
+            scored = score_cache.get(cache_key)
+            if scored is None:
+                if residue in {"S", "T"}:
+                    scored = score_site(sequence, st_labels, st_matrices, st_mapping, 10)
+                elif residue == "Y":
+                    scored = score_site(sequence, tyr_labels, tyr_matrices, tyr_mapping, 10)
+                else:
+                    continue
+                score_cache[cache_key] = scored
             for prediction in scored["predictions"]:
                 if int(prediction["global_model_rank"]) > 10:
                     continue
@@ -684,7 +749,7 @@ def _kinase_hits(
                 if not kinase or kinase == target:
                     continue
                 pair = canonical_pair(kinase, target)
-                if pair not in missing:
+                if not pair_filter(pair):
                     continue
                 result.setdefault(pair, []).append(
                     {
@@ -740,8 +805,11 @@ def ensure_incremental_pairs(
     graph_metadata: pd.DataFrame,
     base_symbols: list[str],
     progress: ProgressCallback | None = None,
+    cancel_check: CancellationCheckpoint | None = None,
 ) -> CacheUpdate:
     """Ensure that every graph pair incident to an added node is cached."""
+    if cancel_check:
+        cancel_check()
     initialize_cache(project, base_symbols)
     signature, source_manifest = evidence_signature(project)
     symbols = graph_metadata["symbol"].astype(str).tolist()
@@ -749,22 +817,39 @@ def ensure_incremental_pairs(
         raise ValueError("Graph metadata contains duplicate symbols")
     base_set = set(base_symbols)
     dynamic_symbols = {symbol for symbol in symbols if symbol not in base_set}
-    requested = {
-        canonical_pair(dynamic, other)
-        for dynamic in dynamic_symbols
-        for other in symbols
-        if dynamic != other
-    }
+    selected_set = set(symbols)
+    requested_count = incremental_pair_count(symbols, base_set)
+
+    def pair_is_requested(pair: tuple[str, str]) -> bool:
+        return (
+            pair[0] in selected_set
+            and pair[1] in selected_set
+            and (pair[0] in dynamic_symbols or pair[1] in dynamic_symbols)
+        )
+
     connection = _connect(project)
     try:
-        existing = {
-            (row[0], row[1])
-            for row in connection.execute(
-                "SELECT node_a, node_b FROM pair_evidence WHERE evidence_signature=?",
+        connection.execute(
+            "CREATE TEMP TABLE requested_nodes("
+            "symbol TEXT PRIMARY KEY, is_dynamic INTEGER NOT NULL) WITHOUT ROWID"
+        )
+        connection.executemany(
+            "INSERT INTO requested_nodes(symbol, is_dynamic) VALUES (?, ?)",
+            [(symbol, int(symbol in dynamic_symbols)) for symbol in symbols],
+        )
+        existing_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM pair_evidence AS pair
+                JOIN requested_nodes AS left_node ON left_node.symbol = pair.node_a
+                JOIN requested_nodes AS right_node ON right_node.symbol = pair.node_b
+                WHERE pair.evidence_signature=?
+                  AND (left_node.is_dynamic=1 OR right_node.is_dynamic=1)
+                """,
                 (signature,),
-            )
-        }
-        missing = requested.difference(existing)
+            ).fetchone()[0]
+        )
         base_profiles = _load_base_profiles(project, base_symbols)
         requested_metadata = graph_metadata.loc[
             graph_metadata["symbol"].isin(dynamic_symbols)
@@ -777,9 +862,10 @@ def ensure_incremental_pairs(
             signature,
             requested_metadata,
             base_profiles,
+            cancel_check,
         )
         profiles = {**base_profiles, **dynamic_profiles}
-        if not missing:
+        if existing_count == requested_count:
             total = int(
                 connection.execute(
                     "SELECT COUNT(*) FROM pair_evidence WHERE evidence_signature=?",
@@ -788,8 +874,8 @@ def ensure_incremental_pairs(
             )
             return CacheUpdate(
                 signature,
-                len(requested),
-                len(requested),
+                requested_count,
+                requested_count,
                 0,
                 total,
                 BASE_NODE_COUNT * (BASE_NODE_COUNT - 1) // 2,
@@ -800,20 +886,19 @@ def ensure_incremental_pairs(
 
         if progress:
             progress("Scanning STRING for new pairs", 0.28)
-        string_scores = _scan_string(project, missing, profiles)
+        string_scores = _scan_string(project, pair_is_requested, profiles, cancel_check)
         if progress:
             progress("Characterizing new curated interactions", 0.36)
-        omnipath = _omnipath_effort(project, missing, profiles)
-        stitch = _stitch_scores(project, missing, profiles)
+        omnipath = _omnipath_effort(project, pair_is_requested, profiles, cancel_check)
+        stitch = _stitch_scores(project, pair_is_requested, profiles, cancel_check)
         if progress:
             progress("Scoring new kinase–protein pairs", 0.44)
         # Entries for previously profiled dynamic nodes are loaded only when a
         # new pair now requires them.
         needed_entries = {
             symbol
-            for pair in missing
-            for symbol in pair
-            if symbol in dynamic_symbols and profiles[symbol]["node_type"] == "protein"
+            for symbol in dynamic_symbols
+            if profiles[symbol]["node_type"] == "protein"
         }
         unresolved = needed_entries.difference(entries)
         if unresolved:
@@ -824,15 +909,34 @@ def ensure_incremental_pairs(
             entries.update(loaded_entries)
         kinase = _kinase_hits(
             project,
-            missing,
+            pair_is_requested,
             graph_metadata,
             dynamic_symbols,
             entries,
+            cancel_check,
+            progress,
         )
 
         rows: list[tuple[Any, ...]] = []
         timestamp = utc_now()
-        for pair in sorted(missing, key=lambda item: (item[0].casefold(), item[1].casefold())):
+        insert_sql = """
+            INSERT OR IGNORE INTO pair_evidence(
+                evidence_signature, node_a, node_b,
+                mpkccd_dot_product, mpkccd_tq_a, mpkccd_tq_b,
+                kinase_hits_json, string_score,
+                hpa_primary_similarity, hpa_primary_tq_a, hpa_primary_tq_b,
+                hpa_high_similarity, hpa_high_tq_a, hpa_high_tq_b,
+                omnipath_curation_effort, stitch_score, characterized_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        if cancel_check:
+            cancel_check()
+        changes_before_pair_inserts = connection.total_changes
+        for pair_number, pair in enumerate(
+            iter_incremental_pairs(symbols, dynamic_symbols), start=1
+        ):
+            if cancel_check and pair_number % PAIR_INSERT_BATCH_SIZE == 1:
+                cancel_check()
             profile = _pair_profile_values(pair, profiles)
             rows.append(
                 (
@@ -855,20 +959,22 @@ def ensure_incremental_pairs(
                     timestamp,
                 )
             )
-        connection.executemany(
-            """
-            INSERT INTO pair_evidence(
-                evidence_signature, node_a, node_b,
-                mpkccd_dot_product, mpkccd_tq_a, mpkccd_tq_b,
-                kinase_hits_json, string_score,
-                hpa_primary_similarity, hpa_primary_tq_a, hpa_primary_tq_b,
-                hpa_high_similarity, hpa_high_tq_a, hpa_high_tq_b,
-                omnipath_curation_effort, stitch_score, characterized_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        connection.commit()
+            if len(rows) >= PAIR_INSERT_BATCH_SIZE:
+                connection.executemany(insert_sql, rows)
+                connection.commit()
+                rows.clear()
+                if progress:
+                    fraction = 0.46 + 0.12 * pair_number / max(requested_count, 1)
+                    progress(
+                        f"Caching edge pairs ({pair_number:,} of {requested_count:,})",
+                        fraction,
+                    )
+        if rows:
+            if cancel_check:
+                cancel_check()
+            connection.executemany(insert_sql, rows)
+            connection.commit()
+        newly_inserted = int(connection.total_changes - changes_before_pair_inserts)
         total = int(
             connection.execute(
                 "SELECT COUNT(*) FROM pair_evidence WHERE evidence_signature=?",
@@ -893,9 +999,9 @@ def ensure_incremental_pairs(
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         return CacheUpdate(
             signature,
-            len(requested),
-            len(requested) - len(missing),
-            len(missing),
+            requested_count,
+            requested_count - newly_inserted,
+            newly_inserted,
             total,
             BASE_NODE_COUNT * (BASE_NODE_COUNT - 1) // 2,
             len(dynamic_symbols),
@@ -930,7 +1036,8 @@ def incremental_factor_table(
     signature, _ = evidence_signature(project)
     connection = _connect(project)
     try:
-        rows = connection.execute(
+        selected = set(graph_symbols)
+        cursor = connection.execute(
             """
             SELECT node_a, node_b, mpkccd_dot_product, mpkccd_tq_a, mpkccd_tq_b,
                    kinase_hits_json, string_score,
@@ -940,46 +1047,47 @@ def incremental_factor_table(
             FROM pair_evidence WHERE evidence_signature=?
             """,
             (signature,),
-        ).fetchall()
+        )
+        output: list[tuple[str, str, float]] = []
+        for row in cursor:
+            if row[0] not in selected or row[1] not in selected:
+                continue
+            factor = 1.0
+            if handler == "mpkccd_localization" and row[2] is not None and row[3] is not None and row[4] is not None:
+                factor = (
+                    _complement(float(row[2]), float(row[3]) * multiplier)
+                    + _complement(float(row[2]), float(row[4]) * multiplier)
+                ) / (2.0 * NEUTRAL)
+            elif handler == "kinase_predictor":
+                log_factor = 0.0
+                for hit in json.loads(row[5] or "[]"):
+                    likelihood = _complement(float(hit["raw_score"]), float(hit["site_tq"]) * multiplier)
+                    log_factor += math.log(likelihood / NEUTRAL)
+                factor = math.exp(min(log_factor, 700.0))
+            elif handler == "string_v12" and row[6] is not None:
+                factor = _odds_factor(float(row[6]), STRING_REFERENCE * multiplier)
+            elif handler == "hpa_primary" and row[7] is not None and row[8] is not None and row[9] is not None:
+                factor = (
+                    _complement(float(row[7]), float(row[8]) * multiplier)
+                    + _complement(float(row[7]), float(row[9]) * multiplier)
+                ) / (2.0 * NEUTRAL)
+            elif handler == "hpa_high_confidence" and row[10] is not None and row[11] is not None and row[12] is not None:
+                factor = (
+                    _complement(float(row[10]), float(row[11]) * multiplier)
+                    + _complement(float(row[10]), float(row[12]) * multiplier)
+                ) / (2.0 * NEUTRAL)
+            elif handler == "omnipath_core" and row[13] is not None:
+                support = 1.0 - math.exp(-0.5 * (float(row[13]) / (6.0 * multiplier)) ** 2)
+                factor = (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
+            elif handler == "stitch_secondary_messenger" and row[14] is not None:
+                factor = _odds_factor(float(row[14]), STITCH_REFERENCE * multiplier, floor=True)
+            if factor > 0 and math.isfinite(factor) and abs(factor - 1.0) > 1e-12:
+                output.append((row[0], row[1], factor))
+        return pd.DataFrame.from_records(
+            output, columns=["node_a", "node_b", "bayes_factor"]
+        )
     finally:
         connection.close()
-    selected = set(graph_symbols)
-    output: list[dict[str, Any]] = []
-    for row in rows:
-        if row[0] not in selected or row[1] not in selected:
-            continue
-        factor = 1.0
-        if handler == "mpkccd_localization" and row[2] is not None and row[3] is not None and row[4] is not None:
-            factor = (
-                _complement(float(row[2]), float(row[3]) * multiplier)
-                + _complement(float(row[2]), float(row[4]) * multiplier)
-            ) / (2.0 * NEUTRAL)
-        elif handler == "kinase_predictor":
-            log_factor = 0.0
-            for hit in json.loads(row[5] or "[]"):
-                likelihood = _complement(float(hit["raw_score"]), float(hit["site_tq"]) * multiplier)
-                log_factor += math.log(likelihood / NEUTRAL)
-            factor = math.exp(min(log_factor, 700.0))
-        elif handler == "string_v12" and row[6] is not None:
-            factor = _odds_factor(float(row[6]), STRING_REFERENCE * multiplier)
-        elif handler == "hpa_primary" and row[7] is not None and row[8] is not None and row[9] is not None:
-            factor = (
-                _complement(float(row[7]), float(row[8]) * multiplier)
-                + _complement(float(row[7]), float(row[9]) * multiplier)
-            ) / (2.0 * NEUTRAL)
-        elif handler == "hpa_high_confidence" and row[10] is not None and row[11] is not None and row[12] is not None:
-            factor = (
-                _complement(float(row[10]), float(row[11]) * multiplier)
-                + _complement(float(row[10]), float(row[12]) * multiplier)
-            ) / (2.0 * NEUTRAL)
-        elif handler == "omnipath_core" and row[13] is not None:
-            support = 1.0 - math.exp(-0.5 * (float(row[13]) / (6.0 * multiplier)) ** 2)
-            factor = (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
-        elif handler == "stitch_secondary_messenger" and row[14] is not None:
-            factor = _odds_factor(float(row[14]), STITCH_REFERENCE * multiplier, floor=True)
-        if factor > 0 and math.isfinite(factor) and abs(factor - 1.0) > 1e-12:
-            output.append({"node_a": row[0], "node_b": row[1], "bayes_factor": factor})
-    return pd.DataFrame(output, columns=["node_a", "node_b", "bayes_factor"])
 
 
 def current_cache_counts(project: Path) -> dict[str, int]:
