@@ -103,6 +103,10 @@
             </div>
             <div class="path-rules">
               <label class="check-field">
+                <input id="ontology-directionality" type="checkbox" />
+                <span>Apply conservative ontology directionality</span>
+              </label>
+              <label class="check-field">
                 <input id="signal-only" type="checkbox" />
                 <span>Signaling-component intermediates only</span>
               </label>
@@ -120,13 +124,13 @@
               <p>Select which node annotations qualify a protein or molecule to relay a path.</p>
               <div id="path-ontology-classes" class="ontology-grid"></div>
             </fieldset>
-            <p class="scientific-note">The sensitivity-oriented default includes ligand, binding, generic signaling-process, catalytic, regulatory, and second-messenger roles. Adaptor/scaffold is available but off by default. A multi-role node is eligible when any selected role matches; the separate scaffold override excludes all scaffold-tagged intermediates. Endpoints are always exempt. Up to 500 paths can be requested.</p>
+            <p class="scientific-note">Ontology directionality removes a reverse traversal only when one conservative role rule supports a unique direction; no-rule and conflicting multi-role pairs remain traversable both ways. This changes path traversal, not the Bayesian edge probability. The sensitivity-oriented relay default includes ligand, binding, generic signaling-process, catalytic, regulatory, and second-messenger roles. Adaptor/scaffold is available but off by default. Endpoints are always exempt. Up to 500 paths can be requested.</p>
           </div>
         </section>
 
         <div class="form-actions">
           <button id="reset-button" type="button" class="secondary-button">Reset</button>
-          <button id="run-button" type="submit" class="primary-button">
+          <button id="run-button" type="submit" class="primary-button" disabled>
             <span>Run workflow</span><span aria-hidden="true">→</span>
           </button>
         </div>
@@ -167,6 +171,39 @@
             <div><strong id="metric-paths">—</strong><span>ranked paths</span></div>
           </div>
           <div id="warning-box" class="warning-box hidden"></div>
+          <section class="distribution-section" aria-labelledby="distribution-title">
+            <div class="table-heading distribution-heading">
+              <h3 id="distribution-title">Posterior probability distributions</h3>
+              <span>Log-scaled hypothesis counts</span>
+            </div>
+            <div class="distribution-grid">
+              <article class="distribution-card">
+                <div class="distribution-card-heading">
+                  <div><h4>Node probabilities</h4><p>All modeled protein candidates</p></div>
+                  <strong id="node-distribution-count">—</strong>
+                </div>
+                <svg id="node-distribution-chart" class="distribution-chart" viewBox="0 0 440 218" role="img" aria-label="Histogram of node posterior probabilities"></svg>
+                <dl id="node-distribution-stats" class="distribution-stats"></dl>
+              </article>
+              <article class="distribution-card">
+                <div class="distribution-card-heading">
+                  <div><h4>Edge probabilities</h4><p>Unique undirected graph pairs</p></div>
+                  <strong id="edge-distribution-count">—</strong>
+                </div>
+                <svg id="edge-distribution-chart" class="distribution-chart" viewBox="0 0 440 218" role="img" aria-label="Histogram of edge posterior probabilities"></svg>
+                <dl id="edge-distribution-stats" class="distribution-stats"></dl>
+              </article>
+            </div>
+            <p class="distribution-note">Each bar is a fixed-width posterior-probability bin. Bar height uses log<sub>10</sub>(count + 1) so large neutral-prior peaks do not obscure smaller supported tails. The dashed orange line marks the configured output cutoff.</p>
+          </section>
+          <section id="directionality-result" class="directionality-result hidden" aria-labelledby="directionality-result-title">
+            <div>
+              <p class="eyebrow">Ontology directionality</p>
+              <h3 id="directionality-result-title"><strong id="oriented-edge-count">—</strong> supported edges uniquely oriented</h3>
+              <p id="directionality-result-detail"></p>
+            </div>
+            <strong id="oriented-edge-percent">—</strong>
+          </section>
           <div class="table-heading"><h3>Most likely paths</h3><span>Product score</span></div>
           <div class="table-wrap">
             <table>

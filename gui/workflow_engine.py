@@ -46,6 +46,12 @@ from incremental_edge_cache import (  # noqa: E402
     ensure_incremental_pairs,
     incremental_factor_table,
 )
+from ontology_directionality import (  # noqa: E402
+    RULE_CATALOG_PATH,
+    apply_ontology_directionality,
+    build_complete_class_pair_catalog,
+    load_direction_rule_catalog,
+)
 
 
 ProgressCallback = Callable[[str, float], None]
@@ -166,6 +172,10 @@ def validate_registry(registry: dict[str, Any], project: Path) -> None:
             "default-enabled path ontology classes must match the audited "
             "DEFAULT_SIGNAL_RELAY_CLASSES policy"
         )
+    load_direction_rule_catalog(
+        RULE_CATALOG_PATH,
+        known_classes=ontology_ids,
+    )
 
 
 def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
@@ -229,6 +239,9 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "max_hops": int(defaults["maximum_hops"]),
             "minimum_edge_probability": float(
                 defaults["path_minimum_edge_probability"]
+            ),
+            "ontology_directionality_enabled": bool(
+                defaults["ontology_directionality_enabled"]
             ),
             "signaling_intermediates_only": bool(
                 defaults["signaling_intermediates_only"]
@@ -332,6 +345,9 @@ def normalize_configuration(
     )
     path = config["path"]
     path["enabled"] = bool(path["enabled"])
+    path["ontology_directionality_enabled"] = bool(
+        path["ontology_directionality_enabled"]
+    )
     path["start"] = str(path["start"]).strip()
     path["target"] = str(path["target"]).strip()
     path["top_k"] = int(_number(path["top_k"], "top paths", 1, 500))
@@ -399,6 +415,51 @@ def normalize_configuration(
 
 def stable_expit(values: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(values, -700.0, 700.0)))
+
+
+def probability_distribution_summary(
+    values: np.ndarray | pd.Series,
+    *,
+    prior_probability: float,
+    output_cutoff: float,
+    bin_count: int = 50,
+) -> dict[str, Any]:
+    """Summarize posterior probabilities for compact, browser-safe plotting.
+
+    Sending a full edge vector to the GUI would make multi-million-pair runs
+    unnecessarily large. Fixed bins spanning the complete probability domain
+    preserve a directly comparable distribution while keeping the preview
+    payload small and deterministic.
+    """
+    probabilities = np.asarray(values, dtype=float).reshape(-1)
+    probabilities = probabilities[np.isfinite(probabilities)]
+    if bin_count < 1:
+        raise ValueError("probability histogram bin count must be positive")
+    if np.any((probabilities < -1e-12) | (probabilities > 1.0 + 1e-12)):
+        raise ValueError("probability distribution contains values outside [0, 1]")
+    probabilities = np.clip(probabilities, 0.0, 1.0)
+    edges = np.linspace(0.0, 1.0, bin_count + 1)
+    counts, edges = np.histogram(probabilities, bins=edges)
+    return {
+        "hypothesis_count": int(len(probabilities)),
+        "minimum": float(probabilities.min()) if len(probabilities) else None,
+        "mean": float(probabilities.mean()) if len(probabilities) else None,
+        "maximum": float(probabilities.max()) if len(probabilities) else None,
+        "prior_probability": float(prior_probability),
+        "output_probability_cutoff_exclusive": float(output_cutoff),
+        "at_exact_prior_count": int(
+            np.isclose(
+                probabilities,
+                prior_probability,
+                rtol=0.0,
+                atol=1e-12,
+            ).sum()
+        ),
+        "above_output_cutoff_count": int((probabilities > output_cutoff).sum()),
+        "bin_edges": [float(value) for value in edges],
+        "bin_counts": [int(value) for value in counts],
+        "binning": f"{bin_count} equal-width bins over [0, 1]",
+    }
 
 
 def complement_minimum_likelihood(
@@ -716,6 +777,11 @@ def select_nodes(
         "posterior_maximum": float(posterior.max()),
         "neutral_posterior_count": int(
             np.isclose(posterior, prior_probability, rtol=0.0, atol=tolerance).sum()
+        ),
+        "probability_distribution": probability_distribution_summary(
+            posterior,
+            prior_probability=prior_probability,
+            output_cutoff=output_cutoff,
         ),
         "posterior_probabilities_are_independent": True,
         "selection_rule": (
@@ -1280,6 +1346,11 @@ def combine_edge_factors(
         "pairs_above_output_cutoff": int((upper > cutoff).sum()),
         "pairs_at_exact_prior": int(np.isclose(upper, prior, atol=1e-12, rtol=0).sum()),
         "output_probability_cutoff_exclusive": cutoff,
+        "probability_distribution": probability_distribution_summary(
+            upper,
+            prior_probability=prior,
+            output_cutoff=cutoff,
+        ),
         "active_streams": active_streams,
         "integration_rule": (
             "Edge prior odds are multiplied by each selected Bayes factor raised "
@@ -1503,6 +1574,8 @@ def run_paths(
     config: dict[str, Any],
     start_input: str,
     target_symbol: str,
+    *,
+    directed_graph: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     symbols = matrix.index.astype(str).tolist()
     resolved = resolve_existing_node(
@@ -1537,7 +1610,9 @@ def run_paths(
         eligibility.loc[eligibility["allowed_as_intermediate"], "matrix_index"].astype(int)
     )
     adjacency, retained_edges = build_adjacency(
-        matrix, path_config["minimum_edge_probability"]
+        matrix,
+        path_config["minimum_edge_probability"],
+        directed=directed_graph,
     )
     symbol_index = {symbol: index for index, symbol in enumerate(symbols)}
     start_index = symbol_index[start_symbol]
@@ -1567,6 +1642,17 @@ def run_paths(
     }
     if not all(validation.values()):
         raise AssertionError(f"path validation failed: {validation}")
+    probability_values = matrix.to_numpy(dtype=float)
+    upper_triangle = np.triu_indices(len(matrix), k=1)
+    retained_unique_edges = int(
+        (
+            np.maximum(probability_values, probability_values.T)[upper_triangle]
+            > path_config["minimum_edge_probability"]
+        ).sum()
+    )
+    start_reachable_nodes = connected_component_size(
+        adjacency, start_index, permitted
+    )
     summary = {
         "start_symbol": start_symbol,
         "start_resolution_method": resolution_method,
@@ -1589,9 +1675,12 @@ def run_paths(
         "eligible_intermediate_nodes": int(
             eligibility["allowed_as_intermediate"].sum()
         ),
-        "retained_unique_edges_before_intermediate_filter": int(retained_edges),
-        "start_component_size": connected_component_size(
-            adjacency, start_index, permitted
+        "retained_unique_edges_before_intermediate_filter": retained_unique_edges,
+        "retained_transition_count_before_intermediate_filter": int(retained_edges),
+        "path_graph_is_directed": bool(directed_graph),
+        "start_reachable_node_count": start_reachable_nodes,
+        "start_component_size": (
+            None if directed_graph else start_reachable_nodes
         ),
         "validation": validation,
     }
@@ -1718,6 +1807,44 @@ def run_workflow(
             )
         cutoff = config["edge_integration"]["output_probability_cutoff"]
         supported = supported_edge_table(matrix, cutoff)
+        propagation_matrix = matrix
+        directionality_audit = pd.DataFrame()
+        directionality_class_catalog = pd.DataFrame()
+        directionality_summary: dict[str, Any] | None = None
+        directionality_catalog: dict[str, Any] | None = None
+        if (
+            config["path"]["enabled"]
+            and config["path"]["ontology_directionality_enabled"]
+        ):
+            update("Applying ontology directionality", 0.69)
+            directionality_catalog = load_direction_rule_catalog(
+                RULE_CATALOG_PATH,
+                known_classes=[
+                    item["id"] for item in registry["path_ontology_classes"]
+                ],
+            )
+            directionality_class_catalog = build_complete_class_pair_catalog(
+                directionality_catalog,
+                [item["id"] for item in registry["path_ontology_classes"]],
+            )
+            orientation_cutoff = min(
+                float(cutoff),
+                float(config["path"]["minimum_edge_probability"]),
+            )
+            (
+                propagation_matrix,
+                directionality_audit,
+                directionality_summary,
+            ) = apply_ontology_directionality(
+                matrix,
+                graph_metadata,
+                directionality_catalog,
+                audit_probability_cutoff=orientation_cutoff,
+                edge_output_cutoff=float(cutoff),
+                path_probability_cutoff=float(
+                    config["path"]["minimum_edge_probability"]
+                ),
+            )
         path_rows = pd.DataFrame()
         path_edges = pd.DataFrame()
         eligibility = pd.DataFrame()
@@ -1725,12 +1852,15 @@ def run_workflow(
         if config["path"]["enabled"]:
             update("Ranking paths", 0.74)
             path_rows, path_edges, eligibility, path_summary = run_paths(
-                matrix,
+                propagation_matrix,
                 graph_metadata,
                 config,
                 config["path"]["start"],
                 target_symbol,
+                directed_graph=directionality_summary is not None,
             )
+            if path_summary is not None:
+                path_summary["ontology_directionality"] = directionality_summary
 
         update("Writing reproducible outputs", 0.92)
         config_path = output / "configuration.json"
@@ -1738,6 +1868,10 @@ def run_workflow(
         selected_nodes_path = output / "selected_nodes.tsv"
         matrix_path = output / "edge_adjacency_matrix.tsv"
         supported_path = output / "supported_edges.tsv.gz"
+        propagation_matrix_path = output / "propagation_adjacency_matrix.tsv"
+        directionality_audit_path = output / "ontology_directionality_audit.tsv.gz"
+        directionality_class_catalog_path = output / "ontology_class_pair_catalog.tsv"
+        directionality_rules_path = output / "ontology_direction_rules.json"
         summary_path = output / "analysis_summary.json"
         check_cancel()
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -1756,6 +1890,42 @@ def run_workflow(
             matrix_path,
             supported_path,
         ]
+        if directionality_summary is not None and directionality_catalog is not None:
+            check_cancel()
+            propagation_matrix.to_csv(
+                propagation_matrix_path,
+                sep="\t",
+                float_format="%.9g",
+            )
+            check_cancel()
+            directionality_audit.to_csv(
+                directionality_audit_path,
+                sep="\t",
+                index=False,
+                compression="gzip",
+            )
+            directionality_class_catalog.to_csv(
+                directionality_class_catalog_path,
+                sep="\t",
+                index=False,
+            )
+            serialized_catalog = {
+                key: value
+                for key, value in directionality_catalog.items()
+                if key != "catalog_path"
+            }
+            directionality_rules_path.write_text(
+                json.dumps(serialized_catalog, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            files.extend(
+                [
+                    propagation_matrix_path,
+                    directionality_audit_path,
+                    directionality_class_catalog_path,
+                    directionality_rules_path,
+                ]
+            )
         for stream_id, audit in derived_audits.items():
             check_cancel()
             audit_path = output / f"{safe_name(stream_id)}_audit.tsv.gz"
@@ -1783,6 +1953,7 @@ def run_workflow(
                 "reported_supported_edge_count": int(len(supported)),
             },
             "path_finding": path_summary,
+            "ontology_directionality": directionality_summary,
             "external_target": (
                 {
                     "symbol": target_symbol,
@@ -1814,6 +1985,11 @@ def run_workflow(
             )
             if not path_rows.empty
             else [],
+            "probability_distributions": {
+                "nodes": node_summary["probability_distribution"],
+                "edges": edge_summary["probability_distribution"],
+            },
+            "directionality": directionality_summary,
             "warnings": warnings,
             "files": [path.name for path in [*files, summary_path]],
         }

@@ -25,6 +25,11 @@ from incremental_edge_cache import (
     incremental_pair_count,
     iter_incremental_pairs,
 )
+from ontology_directionality import (
+    apply_ontology_directionality,
+    build_complete_class_pair_catalog,
+    load_direction_rule_catalog,
+)
 
 
 class WorkflowEngineTests(unittest.TestCase):
@@ -74,6 +79,7 @@ class WorkflowEngineTests(unittest.TestCase):
             tuple(config["path"]["allowed_intermediate_classes"]),
             DEFAULT_SIGNAL_RELAY_CLASSES,
         )
+        self.assertTrue(config["path"]["ontology_directionality_enabled"])
         self.assertNotIn(
             "adaptor_scaffold", config["path"]["allowed_intermediate_classes"]
         )
@@ -100,6 +106,63 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("/cancel`, { method: \"POST\" }", javascript)
         self.assertIn('job.status === "cancelled"', javascript)
         self.assertIn('/api/jobs/active', javascript)
+
+    def test_run_button_waits_for_configuration_initialization(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        match = re.search(r'<button id="run-button"[^>]*>', html)
+        self.assertIsNotNone(match)
+        self.assertIn("disabled", match.group(0))
+        self.assertIn('$("run-button").disabled = false;', javascript)
+
+    def test_ontology_directionality_orients_only_unambiguous_role_pairs(self) -> None:
+        symbols = ["Ligand", "Receptor", "Kinase", "Binder", "Broad", "MultiA", "MultiB"]
+        values = np.full((len(symbols), len(symbols)), 0.9, dtype=float)
+        np.fill_diagonal(values, 0.0)
+        matrix = pd.DataFrame(values, index=symbols, columns=symbols)
+        metadata = pd.DataFrame(
+            {
+                "symbol": symbols,
+                "classes": [
+                    "ligand",
+                    "receptor",
+                    "kinase",
+                    "kinase_phosphatase_binding",
+                    "signaling_process",
+                    "kinase;kinase_phosphatase_binding",
+                    "kinase;kinase_phosphatase_binding",
+                ],
+            }
+        )
+        catalog = load_direction_rule_catalog(
+            known_classes=[item["id"] for item in self.registry["path_ontology_classes"]]
+        )
+        directed, audit, summary = apply_ontology_directionality(
+            matrix,
+            metadata,
+            catalog,
+            audit_probability_cutoff=0.5,
+            edge_output_cutoff=0.5,
+            path_probability_cutoff=0.5,
+        )
+        self.assertEqual(directed.loc["Ligand", "Receptor"], 0.9)
+        self.assertEqual(directed.loc["Receptor", "Ligand"], 0.0)
+        self.assertEqual(directed.loc["Kinase", "Binder"], 0.9)
+        self.assertEqual(directed.loc["Binder", "Kinase"], 0.0)
+        self.assertEqual(directed.loc["Kinase", "Broad"], 0.9)
+        self.assertEqual(directed.loc["Broad", "Kinase"], 0.9)
+        self.assertEqual(directed.loc["MultiA", "MultiB"], 0.9)
+        self.assertEqual(directed.loc["MultiB", "MultiA"], 0.9)
+        conflict = audit.loc[
+            audit["node_a"].eq("MultiA") & audit["node_b"].eq("MultiB")
+        ].iloc[0]
+        self.assertEqual(conflict["directionality_status"], "unresolved_conflicting_rules")
+        self.assertGreater(summary["edge_output_graph"]["uniquely_oriented_edge_count"], 0)
+        class_pairs = build_complete_class_pair_catalog(
+            catalog,
+            [item["id"] for item in self.registry["path_ontology_classes"]],
+        )
+        self.assertEqual(len(class_pairs), 153)
 
     def test_incremental_pairs_stream_without_materializing_full_graph(self) -> None:
         symbols = ["SeedA", "AddedA", "SeedB", "AddedB"]
@@ -162,6 +225,17 @@ class WorkflowEngineTests(unittest.TestCase):
             summary["selected_protein_count"],
         )
         self.assertGreater(float(factors["gui_posterior"].sum()), 1.0)
+        distribution = summary["probability_distribution"]
+        self.assertEqual(distribution["hypothesis_count"], len(factors))
+        self.assertEqual(sum(distribution["bin_counts"]), len(factors))
+        self.assertEqual(
+            distribution["at_exact_prior_count"],
+            summary["neutral_posterior_count"],
+        )
+        self.assertEqual(
+            distribution["above_output_cutoff_count"],
+            summary["selected_protein_count"],
+        )
 
     def test_neutral_node_evidence_preserves_independent_half_priors(self) -> None:
         config = normalize_configuration(None, self.registry)
@@ -201,6 +275,16 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertTrue(np.array_equal(values, values.T))
         self.assertTrue(np.array_equal(np.diag(values), np.zeros(891)))
         self.assertEqual(summary["pairs_above_output_cutoff"], 169414)
+        distribution = summary["probability_distribution"]
+        self.assertEqual(distribution["hypothesis_count"], 396495)
+        self.assertEqual(sum(distribution["bin_counts"]), 396495)
+        self.assertEqual(
+            distribution["at_exact_prior_count"], summary["pairs_at_exact_prior"]
+        )
+        self.assertEqual(
+            distribution["above_output_cutoff_count"],
+            summary["pairs_above_output_cutoff"],
+        )
 
     def test_hpa_alternatives_cannot_be_enabled_together(self) -> None:
         supplied = default_configuration(self.registry)

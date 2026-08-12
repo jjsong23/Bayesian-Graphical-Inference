@@ -79,7 +79,7 @@ The canonical symbol field is `symbol`; duplicate symbols were removed when the 
 
 ## Edge characterization streams
 
-The graph is intentionally **undirected and symmetric**. An unordered biological pair is represented once in pair tables and mirrored across the adjacency matrix; self-edges are excluded or fixed by the relevant matrix convention. Direction and activation/inhibition annotations from sources such as OmniPath are retained for audit but are not currently used to direct the graph.
+Bayesian edge characterization remains **undirected and symmetric**. An unordered biological pair is represented once in pair tables and mirrored across the edge-probability matrix; self-edges are excluded. Path inference now has a separate conservative ontology-direction layer. It removes a reverse traversal only when the versioned role catalog supports one unique direction; no-rule and conflicting multi-role pairs remain traversable both ways. The allowed traversal keeps the original undirected probability, so directionality does not re-estimate edge existence. Direction and activation/inhibition annotations from sources such as OmniPath remain retained for audit but are not yet used by this ontology-only first pass.
 
 Selectable streams include:
 
@@ -111,7 +111,7 @@ Validation output: `results/gui_runs/scaffold_binary_closure_validation_20260804
 
 ## Target extension and path inference
 
-`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/find_ranked_paths.py` ranks loopless undirected paths by the product of edge probabilities, implemented with additive `-log(p)` costs and a hop-limited Yen/Dijkstra search.
+`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` applies the auditable role catalog in `ontology_direction_rules.json` and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by the product of allowed traversal probabilities, implemented with additive `-log(p)` costs and a hop-limited Yen/Dijkstra search.
 
 Path intermediates are controlled by ontology-derived role classes in the GUI. The sensitivity-oriented interface exposes all current role labels and lets the user select which may propagate signals. Multi-role kinase/scaffold proteins remain eligible whenever they match any selected relay role. The separate strict scaffold override excludes every scaffold-tagged intermediate and should remain optional. Start and target nodes are endpoint exemptions.
 

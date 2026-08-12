@@ -3,6 +3,95 @@ const state = { registry: null, defaults: null, jobId: null, pollTimer: null };
 const $ = (id) => document.getElementById(id);
 const formatInt = (value) => new Intl.NumberFormat("en-US").format(Number(value || 0));
 const formatScore = (value) => Number(value).toPrecision(8);
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+function svgElement(name, attributes = {}, text = "") {
+  const element = document.createElementNS(SVG_NAMESPACE, name);
+  Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, value));
+  if (text) element.textContent = text;
+  return element;
+}
+
+function formatProbability(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function renderProbabilityDistribution(kind, distribution) {
+  const svg = $(`${kind}-distribution-chart`);
+  const stats = $(`${kind}-distribution-stats`);
+  svg.innerHTML = "";
+  stats.innerHTML = "";
+  $(`${kind}-distribution-count`).textContent = distribution
+    ? `${formatInt(distribution.hypothesis_count)} hypotheses`
+    : "No data";
+  if (!distribution || !distribution.bin_counts?.length) {
+    svg.appendChild(svgElement("text", { x: 220, y: 109, class: "chart-empty", "text-anchor": "middle" }, "Distribution unavailable"));
+    return;
+  }
+
+  const width = 440;
+  const height = 218;
+  const margin = { top: 15, right: 15, bottom: 36, left: 42 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const counts = distribution.bin_counts.map(Number);
+  const transformed = counts.map((count) => Math.log10(count + 1));
+  const maximum = Math.max(...transformed, 1);
+  const binWidth = plotWidth / counts.length;
+
+  [0, 0.5, 1].forEach((fraction) => {
+    const y = margin.top + plotHeight * (1 - fraction);
+    svg.appendChild(svgElement("line", { x1: margin.left, y1: y, x2: width - margin.right, y2: y, class: "chart-grid" }));
+  });
+
+  counts.forEach((count, index) => {
+    const barHeight = (transformed[index] / maximum) * plotHeight;
+    const lower = distribution.bin_edges[index];
+    const upper = distribution.bin_edges[index + 1];
+    const bar = svgElement("rect", {
+      x: margin.left + index * binWidth + 0.45,
+      y: margin.top + plotHeight - barHeight,
+      width: Math.max(binWidth - 0.9, 0.6),
+      height: Math.max(barHeight, count ? 1 : 0),
+      class: "distribution-bar",
+      rx: 0.7,
+    });
+    const interval = index === counts.length - 1 ? "]" : ")";
+    bar.appendChild(svgElement("title", {}, `[${lower.toFixed(2)}, ${upper.toFixed(2)}${interval}: ${formatInt(count)}`));
+    svg.appendChild(bar);
+  });
+
+  const cutoffX = margin.left + Number(distribution.output_probability_cutoff_exclusive) * plotWidth;
+  svg.appendChild(svgElement("line", { x1: cutoffX, y1: margin.top, x2: cutoffX, y2: margin.top + plotHeight, class: "chart-cutoff" }));
+  svg.appendChild(svgElement("text", { x: Math.min(cutoffX + 4, width - 58), y: margin.top + 11, class: "chart-cutoff-label" }, "cutoff"));
+  svg.appendChild(svgElement("line", { x1: margin.left, y1: margin.top + plotHeight, x2: width - margin.right, y2: margin.top + plotHeight, class: "chart-axis" }));
+
+  [0, 0.25, 0.5, 0.75, 1].forEach((value) => {
+    const x = margin.left + value * plotWidth;
+    svg.appendChild(svgElement("line", { x1: x, y1: margin.top + plotHeight, x2: x, y2: margin.top + plotHeight + 4, class: "chart-axis" }));
+    svg.appendChild(svgElement("text", { x, y: height - 15, class: "chart-label", "text-anchor": "middle" }, value.toFixed(2)));
+  });
+  svg.appendChild(svgElement("text", { x: margin.left - 9, y: margin.top + 4, class: "chart-label", "text-anchor": "end" }, formatInt(Math.max(...counts))));
+  svg.appendChild(svgElement("text", { x: margin.left - 9, y: margin.top + plotHeight + 4, class: "chart-label", "text-anchor": "end" }, "0"));
+
+  const statItems = [
+    ["At prior", distribution.at_exact_prior_count],
+    ["Above cutoff", distribution.above_output_cutoff_count],
+    ["Mean", formatProbability(distribution.mean)],
+    ["Range", `${formatProbability(distribution.minimum)}–${formatProbability(distribution.maximum)}`],
+  ];
+  statItems.forEach(([label, value], index) => {
+    const wrapper = document.createElement("div");
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = index < 2 ? formatInt(value) : value;
+    wrapper.append(term, detail);
+    stats.appendChild(wrapper);
+  });
+}
 
 function streamCard(stream, group, current) {
   const card = document.createElement("div");
@@ -106,6 +195,7 @@ function populateControls() {
   $("path-top-k").value = path.top_k;
   $("path-max-hops").value = path.max_hops;
   $("path-cutoff").value = path.minimum_edge_probability;
+  $("ontology-directionality").checked = path.ontology_directionality_enabled;
   $("signal-only").checked = path.signaling_intermediates_only;
   $("exclude-multirole-scaffolds").checked = path.exclude_multirole_scaffolds;
   renderPathOntologyClasses(path);
@@ -149,6 +239,7 @@ function collectConfiguration() {
       top_k: Number($("path-top-k").value),
       max_hops: Number($("path-max-hops").value),
       minimum_edge_probability: Number($("path-cutoff").value),
+      ontology_directionality_enabled: $("ontology-directionality").checked,
       signaling_intermediates_only: $("signal-only").checked,
       exclude_multirole_scaffolds: $("exclude-multirole-scaffolds").checked,
       allowed_intermediate_classes: Array.from(
@@ -198,6 +289,16 @@ function renderResult(job) {
   $("metric-nodes").textContent = formatInt(preview.metrics.selected_nodes);
   $("metric-edges").textContent = formatInt(preview.metrics.supported_edges);
   $("metric-paths").textContent = formatInt(preview.metrics.ranked_paths);
+  renderProbabilityDistribution("node", preview.probability_distributions?.nodes);
+  renderProbabilityDistribution("edge", preview.probability_distributions?.edges);
+  const directionality = preview.directionality?.edge_output_graph;
+  $("directionality-result").classList.toggle("hidden", !directionality);
+  if (directionality) {
+    const percent = 100 * Number(directionality.proportion_uniquely_oriented || 0);
+    $("oriented-edge-count").textContent = formatInt(directionality.uniquely_oriented_edge_count);
+    $("oriented-edge-percent").textContent = `${percent.toFixed(1)}%`;
+    $("directionality-result-detail").textContent = `${formatInt(directionality.retained_unique_edge_count)} edges above the output cutoff; ${formatInt(directionality.unresolved_no_matching_rule_count)} had no matching rule and ${formatInt(directionality.unresolved_conflicting_rules_count)} had conflicting multi-role rules.`;
+  }
   const body = $("paths-body");
   body.innerHTML = "";
   if (!preview.top_paths.length) {
@@ -341,6 +442,8 @@ async function initialize() {
       updateJob(payload.active_job);
       state.pollTimer = setInterval(pollJob, 700);
       pollJob();
+    } else {
+      $("run-button").disabled = false;
     }
   } catch (error) {
     $("error-message").textContent = error.message;

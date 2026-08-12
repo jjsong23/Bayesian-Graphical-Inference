@@ -1435,7 +1435,87 @@ These are planning estimates, not measured completion times. The model fit had
 \(r^2=0.89\), assumes ideal scheduling, and may not capture memory limitations,
 queueing, failures, or unusually long protein pairs.
 
-# Part VII: Reproducibility and quality control
+# Part VII: Ontology-based partial directionality
+
+## 26. Separation of edge existence from signal-flow direction
+
+Bayesian edge characterization continued to estimate one undirected association
+probability for each unordered node pair. Directionality was added only as a
+path-traversal layer and did not change that probability. For an edge with
+probability (p_{ij}), a uniquely supported ontology direction retained
+(p_{ij}) in the allowed direction and assigned zero to the disallowed reverse
+traversal. Unresolved pairs retained (p_{ij}) in both directions.
+
+This partial orientation prevents a path search from crossing a resolved
+collider (A\rightarrow B\leftarrow C) from (A) through (B) to (C), or a
+resolved fork (A\leftarrow B\rightarrow C) from (A) through (B) to (C).
+It cannot eliminate these motifs when one or both constituent edges remain
+unresolved.
+
+## 27. Conservative ontology rule catalog
+
+Ten rules were defined in the versioned file
+`code/path_finding/ontology_direction_rules.json`:
+
+- ligand to receptor;
+- receptor regulator to receptor;
+- kinase to kinase/phosphatase-binding protein;
+- phosphatase to kinase/phosphatase-binding protein;
+- GTPase regulator to GTPase;
+- cyclase to second messenger;
+- phospholipase to second messenger;
+- nitric-oxide synthase to second messenger;
+- phosphodiesterase to second messenger; and
+- second messenger to second-messenger-binding protein.
+
+The kinase-binding rule implements the explicit project policy that a protein
+annotated only as a kinase/phosphatase binder should not propagate toward a
+connected kinase. It is a modeling heuristic, not a causal relationship
+entailed by the GO binding annotation. The phosphatase rule applies the same
+policy symmetrically. Broad `signaling_process`, `signaling_regulation`, and
+`adaptor_scaffold` labels did not orient an edge by themselves.
+
+Every class on both endpoints was considered. One or more rules supporting
+only one direction yielded a uniquely oriented edge. If multi-role annotations
+supported both directions, the edge was marked
+`unresolved_conflicting_rules` and retained in both directions. Pairs with no
+matching rule were marked `unresolved_no_matching_rule` and also retained in
+both directions. This fail-open policy avoided inventing causal order when the
+ontology labels were insufficient or contradictory.
+
+The implementation wrote four additional artifacts per directional run:
+
+- `propagation_adjacency_matrix.tsv`;
+- `ontology_directionality_audit.tsv.gz`;
+- `ontology_class_pair_catalog.tsv`; and
+- `ontology_direction_rules.json`.
+
+The complete class-pair catalog contained all 153 unordered combinations with
+replacement of the 17 ontology classes. The edge-level audit recorded both
+nodes, their complete class sets, the matched rules in each direction, the two
+allowed-traversal flags, and the final resolution status.
+
+## 28. Initial directionality coverage
+
+The initial validation used the default 891 selected nodes plus external target
+Aqp2, giving 892 nodes and 169,769 undirected edges strictly above probability
+0.5. Of these:
+
+- 24,679 edges were uniquely oriented (14.5368%);
+- 144,027 had no matching rule (84.8370%); and
+- 1,063 had conflicting multi-role rules (0.6261%).
+
+Partial orientation therefore removed 24,679 reverse traversals and left
+314,859 allowed directed traversals. The largest contributor was the
+kinase-to-kinase/phosphatase-binding rule. All 25 validation paths followed
+allowed transitions; no path edge used a direction marked as disallowed.
+
+Biochemical sign remains separate. The phosphodiesterase rule records a
+negative-effect interpretation in the catalog, but activation and inhibition
+do not yet affect path scoring. Directed OmniPath annotations are likewise not
+yet combined with this ontology-only layer.
+
+# Part VIII: Reproducibility and quality control
 
 The project preserved:
 
@@ -1502,8 +1582,9 @@ For scientific accuracy:
 - Do not claim that Tier A/B prior knowledge was incorporated as Bayesian edge
   evidence. It was used to remove already-supported pairs from the
   structural-prediction queue.
-- Do not imply directionality. All final edge matrices and pair lists were
-  undirected.
+- Do not describe the Bayesian edge probabilities as directed. The edge matrix
+  and pair list remain undirected; only the separate ontology propagation
+  matrix is partially directed. Unresolved pairs remain traversable both ways.
 - Do not describe 891 nodes as a current implementation limit. It is the
   validated immutable seed; later non-neutral proteins and external targets
   are characterized incrementally and cached.
@@ -1532,6 +1613,12 @@ For scientific accuracy:
   `results/path_finding/target_extensions/Aqp2/analysis_summary.json`
 - Signal-relay-constrained Prkaca-to-Aqp2 path summary:
   `results/path_finding/ranked_paths/Prkaca_to_Aqp2_signal_relay/analysis_summary.json`
+- Ontology-directionality method and policy:
+  `docs/ontology_directionality.md`
+- Versioned ontology-direction rule catalog:
+  `code/path_finding/ontology_direction_rules.json`
+- Initial ontology-direction validation summary:
+  `results/gui_runs/ontology_directionality_validation_20260812/analysis_summary.json`
 - Configurable local analysis workbench:
   `gui/README.md`
 - Extensible evidence-stream registry:

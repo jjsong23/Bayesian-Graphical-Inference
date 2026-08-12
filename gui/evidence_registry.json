@@ -487,6 +487,7 @@
     "top_k_paths": 25,
     "maximum_hops": 6,
     "path_minimum_edge_probability": 0.5,
+    "ontology_directionality_enabled": true,
     "signaling_intermediates_only": true,
     "exclude_multirole_scaffolds": false
   }

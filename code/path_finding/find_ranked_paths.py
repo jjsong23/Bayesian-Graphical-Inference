@@ -30,6 +30,12 @@ from build_target_adjacency_vector import (
     safe_name,
     sha256_file,
 )
+from ontology_directionality import (
+    RULE_CATALOG_PATH,
+    apply_ontology_directionality,
+    build_complete_class_pair_catalog,
+    load_direction_rule_catalog,
+)
 
 
 CURRENT_MATRIX_RELATIVE = Path(
@@ -158,6 +164,11 @@ def parse_args() -> argparse.Namespace:
             "Exclude every adaptor_scaffold-tagged intermediate, even when it also has "
             "a mechanistic relay class such as kinase."
         ),
+    )
+    parser.add_argument(
+        "--disable-ontology-directionality",
+        action="store_true",
+        help="Retain both traversals for every edge and reproduce undirected path search.",
     )
     return parser.parse_args()
 
@@ -387,22 +398,40 @@ def load_or_extend_graph(
 def build_adjacency(
     matrix: pd.DataFrame,
     minimum_edge_probability: float,
+    *,
+    directed: bool = False,
 ) -> tuple[list[list[tuple[int, float, float]]], int]:
-    """Create an adjacency list of edges strictly above the chosen cutoff."""
+    """Create an adjacency list of traversals strictly above the chosen cutoff.
+
+    Symmetric matrices use one unordered edge count by default. For a partially
+    directed propagation matrix, ``directed=True`` scans every ordered pair and
+    returns the number of retained directed traversals.
+    """
 
     values = matrix.to_numpy(dtype=float)
     size = len(values)
     adjacency: list[list[tuple[int, float, float]]] = [[] for _ in range(size)]
     edge_count = 0
-    for i in range(size):
-        for j in range(i + 1, size):
-            probability = float(values[i, j])
-            if probability <= minimum_edge_probability:
-                continue
-            cost = -math.log(probability)
-            adjacency[i].append((j, probability, cost))
-            adjacency[j].append((i, probability, cost))
-            edge_count += 1
+    if directed:
+        for i in range(size):
+            for j in range(size):
+                if i == j:
+                    continue
+                probability = float(values[i, j])
+                if probability <= minimum_edge_probability:
+                    continue
+                adjacency[i].append((j, probability, -math.log(probability)))
+                edge_count += 1
+    else:
+        for i in range(size):
+            for j in range(i + 1, size):
+                probability = float(values[i, j])
+                if probability <= minimum_edge_probability:
+                    continue
+                cost = -math.log(probability)
+                adjacency[i].append((j, probability, cost))
+                adjacency[j].append((i, probability, cost))
+                edge_count += 1
     for neighbors in adjacency:
         neighbors.sort(key=lambda item: (item[2], item[0]))
     return adjacency, edge_count
@@ -643,6 +672,7 @@ def find_ranked_paths(
     signaling_intermediates_only: bool = True,
     relay_classes: Iterable[str] = DEFAULT_SIGNAL_RELAY_CLASSES,
     exclude_any_scaffold: bool = False,
+    ontology_directionality_enabled: bool = True,
     auto_extend_target: bool = True,
     reuse_target_extension: bool = True,
     output_dir: Path | str | None = None,
@@ -707,6 +737,30 @@ def find_ranked_paths(
     if target_symbol not in set(metadata["symbol"]):
         metadata = pd.concat([metadata, pd.DataFrame([target_metadata])], ignore_index=True)
 
+    propagation_matrix = matrix
+    directionality_audit = pd.DataFrame()
+    directionality_class_catalog = pd.DataFrame()
+    directionality_summary: dict[str, Any] | None = None
+    directionality_catalog: dict[str, Any] | None = None
+    if ontology_directionality_enabled:
+        directionality_catalog = load_direction_rule_catalog(RULE_CATALOG_PATH)
+        directionality_class_catalog = build_complete_class_pair_catalog(
+            directionality_catalog,
+            directionality_catalog["ontology_classes"],
+        )
+        (
+            propagation_matrix,
+            directionality_audit,
+            directionality_summary,
+        ) = apply_ontology_directionality(
+            matrix,
+            metadata,
+            directionality_catalog,
+            audit_probability_cutoff=minimum_edge_probability,
+            edge_output_cutoff=minimum_edge_probability,
+            path_probability_cutoff=minimum_edge_probability,
+        )
+
     eligibility = build_intermediate_eligibility(
         metadata,
         symbols,
@@ -723,13 +777,17 @@ def find_ranked_paths(
         eligibility.loc[eligibility["allowed_as_intermediate"], "matrix_index"].astype(int)
     )
 
-    adjacency, retained_edge_count = build_adjacency(matrix, minimum_edge_probability)
+    adjacency, retained_edge_count = build_adjacency(
+        propagation_matrix,
+        minimum_edge_probability,
+        directed=ontology_directionality_enabled,
+    )
     symbol_to_index = {symbol: index for index, symbol in enumerate(symbols)}
     start_index = symbol_to_index[start_symbol]
     target_index = symbol_to_index[target_symbol]
     ranked = k_shortest_simple_paths(
         adjacency,
-        matrix.to_numpy(dtype=float),
+        propagation_matrix.to_numpy(dtype=float),
         start_index,
         target_index,
         top_k=top_k,
@@ -737,15 +795,16 @@ def find_ranked_paths(
         permitted_nodes=permitted_nodes,
     )
 
-    paths, path_edges = serialize_paths(ranked, matrix, metadata)
+    paths, path_edges = serialize_paths(ranked, propagation_matrix, metadata)
 
-    probabilities = matrix.to_numpy(dtype=float)
+    probabilities = propagation_matrix.to_numpy(dtype=float)
     retained_search_edge_count = sum(
         1
         for source, neighbors in enumerate(adjacency)
         if source in permitted_nodes
         for target_node, _, _ in neighbors
-        if target_node in permitted_nodes and source < target_node
+        if target_node in permitted_nodes
+        and (ontology_directionality_enabled or source < target_node)
     )
     validation = {
         "matrix_validated_before_search": True,
@@ -789,6 +848,17 @@ def find_ranked_paths(
     if not all(validation.values()):
         raise AssertionError(f"path validation failed: {validation}")
 
+    upper_triangle = np.triu_indices(len(propagation_matrix), k=1)
+    retained_unique_edge_count = int(
+        (
+            np.maximum(probabilities, probabilities.T)[upper_triangle]
+            > minimum_edge_probability
+        ).sum()
+    )
+    start_reachable_node_count = connected_component_size(
+        adjacency, start_index, permitted_nodes
+    )
+
     summary: dict[str, Any] = {
         "start_input": start,
         "start_symbol": start_symbol,
@@ -799,8 +869,13 @@ def find_ranked_paths(
         "target_was_external": extension_summary is not None,
         "matrix_path": str(matrix_path),
         "matrix_node_count": len(matrix),
-        "retained_unique_undirected_edge_count_before_intermediate_filter": retained_edge_count,
-        "retained_unique_undirected_edge_count_in_search_subgraph": retained_search_edge_count,
+        "retained_unique_edge_count_before_intermediate_filter": (
+            retained_unique_edge_count
+        ),
+        "retained_transition_count_before_intermediate_filter": retained_edge_count,
+        "retained_transition_count_in_search_subgraph": retained_search_edge_count,
+        "ontology_directionality_enabled": ontology_directionality_enabled,
+        "ontology_directionality": directionality_summary,
         "minimum_edge_probability_exclusive": minimum_edge_probability,
         "neutral_baseline_edges_excluded": minimum_edge_probability >= 0.5,
         "signaling_intermediates_only": signaling_intermediates_only,
@@ -841,12 +916,25 @@ def find_ranked_paths(
             "Descending product of edge probabilities; search minimizes the "
             "equivalent sum of -log(edge_probability)."
         ),
-        "path_constraint": "Simple undirected paths only; no node may repeat within a path.",
-        "start_component_size_after_filtering": connected_component_size(
-            adjacency, start_index, permitted_nodes
+        "path_constraint": (
+            "Simple paths following allowed ontology-directed traversals; no node may "
+            "repeat within a path. Unresolved edges retain both traversals."
+            if ontology_directionality_enabled
+            else "Simple undirected paths only; no node may repeat within a path."
+        ),
+        "start_reachable_node_count_after_filtering": start_reachable_node_count,
+        "start_component_size_after_filtering": (
+            None
+            if ontology_directionality_enabled
+            else start_reachable_node_count
         ),
         "target_degree_after_filtering": sum(
             neighbor in permitted_nodes for neighbor, _, _ in adjacency[target_index]
+        ),
+        "target_in_degree_after_filtering": sum(
+            source in permitted_nodes
+            for source, neighbors in enumerate(adjacency)
+            if any(neighbor == target_index for neighbor, _, _ in neighbors)
         ),
         "direct_edge_retained": any(
             neighbor == target_index for neighbor, _, _ in adjacency[start_index]
@@ -868,6 +956,7 @@ def find_ranked_paths(
             / (
                 (
                     f"{safe_name(start_symbol)}_to_{safe_name(target_symbol)}_"
+                    + ("ontology_directed_" if ontology_directionality_enabled else "")
                     + (
                         "signal_relay_no_scaffold"
                         if exclude_any_scaffold
@@ -884,9 +973,34 @@ def find_ranked_paths(
         eligibility_path = resolved_output / "intermediate_node_eligibility.tsv"
         summary_path = resolved_output / "analysis_summary.json"
         readme_path = resolved_output / "README.md"
+        propagation_path = resolved_output / "propagation_adjacency_matrix.tsv"
+        directionality_audit_path = resolved_output / "ontology_directionality_audit.tsv.gz"
+        class_catalog_path = resolved_output / "ontology_class_pair_catalog.tsv"
+        rules_path = resolved_output / "ontology_direction_rules.json"
         paths.to_csv(paths_path, sep="\t", index=False, float_format="%.12g")
         path_edges.to_csv(edges_path, sep="\t", index=False, float_format="%.12g")
         eligibility.to_csv(eligibility_path, sep="\t", index=False)
+        if ontology_directionality_enabled and directionality_catalog is not None:
+            propagation_matrix.to_csv(propagation_path, sep="\t", float_format="%.9g")
+            directionality_audit.to_csv(
+                directionality_audit_path,
+                sep="\t",
+                index=False,
+                compression="gzip",
+            )
+            directionality_class_catalog.to_csv(class_catalog_path, sep="\t", index=False)
+            rules_path.write_text(
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in directionality_catalog.items()
+                        if key != "catalog_path"
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         policy_readme = (
             "Internal nodes are permitted through this sensitivity-oriented signaling "
             f"class set: `{';'.join(summary['signal_relay_classes'])}`. Ligand, binding, "
@@ -903,10 +1017,12 @@ def find_ranked_paths(
         readme_path.write_text(
             f"""# Ranked paths: {start_symbol} to {target_symbol}
 
-Paths are simple and undirected, contain at most {max_hops} edges, and use only
+Paths are simple, contain at most {max_hops} edges, and use only
 edges with probability strictly greater than {minimum_edge_probability}. They
 are ranked by the product of their edge probabilities. This is equivalent to
 minimizing the sum of `-log(edge_probability)`.
+
+{"Ontology rules partially orient the propagation graph. Uniquely disallowed reverse traversals are removed; unresolved pairs retain both traversals." if ontology_directionality_enabled else "Ontology directionality was disabled, so every retained edge can be traversed both ways."}
 
 `ranked_paths.tsv` contains one row per complete path. `ranked_path_edges.tsv`
 contains one row per edge per path, with node names and signaling classes.
@@ -924,6 +1040,16 @@ the edge evidence streams and adjacent edges are not necessarily independent.
             edges_path.name: sha256_file(edges_path),
             eligibility_path.name: sha256_file(eligibility_path),
             readme_path.name: sha256_file(readme_path),
+            **(
+                {
+                    propagation_path.name: sha256_file(propagation_path),
+                    directionality_audit_path.name: sha256_file(directionality_audit_path),
+                    class_catalog_path.name: sha256_file(class_catalog_path),
+                    rules_path.name: sha256_file(rules_path),
+                }
+                if ontology_directionality_enabled
+                else {}
+            ),
         }
         summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
@@ -949,6 +1075,7 @@ def main() -> int:
         minimum_edge_probability=args.minimum_edge_probability,
         signaling_intermediates_only=not args.allow_all_intermediates,
         exclude_any_scaffold=args.exclude_any_scaffold,
+        ontology_directionality_enabled=not args.disable_ontology_directionality,
         auto_extend_target=not args.no_auto_extend,
         reuse_target_extension=not args.rebuild_target_extension,
         output_dir=args.output_dir,

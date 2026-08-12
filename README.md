@@ -1,12 +1,12 @@
 # Bayesian Graphical Inference of Renal Signaling
 
-This research codebase builds and explores a probabilistic, undirected signaling graph for renal principal cells. It combines heterogeneous evidence with Bayes factors in three stages:
+This research codebase builds and explores a probabilistic signaling graph for renal principal cells. Bayesian node and edge inference first produces an undirected association graph; an auditable ontology layer can then partially orient supported edges for signal-propagation path searches. It combines heterogeneous evidence in three stages:
 
 1. **Node selection** estimates which candidate signaling participants are relevant to the biological system.
 2. **Edge characterization** estimates the probability that two selected nodes are associated.
 3. **Path inference** ranks plausible paths from a chosen signaling receptor or regulator to a target protein.
 
-The current local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, ontology-based path constraints, external-target insertion, and auditable ranked paths.
+The current local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, ontology-based partial directionality and path constraints, external-target insertion, and auditable ranked paths.
 
 For the lab-specific Aqp2 analysis, node selection additionally exposes rat
 proteome and mouse RNA abundance for CCD, OMCD, and IMCD as six separate

@@ -52,6 +52,13 @@ loopback interface by default.
    any selected class matches. The optional scaffold override still removes
    every scaffold-tagged intermediate, even if another selected role matches.
 
+   Conservative ontology directionality is enabled by default. A uniquely
+   matched role rule removes only the reverse traversal while retaining the
+   original edge probability in the allowed direction. Pairs with no rule or
+   contradictory multi-role rules remain traversable both ways. The exact rule
+   JSON, complete class-pair catalog, edge-level audit, and partially directed
+   propagation matrix are downloadable from every directional run.
+
 The path count can be set from 1 to 500. All requested paths are shown in the
 scrollable result table and written to `ranked_paths.tsv`; the separate
 `ranked_path_edges.tsv` retains every constituent edge. The liberal intermediate
@@ -62,6 +69,9 @@ graph size, edge cutoff, hop limit, and endpoint connectivity.
 Each run writes a new immutable folder under `results/gui_runs/` containing the
 configuration, node posterior table, selected-node universe, adjacency matrix,
 supported edge list, path tables, eligibility audit, and JSON summary.
+Directional runs additionally contain `propagation_adjacency_matrix.tsv`,
+`ontology_directionality_audit.tsv.gz`, `ontology_class_pair_catalog.tsv`, and
+`ontology_direction_rules.json`.
 `configuration.json` and `analysis_summary.json` retain the exact selected
 ontology-class IDs, while `intermediate_node_eligibility.tsv` reports every
 node's complete class list, matching selected roles, endpoint exemption, and
@@ -121,6 +131,18 @@ in addition to the existing four selects 3,296 proteins, or 3,316 nodes after
 the 20 curated second messengers. The three segment streams within each assay
 share a source experiment and are tagged as dependent even though they remain
 separately selectable as requested.
+
+## Posterior distribution plots
+
+Each completed run displays two compact probability histograms: one for all
+9,170 modeled protein-node hypotheses and one for every unique undirected edge
+hypothesis in the selected graph. The engine computes 50 fixed-width bins over
+the full [0, 1] probability range and sends only the bin counts to the browser,
+so even multi-million-pair runs do not inflate the job-status response. Bar
+height is log10(count + 1), which keeps both the neutral-prior spike and the
+smaller supported tails visible. The plot also shows the configured output
+cutoff and reports the exact-prior count, above-cutoff count, mean, and range.
+The same distribution summaries are retained in `analysis_summary.json`.
 
 ## Extending evidence streams
 
