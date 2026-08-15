@@ -57,9 +57,13 @@ server**.
    scaffold-closure stream. Edge prior odds are multiplied by
    each sparse Bayes factor raised to its selected weight. HPA primary and HPA
    high-confidence are alternatives and cannot be enabled together. Each edge
-   dataset has an independent normalization control. Scaffold closure is off by
-   default because it reuses the selected pre-closure graph rather than adding
-   an independent experiment.
+   dataset has an independent normalization control. An optional global rule
+   assigns a configurable BF below 1 to a pair that is eligible for an enabled
+   source but has no non-neutral relationship in that source. Out-of-scope
+   pairs remain neutral. The option is off by default and its default penalty
+   is BF 0.5. Scaffold closure is positive-only and off by default because it
+   reuses the selected pre-closure graph rather than adding an independent
+   experiment.
 3. **Find paths.** Choose a selected start node and any mouse protein target.
    Targets outside the node universe are characterized from the same evidence
    streams and appended as an undirected row/column. Paths are ranked by the
@@ -212,7 +216,10 @@ the standard factor table.
 
 ## Scientific safeguards
 
-- Missing sparse edge evidence is neutral (`BF = 1`), not evidence of absence.
+- Missing sparse edge evidence is neutral (`BF = 1`) by default. When the
+  optional edge-negative rule is enabled, an eligible unsupported pair receives
+  the configured `BF < 1`; a pair outside the source's assay/database scope
+  remains neutral.
 - Eligible node nondetections can optionally supply a configurable `BF < 1`;
   out-of-scope nodes remain neutral and the reproducibility default is off.
 - Node posteriors are independent Bernoulli probabilities and are not

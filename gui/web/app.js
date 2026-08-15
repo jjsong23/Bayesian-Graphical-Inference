@@ -191,6 +191,9 @@ function populateControls() {
   $("node-prior").value = node.prior_probability;
   $("node-cutoff").value = node.output_probability_cutoff;
   const edge = state.defaults.edge_integration;
+  $("penalize-unsupported-edges").checked = edge.penalize_unsupported;
+  $("unsupported-edge-bf").value = edge.unsupported_bayes_factor;
+  $("unsupported-edge-bf").disabled = !edge.penalize_unsupported;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
   const path = state.defaults.path;
@@ -244,6 +247,8 @@ function collectConfiguration() {
     },
     edge_streams: collectStreams("edge"),
     edge_integration: {
+      penalize_unsupported: $("penalize-unsupported-edges").checked,
+      unsupported_bayes_factor: Number($("unsupported-edge-bf").value),
       prior_probability: Number($("edge-prior").value),
       output_probability_cutoff: Number($("edge-cutoff").value),
     },
@@ -519,6 +524,9 @@ $("temporal-enabled").addEventListener("change", () => setTemporalControls($("pa
 $("signal-only").addEventListener("change", () => setOntologyControls($("path-enabled").checked));
 $("penalize-unobserved").addEventListener("change", (event) => {
   $("unobserved-bf").disabled = !event.target.checked;
+});
+$("penalize-unsupported-edges").addEventListener("change", (event) => {
+  $("unsupported-edge-bf").disabled = !event.target.checked;
 });
 $("ontology-all").addEventListener("click", () => {
   document.querySelectorAll(".path-ontology-class").forEach((input) => { input.checked = true; });

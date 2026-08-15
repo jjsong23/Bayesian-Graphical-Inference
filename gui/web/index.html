@@ -61,8 +61,15 @@
             </div>
           </div>
           <div id="edge-streams" class="stream-list"></div>
-          <p class="scientific-note">Localization and motif streams scale their node- or site-specific Tq values. STRING and STITCH use Ref × because their normalizations use reference odds. Optional scaffold closure applies one fixed likelihood when both proteins have an edge above Anchor to the same annotated scaffold; it has no degree penalty or empirical Tq. Cached raw evidence is rescored when controls change.</p>
-          <div class="parameter-grid">
+          <div class="parameter-grid compact-grid">
+            <label class="check-field span-two">
+              <input id="penalize-unsupported-edges" type="checkbox" />
+              <span>Treat eligible unsupported pairs as evidence against an edge</span>
+            </label>
+            <label>
+              <span>Unsupported-pair BF</span>
+              <input id="unsupported-edge-bf" type="number" min="0.000001" max="1" step="any" inputmode="decimal" />
+            </label>
             <label>
               <span>Edge prior</span>
               <input id="edge-prior" type="number" min="0.000001" max="0.999999" step="any" inputmode="decimal" />
@@ -72,6 +79,7 @@
               <input id="edge-cutoff" type="number" min="0" max="1" step="0.01" />
             </label>
           </div>
+          <p class="scientific-note">Localization and motif streams scale their node- or site-specific Tq values. STRING and STITCH use Ref × because their normalizations use reference odds. The optional negative-evidence rule applies the selected BF below 1 only when a source could assess both endpoints but has no non-neutral relationship: missing assay coverage stays neutral. Each eligible absence is a separate update, so repeated unsupported observations can push an edge toward zero. Scaffold closure remains positive-only because failure to share a strong scaffold is not an independent nondetection. Cached raw evidence is rescored when controls change.</p>
         </section>
 
         <section class="stage" aria-labelledby="path-title">

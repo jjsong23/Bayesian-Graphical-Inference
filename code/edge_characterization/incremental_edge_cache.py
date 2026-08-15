@@ -1090,6 +1090,76 @@ def incremental_factor_table(
         connection.close()
 
 
+def incremental_node_scope_table(
+    project: Path,
+    graph_symbols: list[str],
+) -> pd.DataFrame:
+    """Return assay-eligibility flags for nodes characterized in the cache.
+
+    These flags distinguish a genuinely unsupported cached pair from a pair
+    that an evidence source could not evaluate.  The returned table is sparse:
+    seed nodes remain governed by the validated source-specific input tables.
+    """
+    signature, _ = evidence_signature(project)
+    selected = set(graph_symbols)
+    columns = [
+        "symbol",
+        "localization_observed",
+        "hpa_primary_observed",
+        "hpa_high_observed",
+        "string_mapped",
+    ]
+    connection = _connect(project)
+    try:
+        cursor = connection.execute(
+            """
+            SELECT symbol, localization_profile_json, localization_tq,
+                   hpa_primary_profile_json, hpa_primary_tq,
+                   hpa_high_profile_json, hpa_high_tq, string_id
+            FROM node_profiles WHERE evidence_signature=?
+            """,
+            (signature,),
+        )
+        output: list[tuple[str, bool, bool, bool, bool]] = []
+        for row in cursor:
+            symbol = str(row[0])
+            if symbol not in selected:
+                continue
+            localization = _json_array(row[1])
+            hpa_primary = _json_array(row[3])
+            hpa_high = _json_array(row[5])
+            output.append(
+                (
+                    symbol,
+                    bool(
+                        localization.size
+                        and np.isfinite(localization).all()
+                        and np.any(localization)
+                        and row[2] is not None
+                        and float(row[2]) > 0
+                    ),
+                    bool(
+                        hpa_primary.size
+                        and np.isfinite(hpa_primary).all()
+                        and np.any(hpa_primary)
+                        and row[4] is not None
+                        and float(row[4]) > 0
+                    ),
+                    bool(
+                        hpa_high.size
+                        and np.isfinite(hpa_high).all()
+                        and np.any(hpa_high)
+                        and row[6] is not None
+                        and float(row[6]) > 0
+                    ),
+                    bool(str(row[7] or "").strip()),
+                )
+            )
+        return pd.DataFrame.from_records(output, columns=columns)
+    finally:
+        connection.close()
+
+
 def current_cache_counts(project: Path) -> dict[str, int]:
     path = cache_path(project)
     if not path.exists():

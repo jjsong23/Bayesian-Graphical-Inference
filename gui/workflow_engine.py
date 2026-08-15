@@ -45,6 +45,7 @@ from find_ranked_paths import (  # noqa: E402
 from incremental_edge_cache import (  # noqa: E402
     ensure_incremental_pairs,
     incremental_factor_table,
+    incremental_node_scope_table,
 )
 from ontology_directionality import (  # noqa: E402
     RULE_CATALOG_PATH,
@@ -113,6 +114,13 @@ STITCH_UNIVERSE_EDGES_RELATIVE = Path(
 STITCH_ALL_MOUSE_EDGES_RELATIVE = Path(
     "data/edge_characterization/stitch/v5.0/processed/"
     "stitch_secondary_messenger_all_mouse_edges.tsv.gz"
+)
+STRING_MAPPING_RELATIVE = Path(
+    "data/edge_characterization/string/v12.0/processed/node_to_string_mapping.tsv"
+)
+OBSERVED_PHOSPHOSITES_RELATIVE = Path(
+    "data/edge_characterization/kinase_predictor/phosphosite_database/"
+    "observed_phosphosites.tsv"
 )
 STRING_REFERENCE_SCORE = 0.041
 STITCH_REFERENCE_SCORE = 0.150
@@ -244,6 +252,10 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
         "edge_integration": {
             "prior_probability": float(defaults["edge_prior_probability"]),
             "output_probability_cutoff": float(defaults["edge_probability_cutoff"]),
+            "penalize_unsupported": bool(defaults["penalize_unsupported_edges"]),
+            "unsupported_bayes_factor": float(
+                defaults["unsupported_edge_bayes_factor"]
+            ),
         },
         "path": {
             "enabled": True,
@@ -367,6 +379,15 @@ def normalize_configuration(
         1.0,
     )
     edge_integration = config["edge_integration"]
+    edge_integration["penalize_unsupported"] = bool(
+        edge_integration["penalize_unsupported"]
+    )
+    edge_integration["unsupported_bayes_factor"] = _number(
+        edge_integration["unsupported_bayes_factor"],
+        "unsupported edge Bayes factor",
+        1e-6,
+        1.0,
+    )
     edge_integration["prior_probability"] = _number(
         edge_integration["prior_probability"], "edge prior probability", 1e-9, 1 - 1e-9
     )
@@ -1220,6 +1241,8 @@ def edge_stream_factor_table(
     definition: dict[str, Any],
     state: dict[str, Any],
     symbols: list[str],
+    *,
+    include_negative: bool = False,
 ) -> pd.DataFrame:
     """Load default BFs or recompute one stream with its requested scale."""
     if definition.get("derived"):
@@ -1228,14 +1251,18 @@ def edge_stream_factor_table(
             "pre-closure graph, not loaded as an independent factor table"
         )
     multiplier = _stream_multiplier(state)
-    if math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15):
+    handler = definition["normalization"]["handler"]
+    use_raw_negative_string = include_negative and handler == "string_v12"
+    if (
+        math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15)
+        and not use_raw_negative_string
+    ):
         table = pd.read_csv(
             project / definition["factor_file"], sep="\t", compression="gzip"
         )
         return table[["node_a", "node_b", definition["factor_column"]]].rename(
             columns={definition["factor_column"]: "bayes_factor"}
         )
-    handler = definition["normalization"]["handler"]
     if handler == "mpkccd_localization":
         return _localization_edge_factors(project, symbols, multiplier)
     if handler == "kinase_predictor":
@@ -1269,6 +1296,155 @@ def _metadata_for_graph(
     metadata["symbol"] = metadata["symbol"].astype(str)
     metadata = metadata.drop_duplicates("symbol", keep="last").set_index("symbol")
     return metadata.reindex(graph_symbols).fillna("")
+
+
+def _observed_series(values: pd.Series) -> pd.Series:
+    """Interpret booleans without treating the string ``False`` as true."""
+    if values.dtype == bool:
+        return values.fillna(False).astype(bool)
+    return values.fillna("").astype(str).str.casefold().isin({"true", "1", "yes"})
+
+
+def edge_stream_eligibility_matrix(
+    project: Path,
+    definition: dict[str, Any],
+    graph_symbols: list[str],
+    *,
+    graph_metadata: pd.DataFrame | None = None,
+) -> np.ndarray:
+    """Identify pairs a source could assess for optional negative evidence.
+
+    Eligibility is deliberately source-specific.  A missing relationship can
+    lower the odds only when the source contains the necessary measurements or
+    identifiers for both endpoints.  This prevents missing coverage from being
+    mistaken for evidence against an edge.
+    """
+    policy = definition.get("negative_evidence", {})
+    eligibility = policy.get("eligibility")
+    if not eligibility:
+        return np.zeros((len(graph_symbols), len(graph_symbols)), dtype=bool)
+
+    symbols = pd.Index(graph_symbols, dtype=str)
+    metadata = _metadata_for_graph(project, graph_symbols, graph_metadata)
+    protein = (
+        metadata.get("node_type", pd.Series("", index=metadata.index))
+        .astype(str)
+        .str.casefold()
+        .eq("protein")
+        .to_numpy(bool)
+    )
+    classes = metadata.get("classes", pd.Series("", index=metadata.index)).astype(str)
+    kinase = classes.map(
+        lambda value: "kinase"
+        in {token.strip() for token in value.split(";") if token.strip()}
+    ).to_numpy(bool)
+
+    node_flag = np.zeros(len(symbols), dtype=bool)
+    other_flag: np.ndarray | None = None
+    if eligibility == "both_mpkccd_profiles":
+        profiles = pd.read_csv(project / MPKCCD_PROFILES_RELATIVE, sep="\t").set_index("symbol")
+        aligned = profiles.reindex(symbols)
+        observed = _observed_series(aligned["localization_observed"])
+        tq = pd.to_numeric(aligned["localization_Tq"], errors="coerce")
+        node_flag = (observed & tq.gt(0) & tq.notna()).to_numpy(bool)
+    elif eligibility in {"both_hpa_primary_profiles", "both_hpa_high_profiles"}:
+        profiles = pd.read_csv(project / HPA_PROFILES_RELATIVE, sep="\t").set_index("symbol")
+        aligned = profiles.reindex(symbols)
+        if eligibility == "both_hpa_high_profiles":
+            observed_column = "hpa_high_confidence_profile_observed"
+            tq_column = "hpa_high_confidence_Tq_q75"
+        else:
+            observed_column = "hpa_profile_observed"
+            tq_column = "hpa_Tq_q75"
+        observed = _observed_series(aligned[observed_column])
+        tq = pd.to_numeric(aligned[tq_column], errors="coerce")
+        node_flag = (observed & tq.gt(0) & tq.notna()).to_numpy(bool)
+    elif eligibility == "kinase_to_scorable_phosphoprotein":
+        sites = pd.read_csv(project / OBSERVED_PHOSPHOSITES_RELATIVE, sep="\t")
+        scorable = _observed_series(sites["kinasepredictor_scorable"])
+        target_symbols = set(sites.loc[scorable, "symbol"].astype(str))
+        node_flag = symbols.isin(target_symbols).astype(bool)
+        other_flag = kinase
+    elif eligibility == "both_string_mapped_proteins":
+        mapping = pd.read_csv(project / STRING_MAPPING_RELATIVE, sep="\t", dtype=str).fillna("")
+        mapped_symbols = set(
+            mapping.loc[
+                mapping["mapping_status"].eq("mapped")
+                & mapping["string_id"].str.strip().ne(""),
+                "symbol",
+            ].astype(str)
+        )
+        node_flag = protein & symbols.isin(mapped_symbols).astype(bool)
+    elif eligibility == "all_protein_pairs":
+        node_flag = protein
+    elif eligibility == "mapped_messenger_protein_pairs":
+        mapping = pd.read_csv(project / STRING_MAPPING_RELATIVE, sep="\t", dtype=str).fillna("")
+        mapped_symbols = set(
+            mapping.loc[
+                mapping["mapping_status"].eq("mapped")
+                & mapping["string_id"].str.strip().ne(""),
+                "symbol",
+            ].astype(str)
+        )
+        stitch = pd.read_csv(
+            project / STITCH_ALL_MOUSE_EDGES_RELATIVE,
+            sep="\t",
+            compression="gzip",
+            usecols=["messenger_node"],
+        )
+        node_flag = symbols.isin(set(stitch["messenger_node"].astype(str))).astype(bool)
+        other_flag = protein & symbols.isin(mapped_symbols).astype(bool)
+    else:
+        raise ValueError(f"unsupported edge negative-evidence eligibility: {eligibility}")
+
+    node_flag = np.asarray(node_flag, dtype=bool).copy()
+    if other_flag is not None:
+        other_flag = np.asarray(other_flag, dtype=bool).copy()
+
+    # Overlay scope information for dynamically added nodes.  KinasePredictor
+    # targets remain conservative because the current cache does not persist a
+    # no-hit scorable-site flag; such nodes are left neutral rather than guessed.
+    seed_symbols = set(
+        pd.read_csv(project / UNIVERSE_RELATIVE, sep="\t", usecols=["symbol"])[
+            "symbol"
+        ].astype(str)
+    )
+    if any(symbol not in seed_symbols for symbol in graph_symbols) and eligibility in {
+        "both_mpkccd_profiles",
+        "both_hpa_primary_profiles",
+        "both_hpa_high_profiles",
+        "both_string_mapped_proteins",
+        "mapped_messenger_protein_pairs",
+    }:
+        cached = incremental_node_scope_table(project, graph_symbols)
+        if not cached.empty:
+            cached = cached.set_index("symbol").reindex(symbols)
+            if eligibility == "both_mpkccd_profiles":
+                dynamic_flag = cached["localization_observed"].fillna(False).astype(bool).to_numpy()
+                node_flag |= dynamic_flag
+            elif eligibility == "both_hpa_primary_profiles":
+                dynamic_flag = cached["hpa_primary_observed"].fillna(False).astype(bool).to_numpy()
+                node_flag |= dynamic_flag
+            elif eligibility == "both_hpa_high_profiles":
+                dynamic_flag = cached["hpa_high_observed"].fillna(False).astype(bool).to_numpy()
+                node_flag |= dynamic_flag
+            else:
+                dynamic_mapped = cached["string_mapped"].fillna(False).astype(bool).to_numpy()
+                if eligibility == "both_string_mapped_proteins":
+                    node_flag |= protein & dynamic_mapped
+                else:
+                    assert other_flag is not None
+                    other_flag |= protein & dynamic_mapped
+
+    if other_flag is None:
+        eligible = np.logical_and.outer(node_flag, node_flag)
+    else:
+        eligible = np.logical_or(
+            np.logical_and.outer(node_flag, other_flag),
+            np.logical_and.outer(other_flag, node_flag),
+        )
+    np.fill_diagonal(eligible, False)
+    return eligible
 
 
 def scaffold_triadic_closure_factors(
@@ -1415,6 +1591,8 @@ def combine_edge_factors(
     audit_collector: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     prior = config["edge_integration"]["prior_probability"]
+    penalize_unsupported = config["edge_integration"]["penalize_unsupported"]
+    unsupported_factor = config["edge_integration"]["unsupported_bayes_factor"]
     base_log_odds = math.log(prior / (1.0 - prior))
     log_odds = np.full((len(graph_symbols), len(graph_symbols)), base_log_odds, dtype=float)
     index = {symbol: position for position, symbol in enumerate(graph_symbols)}
@@ -1426,6 +1604,7 @@ def combine_edge_factors(
     has_incremental_nodes = len(seed_graph_symbols) != len(graph_symbols)
     stream_defs = {stream["id"]: stream for stream in registry["edge_streams"]}
     active_streams: list[dict[str, Any]] = []
+    total_penalty_applications = 0
     derived_streams: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for stream_id, state in config["edge_streams"].items():
         if not state["enabled"] or state["weight"] <= 0:
@@ -1435,7 +1614,11 @@ def combine_edge_factors(
             derived_streams.append((stream_id, definition, state))
             continue
         seed_table = edge_stream_factor_table(
-            project, definition, state, seed_graph_symbols
+            project,
+            definition,
+            state,
+            seed_graph_symbols,
+            include_negative=penalize_unsupported,
         )
         tables = [seed_table]
         if has_incremental_nodes:
@@ -1461,6 +1644,33 @@ def combine_edge_factors(
         right_index = right[mask].astype(int).to_numpy()
         np.add.at(log_odds, (left_index, right_index), weighted_logs)
         np.add.at(log_odds, (right_index, left_index), weighted_logs)
+        observed_pairs = np.zeros_like(log_odds, dtype=bool)
+        observed_pairs[left_index, right_index] = True
+        observed_pairs[right_index, left_index] = True
+        eligible_pairs = edge_stream_eligibility_matrix(
+            project,
+            definition,
+            graph_symbols,
+            graph_metadata=graph_metadata,
+        )
+        eligible_upper = np.triu(eligible_pairs, 1)
+        unsupported_upper = eligible_upper & ~observed_pairs
+        unsupported_left, unsupported_right = np.where(unsupported_upper)
+        penalties_applied = 0
+        if penalize_unsupported and definition.get("negative_evidence"):
+            penalty_log = float(state["weight"]) * math.log(unsupported_factor)
+            np.add.at(
+                log_odds,
+                (unsupported_left, unsupported_right),
+                penalty_log,
+            )
+            np.add.at(
+                log_odds,
+                (unsupported_right, unsupported_left),
+                penalty_log,
+            )
+            penalties_applied = int(len(unsupported_left))
+            total_penalty_applications += penalties_applied
         active_streams.append(
             {
                 "id": stream_id,
@@ -1469,6 +1679,14 @@ def combine_edge_factors(
                 "tq_multiplier": _stream_multiplier(state),
                 "normalization_reference": definition["normalization"]["reference"],
                 "supported_pairs_in_selected_graph": int(mask.sum()),
+                "eligible_pairs_for_negative_evidence": int(eligible_upper.sum()),
+                "unsupported_eligible_pairs": int(unsupported_upper.sum()),
+                "negative_penalties_applied": penalties_applied,
+                "explicit_source_factors_below_one": int((values < 1.0).sum()),
+                "unsupported_pair_bayes_factor": (
+                    unsupported_factor if penalties_applied else None
+                ),
+                "negative_evidence_policy": definition.get("negative_evidence"),
             }
         )
     preclosure_probabilities = stable_expit(log_odds)
@@ -1532,8 +1750,12 @@ def combine_edge_factors(
     cutoff = config["edge_integration"]["output_probability_cutoff"]
     summary = {
         "edge_prior_probability": prior,
+        "penalize_unsupported": penalize_unsupported,
+        "unsupported_edge_bayes_factor": unsupported_factor,
+        "negative_penalty_applications": total_penalty_applications,
         "unique_pair_count": int(len(upper)),
         "pairs_above_output_cutoff": int((upper > cutoff).sum()),
+        "pairs_below_prior": int((upper < prior - FACTOR_EPSILON).sum()),
         "pairs_at_exact_prior": int(np.isclose(upper, prior, atol=1e-12, rtol=0).sum()),
         "output_probability_cutoff_exclusive": cutoff,
         "probability_distribution": probability_distribution_summary(
@@ -1544,9 +1766,12 @@ def combine_edge_factors(
         "active_streams": active_streams,
         "integration_rule": (
             "Edge prior odds are multiplied by each selected Bayes factor raised "
-            "to its user-specified weight. Missing sparse-table entries receive BF=1. "
+            "to its user-specified weight. When optional negative evidence is on, "
+            "a source-eligible pair with no non-neutral source record receives the "
+            "configured BF below 1; out-of-scope pairs remain at BF=1. When it is "
+            "off, all missing sparse-table entries receive BF=1. "
             "If enabled, scaffold closure is derived once from the pre-closure graph "
-            "and appended without recursive feedback."
+            "and appended without recursive feedback or absence penalties."
         ),
     }
     return matrix, summary
@@ -1697,6 +1922,84 @@ def external_target_stream_values(
     raise ValueError(f"unsupported target normalization handler: {handler}")
 
 
+def external_target_stream_eligibility(
+    project: Path,
+    target_symbol: str,
+    vector_by_symbol: pd.DataFrame,
+    symbols: pd.Index,
+    definition: dict[str, Any],
+) -> np.ndarray:
+    """Return source scope for edges between one external target and the graph."""
+    aligned = vector_by_symbol.reindex(symbols)
+    handler = definition["normalization"]["handler"]
+    if handler == "mpkccd_localization":
+        return _truth_array(aligned["mpkccd_localization_observed_for_both"])
+    if handler == "kinase_predictor":
+        prediction_path = (
+            project / "results/path_finding/target_extensions" / safe_name(target_symbol)
+            / "target_kinase_predictions.tsv"
+        )
+        if not prediction_path.exists() or pd.read_csv(prediction_path, sep="\t").empty:
+            return np.zeros(len(symbols), dtype=bool)
+        classes = aligned["classes"].fillna("").astype(str)
+        return classes.map(
+            lambda value: "kinase"
+            in {token.strip() for token in value.split(";") if token.strip()}
+        ).to_numpy(bool)
+    if handler == "string_v12":
+        target_mapped = bool(
+            vector_by_symbol["string_target_id"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .ne("")
+            .any()
+        )
+        mapping = pd.read_csv(
+            project / STRING_MAPPING_RELATIVE, sep="\t", dtype=str
+        ).fillna("")
+        mapped_symbols = set(
+            mapping.loc[
+                mapping["mapping_status"].eq("mapped")
+                & mapping["string_id"].str.strip().ne(""),
+                "symbol",
+            ].astype(str)
+        )
+        node_mapped = symbols.isin(mapped_symbols).copy()
+        cached = incremental_node_scope_table(project, symbols.astype(str).tolist())
+        if not cached.empty:
+            cached_mapped = set(
+                cached.loc[cached["string_mapped"].astype(bool), "symbol"].astype(str)
+            )
+            node_mapped |= symbols.isin(cached_mapped)
+        protein = aligned["node_type"].fillna("").astype(str).str.casefold().eq("protein")
+        return target_mapped & node_mapped & protein.to_numpy(bool)
+    if handler == "hpa_primary":
+        return _truth_array(aligned["hpa_profiles_observed_for_both"])
+    if handler == "hpa_high_confidence":
+        return np.zeros(len(symbols), dtype=bool)
+    if handler == "omnipath_core":
+        return aligned["node_type"].fillna("").astype(str).str.casefold().eq("protein").to_numpy(bool)
+    if handler == "stitch_secondary_messenger":
+        target_mapped = bool(
+            vector_by_symbol["string_target_id"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .ne("")
+            .any()
+        )
+        evidence = pd.read_csv(
+            project / STITCH_ALL_MOUSE_EDGES_RELATIVE,
+            sep="\t",
+            compression="gzip",
+            usecols=["messenger_node"],
+        )
+        messengers = set(evidence["messenger_node"].astype(str))
+        return target_mapped & symbols.isin(messengers)
+    return np.zeros(len(symbols), dtype=bool)
+
+
 def append_external_target(
     project: Path,
     matrix: pd.DataFrame,
@@ -1706,6 +2009,8 @@ def append_external_target(
     config: dict[str, Any],
 ) -> tuple[pd.DataFrame, list[str]]:
     prior = config["edge_integration"]["prior_probability"]
+    penalize_unsupported = config["edge_integration"]["penalize_unsupported"]
+    unsupported_factor = config["edge_integration"]["unsupported_bayes_factor"]
     target_log_odds = np.full(len(matrix), math.log(prior / (1.0 - prior)), dtype=float)
     vector_by_symbol = target_vector.set_index("symbol")
     warnings: list[str] = []
@@ -1714,6 +2019,12 @@ def append_external_target(
         if not state["enabled"] or state["weight"] <= 0:
             continue
         definition = stream_defs[stream_id]
+        if definition.get("derived"):
+            warnings.append(
+                f"{definition['label']} is derived from the internal graph and was "
+                "not reapplied to the external target."
+            )
+            continue
         values = external_target_stream_values(
             project,
             target_symbol,
@@ -1730,6 +2041,25 @@ def append_external_target(
             continue
         if (values <= 0).any() or not np.isfinite(values).all():
             raise ValueError(f"external-target stream {stream_id} produced invalid factors")
+        if penalize_unsupported and definition.get("negative_evidence"):
+            eligible = external_target_stream_eligibility(
+                project,
+                target_symbol,
+                vector_by_symbol,
+                matrix.index,
+                definition,
+            )
+            unsupported = eligible & np.isclose(
+                values, 1.0, atol=FACTOR_EPSILON, rtol=0.0
+            )
+            values = values.copy()
+            values[unsupported] = unsupported_factor
+            if np.any(unsupported):
+                warnings.append(
+                    f"{definition['label']} applied unsupported-pair BF "
+                    f"{unsupported_factor:g} to {int(unsupported.sum())} eligible "
+                    "external-target edges."
+                )
         target_log_odds += float(state["weight"]) * np.log(values)
     target_probabilities = stable_expit(target_log_odds)
     symbols = [*matrix.index.astype(str), target_symbol]

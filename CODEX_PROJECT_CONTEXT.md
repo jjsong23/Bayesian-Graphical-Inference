@@ -35,7 +35,7 @@ validated 891-node baseline.
 ## Bayesian conventions
 
 - Node and edge evidence are represented as positive Bayes factors (BFs).
-- Missing node evidence is neutral by default. The GUI also exposes an optional scope-aware nondetection rule: an eligible but unobserved node receives one configurable `BF < 1` per enabled stream (default penalty BF 0.5), while an inapplicable node remains at `BF = 1`. Missing sparse edge evidence remains neutral.
+- Missing node and edge evidence is neutral by default. The GUI exposes separate optional scope-aware negative-evidence rules. An eligible but unobserved node, or an eligible but unsupported edge pair, receives one configurable `BF < 1` per enabled stream (default penalty BF 0.5); hypotheses outside the source's scope remain at `BF = 1`.
 - For a probability prior `p`, integration is performed in odds space: `posterior_odds = prior_odds * product(BF_i ** weight_i)`, then converted back to probability.
 - The common continuous-evidence transformation uses a source-specific threshold `T_q`. The GUI permits independent normalization multipliers for each applicable dataset.
 - STRING and STITCH instead use score odds relative to configurable reference scores, not the Gaussian-complement threshold kernel.
@@ -92,6 +92,8 @@ Selectable streams include:
 - OmniPath interactions, collapsed to undirected support;
 - STITCH and curated secondary-messenger associations; and
 - optional scaffold-mediated binary closure.
+
+The optional `penalize_unsupported` edge policy is disabled in the reproducibility default. When enabled, a pair that is eligible for an active source but lacks a non-neutral source record receives `unsupported_bayes_factor` (default 0.5) before the stream weight is applied. Scope is source-specific: both proteins must have the relevant localization profiles for mpkCCD/HPA; KinasePredictor requires a kinase and a protein with an observed scorable phosphosite; STRING requires two mapped proteins; OmniPath considers protein–protein pairs; and STITCH considers curated-messenger-to-mapped-protein pairs. Scaffold closure has no negative-absence rule. The update remains symmetric and is also applied to eligible external-target edges. Database absence is an optional modeling assumption, not proof that a biological interaction is impossible.
 
 Localization compatibility/adjacency matrices for mpkCCD, HPA, and COMPARTMENTS are stored with the archived data so a scientist can validate every assumed compartment relationship. COMPARTMENTS is used in the dedicated colocalization/AlphaFold candidate-filtering workflow. Experimental PPI tiers assembled from STRING, BioGRID, and IntAct support the prior-knowledge filter used before structural prediction.
 

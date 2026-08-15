@@ -11,6 +11,7 @@ import pandas as pd
 from workflow_engine import (
     DEFAULT_SIGNAL_RELAY_CLASSES,
     PROJECT_ROOT,
+    append_external_target,
     combine_edge_factors,
     default_configuration,
     edge_stream_factor_table,
@@ -78,6 +79,10 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(
             tuple(config["path"]["allowed_intermediate_classes"]),
             DEFAULT_SIGNAL_RELAY_CLASSES,
+        )
+        self.assertFalse(config["edge_integration"]["penalize_unsupported"])
+        self.assertEqual(
+            config["edge_integration"]["unsupported_bayes_factor"], 0.5
         )
         self.assertTrue(config["path"]["ontology_directionality_enabled"])
         self.assertNotIn(
@@ -397,6 +402,67 @@ class WorkflowEngineTests(unittest.TestCase):
             distribution["above_output_cutoff_count"],
             summary["pairs_above_output_cutoff"],
         )
+
+    def test_optional_edge_absence_penalty_lowers_only_eligible_pairs(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["edge_streams"].values():
+            state["enabled"] = False
+        supplied["edge_streams"]["stitch_secondary_messenger"]["enabled"] = True
+        supplied["edge_integration"]["penalize_unsupported"] = True
+        supplied["edge_integration"]["unsupported_bayes_factor"] = 0.5
+        config = normalize_configuration(supplied, self.registry)
+        symbols = ["Prkar2a", "Actn1", "SM_CAMP"]
+        matrix, summary = combine_edge_factors(
+            PROJECT_ROOT,
+            self.registry,
+            config,
+            symbols,
+        )
+        values = matrix.to_numpy(float)
+        self.assertTrue(np.array_equal(values, values.T))
+        self.assertEqual(matrix.loc["Prkar2a", "Actn1"], 0.5)
+        self.assertGreater(matrix.loc["Prkar2a", "SM_CAMP"], 0.5)
+        self.assertLess(matrix.loc["Actn1", "SM_CAMP"], 0.5)
+        self.assertEqual(summary["pairs_below_prior"], 1)
+        self.assertEqual(summary["negative_penalty_applications"], 1)
+
+    def test_unsupported_edge_bayes_factor_is_validated(self) -> None:
+        for invalid in (0.0, 1.000001):
+            supplied = default_configuration(self.registry)
+            supplied["edge_integration"]["unsupported_bayes_factor"] = invalid
+            with self.assertRaisesRegex(ValueError, "unsupported edge Bayes factor"):
+                normalize_configuration(supplied, self.registry)
+
+    def test_external_target_edge_penalty_uses_source_scope(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["edge_streams"].values():
+            state["enabled"] = False
+        supplied["edge_streams"]["stitch_secondary_messenger"]["enabled"] = True
+        supplied["edge_integration"]["penalize_unsupported"] = True
+        config = normalize_configuration(supplied, self.registry)
+        symbols = ["SM_CAMP", "SM_AA", "SM_PIP3"]
+        matrix = pd.DataFrame(
+            np.zeros((len(symbols), len(symbols))),
+            index=symbols,
+            columns=symbols,
+        )
+        vector = pd.read_csv(
+            PROJECT_ROOT
+            / "results/path_finding/target_extensions/Aqp2/target_adjacency_vector.tsv",
+            sep="\t",
+        )
+        extended, warnings = append_external_target(
+            PROJECT_ROOT,
+            matrix,
+            "Aqp2",
+            vector,
+            self.registry,
+            config,
+        )
+        self.assertGreater(extended.loc["SM_CAMP", "Aqp2"], 0.5)
+        self.assertEqual(extended.loc["SM_AA", "Aqp2"], 1.0 / 3.0)
+        self.assertEqual(extended.loc["SM_PIP3", "Aqp2"], 0.5)
+        self.assertTrue(any("applied unsupported-pair BF" in item for item in warnings))
 
     def test_hpa_alternatives_cannot_be_enabled_together(self) -> None:
         supplied = default_configuration(self.registry)

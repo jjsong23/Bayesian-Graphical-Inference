@@ -769,8 +769,10 @@ $$
 P(\mathrm{edge})=0.5
 $$
 
-Evidence streams supplied Bayes factors or neutral values. An unsupported pair
-remained at its existing posterior rather than being penalized.
+Evidence streams supplied Bayes factors or neutral values. In the validated
+reproducibility default, an unsupported pair remained at its existing posterior
+rather than being penalized. The interactive framework later added a separate,
+disabled-by-default negative-edge sensitivity option described below.
 
 For an evidence likelihood \(L\), the independent binary update was:
 
@@ -801,10 +803,67 @@ $$
 BF=\frac{L}{0.5}
 $$
 
-Because the implemented evidence streams were positive or neutral,
-off-diagonal probabilities never fell below 0.5.
+With the negative-edge option disabled, the stored default evidence streams are
+positive or neutral and off-diagonal probabilities do not fall below 0.5.
 
-### 11.1 Optional scaffold-mediated triadic closure
+### 11.1 Optional negative evidence for unsupported eligible pairs
+
+The interactive workflow can let evidence counter the edge-present hypothesis.
+When `penalize_unsupported` is enabled, every active primary edge stream first
+defines the unordered pairs it could meaningfully assess. If an eligible pair
+has no non-neutral factor record, that stream supplies a common configurable
+factor (B^-_E), constrained to (0 < B^-_E \le 1). The default is 0.5. The
+stream weight (w_k) is applied in the same odds equation used for positive
+edge evidence:
+
+$$
+O(E_{ij}\mid D_1,\ldots,D_K)
+=
+O(E_{ij})
+\prod_{k=1}^{K} BF_{ijk}^{w_k}.
+$$
+
+From a prior probability of 0.5, one unweighted unsupported-pair factor of 0.5
+gives posterior (1/3); two give 0.2; three give approximately 0.111. Positive
+factors can counter these penalties because all factors enter the same product.
+The factor is strictly positive so evidence can make a posterior arbitrarily
+small without creating an irreversible mathematical zero.
+
+Eligibility was defined separately for each evidence source:
+
+- mpkCCD localization: both proteins had valid fractionation profiles and
+  positive node-specific thresholds;
+- HPA primary or high-confidence localization: both proteins had valid profiles
+  in the selected HPA policy and valid thresholds;
+- KinasePredictor: one endpoint carried the exact `kinase` class and the other
+  had at least one observed-or-UniProt-annotated scorable phosphosite;
+- STRING: both endpoints were proteins with valid mouse STRING identifiers;
+- OmniPath: both endpoints were proteins in the selected graph; and
+- STITCH: one endpoint was a curated messenger represented in STITCH and the
+  other was a STRING-mapped protein.
+
+Pairs outside these definitions remain neutral (`BF=1`) because the source
+could not assess the hypothesis. For dynamically added nodes, cached
+localization and STRING identifiers extend the corresponding eligibility rules.
+The current incremental cache does not persist a no-hit KinasePredictor
+scorable-site flag, so newly added proteins without a validated site-scope flag
+remain neutral under negative KinasePredictor evidence. External-target edges
+use the same available source-scope checks.
+
+Scaffold-mediated closure is excluded from negative absence. Failure to share a
+strong scaffold is not an independent experimental nondetection. The rule is
+also not a claim that omission from STRING, OmniPath, or STITCH proves no
+interaction; it is explicitly an optional database-absence sensitivity model.
+
+With the validated 891-node default graph, the six default primary edge streams,
+all stream weights equal to one, prior 0.5, and (B^-_E=0.5), 332,215 of
+396,495 unique pairs fell below the prior, 5,456 remained at the prior, and
+58,824 remained above the 0.5 output cutoff. There were 1,112,985 stream–pair
+penalty applications because one pair can be eligible and unsupported in more
+than one source. These counts describe a sensitivity run, not a recommended
+biological cutoff.
+
+### 11.2 Optional scaffold-mediated triadic closure
 
 The interactive workflow includes an optional derived edge stream for
 scaffold-mediated proximity. It is evaluated only after all selected primary
@@ -1695,8 +1754,10 @@ For scientific accuracy:
   objective symmetry choice and the evidence mappings remain model choices.
 - Do not say “nonzero posterior.” Neutral candidates remain at 0.5; the default
   selection criterion is posterior strictly greater than 0.5.
-- Do not say missing data indicated absence. Missing node or edge evidence was
-  treated as neutral.
+- Do not say missing data proves absence. Missing node or edge evidence is
+  neutral in the reproducibility default. The optional negative-evidence modes
+  penalize only source-eligible nondetections/unsupported pairs and must be
+  reported as sensitivity assumptions.
 - Do not describe STRING relationships as experimentally demonstrated physical
   PPIs. STRING supplies functional associations.
 - Do not describe every phosphosite used for kinase–protein edges as observed

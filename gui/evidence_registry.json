@@ -225,6 +225,10 @@
       "target_factor_column": "mpkccd_bayes_factor",
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "eligibility": "both_mpkccd_profiles",
+        "absence_definition": "Both proteins have valid mpkCCD fractionation profiles, but their pair has no non-neutral localization factor."
+      },
       "normalization": {
         "handler": "mpkccd_localization",
         "control_label": "Tq ×",
@@ -242,6 +246,10 @@
       "target_factor_column": "kinasepredictor_bayes_factor",
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "eligibility": "kinase_to_scorable_phosphoprotein",
+        "absence_definition": "One endpoint is an ontology-annotated kinase and the other has at least one observed, scorable phosphosite, but no non-neutral top-ten motif prediction links the pair."
+      },
       "normalization": {
         "handler": "kinase_predictor",
         "control_label": "Tq ×",
@@ -259,6 +267,10 @@
       "target_factor_column": "string_bayes_factor",
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "eligibility": "both_string_mapped_proteins",
+        "absence_definition": "Both protein nodes have valid STRING mouse identifiers, but the pair has no non-neutral STRING association record."
+      },
       "normalization": {
         "handler": "string_v12",
         "control_label": "Ref ×",
@@ -277,6 +289,10 @@
       "default_enabled": true,
       "default_weight": 1.0,
       "exclusive_group": "hpa_localization",
+      "negative_evidence": {
+        "eligibility": "both_hpa_primary_profiles",
+        "absence_definition": "Both proteins have valid HPA primary localization profiles, but their pair has no non-neutral HPA localization factor."
+      },
       "normalization": {
         "handler": "hpa_primary",
         "control_label": "Tq ×",
@@ -295,6 +311,10 @@
       "default_enabled": false,
       "default_weight": 1.0,
       "exclusive_group": "hpa_localization",
+      "negative_evidence": {
+        "eligibility": "both_hpa_high_profiles",
+        "absence_definition": "Both proteins have valid HPA high-confidence localization profiles, but their pair has no non-neutral HPA localization factor."
+      },
       "normalization": {
         "handler": "hpa_high_confidence",
         "control_label": "Tq ×",
@@ -312,6 +332,10 @@
       "target_factor_column": "omnipath_bayes_factor",
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "eligibility": "all_protein_pairs",
+        "absence_definition": "Both endpoints are proteins in the selected graph, but OmniPath contains no non-neutral core interaction for the pair. This is an optional database-absence assumption, not proof of no interaction."
+      },
       "normalization": {
         "handler": "omnipath_core",
         "control_label": "Tq ×",
@@ -329,6 +353,10 @@
       "target_factor_column": null,
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "eligibility": "mapped_messenger_protein_pairs",
+        "absence_definition": "One endpoint is a curated messenger represented in STITCH and the other is a STRING-mapped protein, but STITCH contains no non-neutral association for the pair."
+      },
       "normalization": {
         "handler": "stitch_secondary_messenger",
         "control_label": "Ref ×",
@@ -505,6 +533,8 @@
     "unobserved_node_bayes_factor": 0.5,
     "edge_prior_probability": 0.5,
     "edge_probability_cutoff": 0.5,
+    "penalize_unsupported_edges": false,
+    "unsupported_edge_bayes_factor": 0.5,
     "start_node": "Prkaca",
     "target_node": "Aqp2",
     "top_k_paths": 25,
