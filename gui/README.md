@@ -14,8 +14,25 @@ cd C:\Users\songjj\Documents\Codex\2026-07-21\un\graphical_bayesian_inference
 .\gui\run_workbench.ps1
 ```
 
+The foreground command keeps the server attached to that PowerShell window.
+Closing the window stops the backend even though an already-open browser tab
+may remain visible. To keep the server running independently, use:
+
+```powershell
+.\gui\run_workbench.ps1 -Background
+```
+
+The background launcher starts a hidden detached process, waits for the
+configuration API to become healthy, writes its PID to `gui/.workbench.pid`,
+and reuses an already healthy server rather than creating a duplicate.
+
 The workbench opens at `http://127.0.0.1:8765`. It binds only to the local
 loopback interface by default.
+
+If the backend stops, the page now reports **Local analysis server is not
+running** rather than misclassifying the browser network error as an invalid
+scientific configuration. Restart the server and choose **Reconnect to local
+server**.
 
 ## Workflow
 
@@ -29,7 +46,10 @@ loopback interface by default.
    cutoff (default 0.5) are retained; curated second messengers can be included
    separately. Candidates outside the validated 891-node seed are inserted
    after incremental edge characterization. Every node dataset also has its
-   own `Tq ×` control.
+   own `Tq ×` control. An optional global nondetection rule gives each eligible
+   but unobserved candidate a configurable BF below 1 in every enabled node
+   stream. It is off by default; the conservative default strength is BF 0.5.
+   Non-kinases remain out of scope and neutral in the kinase-activity stream.
    The six collecting-duct streams are off in the generic default so the
    validated 891-node baseline remains exactly reproducible.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
@@ -59,6 +79,16 @@ loopback interface by default.
    JSON, complete class-pair catalog, edge-level audit, and partially directed
    propagation matrix are downloadable from every directional run.
 
+4. **Validate temporal order (optional).** Compare the current path order with
+   the raw 1/2/5/15-minute dDAVP phosphoproteomic time course. Replicate mode
+   stabilizes the three-replicate variance with an empirical intensity trend,
+   selects one phosphosite per gene by moderated signal-to-noise, applies a
+   within-gene Bonferroni correction by default, and propagates response-time
+   uncertainty with Monte-Carlo draws. The panel exposes prior df, alpha, draw
+   count, seed, correction method, and the minimum number of scored nodes. This
+   stage is off by default and never changes the Bayesian path probability or
+   primary rank.
+
 The path count can be set from 1 to 500. All requested paths are shown in the
 scrollable result table and written to `ranked_paths.tsv`; the separate
 `ranked_path_edges.tsv` retains every constituent edge. The liberal intermediate
@@ -72,6 +102,10 @@ supported edge list, path tables, eligibility audit, and JSON summary.
 Directional runs additionally contain `propagation_adjacency_matrix.tsv`,
 `ontology_directionality_audit.tsv.gz`, `ontology_class_pair_catalog.tsv`, and
 `ontology_direction_rules.json`.
+Temporal runs additionally contain `ranked_paths_temporal.tsv`,
+`temporal_gene_responses.tsv.gz`, `temporal_variance_trend.tsv`, and
+`temporal_validation_summary.json`. The unmodified `ranked_paths.tsv` remains
+the canonical Bayesian ranking.
 `configuration.json` and `analysis_summary.json` retain the exact selected
 ontology-class IDs, while `intermediate_node_eligibility.tsv` reports every
 node's complete class list, matching selected roles, endpoint exemption, and
@@ -124,7 +158,8 @@ The run summary reports requested pairs, cache hits, newly characterized pairs,
 source signature, and database totals.
 
 The collecting-duct extension derives each segment's q75 from positive values
-only; zeros are nondetections and stay neutral. Rat proteome rows are mapped to
+only. Zeros are nondetections: they stay neutral when the optional nondetection
+rule is off and receive its configured BF when it is on. Rat proteome rows are mapped to
 mouse genes with Ensembl release 116 orthology (UniProt first, rat-symbol
 fallback), and every mapping decision is audited. Enabling all six new streams
 in addition to the existing four selects 3,296 proteins, or 3,316 nodes after
@@ -141,8 +176,20 @@ the full [0, 1] probability range and sends only the bin counts to the browser,
 so even multi-million-pair runs do not inflate the job-status response. Bar
 height is log10(count + 1), which keeps both the neutral-prior spike and the
 smaller supported tails visible. The plot also shows the configured output
-cutoff and reports the exact-prior count, above-cutoff count, mean, and range.
+cutoff and reports the below-prior, exact-prior, above-cutoff, mean, and range
+statistics. The below-prior count makes negative node evidence directly visible.
 The same distribution summaries are retained in `analysis_summary.json`.
+
+## Temporal validation interpretation
+
+`temporal_soft_precedence` averages the probability that an earlier path node's
+sampled response time precedes a later node's. Draw-wise Kendall tau-a is
+reported as a mean and 2.5/97.5 percentile Monte-Carlo interval. A path receives
+the separate temporal evidence rank only if it reaches the configured measured-
+node threshold (default three). Fewer than two scored nodes yields no temporal
+order statistic. Insufficient coverage is not treated as evidence against a
+path. See `docs/temporal_path_validation.md` for equations, the input schema,
+the initial coverage result, and reporting cautions.
 
 ## Extending evidence streams
 
@@ -155,15 +202,19 @@ The GUI is driven by `evidence_registry.json`. A new precomputed stream needs:
 - default enabled state and weight; and
 - normalization handler, label, reference, help text, and default multiplier;
 - an optional exclusivity or dependence group.
+- for node streams, an observed-status column and eligibility policy when
+  nondetection should be usable as negative evidence.
 
 The interface renders registry entries automatically. The engine's combination
-logic is generic for positive factors. A stream requiring a new raw-data
+logic is generic for positive factors and optional BFs below 1. A stream requiring a new raw-data
 transformation should first receive an audited preprocessing module that emits
 the standard factor table.
 
 ## Scientific safeguards
 
 - Missing sparse edge evidence is neutral (`BF = 1`), not evidence of absence.
+- Eligible node nondetections can optionally supply a configurable `BF < 1`;
+  out-of-scope nodes remain neutral and the reproducibility default is off.
 - Node posteriors are independent Bernoulli probabilities and are not
   normalized across the 9,170 protein candidates.
 - Protein/RNA source scores use 0.5 as their neutral likelihood floor and are

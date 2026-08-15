@@ -9,6 +9,11 @@
       "neutral_value": 0.5,
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "observed_column": "protein_observed",
+        "eligibility": "all_candidates",
+        "absence_definition": "No finite positive protein-abundance measurement mapped to the candidate."
+      },
       "normalization": {
         "handler": "protein_abundance",
         "control_label": "Tq ×",
@@ -25,6 +30,11 @@
       "neutral_value": 0.5,
       "default_enabled": true,
       "default_weight": 1.0,
+      "negative_evidence": {
+        "observed_column": "pc_transcript_observed",
+        "eligibility": "all_candidates",
+        "absence_definition": "No positive principal-cell TPM measurement; measured zeros count as nondetections."
+      },
       "normalization": {
         "handler": "pc_transcript",
         "control_label": "Tq ×",
@@ -42,6 +52,12 @@
       "default_enabled": true,
       "default_weight": 1.0,
       "dependence_group": "pka_ko_phosphoproteomics",
+      "negative_evidence": {
+        "observed_column": "kinase_evidence_observed",
+        "eligibility": "ontology_class",
+        "ontology_class": "kinase",
+        "absence_definition": "No kinase-level KinasePredictor activity statistic for an ontology-annotated kinase; non-kinases are out of scope."
+      },
       "normalization": {
         "handler": "kinase_activity",
         "control_label": "Tq ×",
@@ -59,6 +75,11 @@
       "default_enabled": true,
       "default_weight": 1.0,
       "dependence_group": "pka_ko_phosphoproteomics",
+      "negative_evidence": {
+        "observed_column": "phosphoprotein_evidence_observed",
+        "eligibility": "all_candidates",
+        "absence_definition": "No detected phosphosite mapped to the candidate in the PKA-KO phosphoproteomic dataset."
+      },
       "normalization": {
         "handler": "phosphoprotein_response",
         "control_label": "Tq ×",
@@ -480,6 +501,8 @@
     "node_non_neutral_tolerance": 1e-12,
     "node_prior_probability": 0.5,
     "node_probability_cutoff": 0.5,
+    "penalize_unobserved_nodes": false,
+    "unobserved_node_bayes_factor": 0.5,
     "edge_prior_probability": 0.5,
     "edge_probability_cutoff": 0.5,
     "start_node": "Prkaca",
@@ -489,6 +512,13 @@
     "path_minimum_edge_probability": 0.5,
     "ontology_directionality_enabled": true,
     "signaling_intermediates_only": true,
-    "exclude_multirole_scaffolds": false
+    "exclude_multirole_scaffolds": false,
+    "temporal_validation_enabled": false,
+    "temporal_prior_df": 4.0,
+    "temporal_alpha": 0.05,
+    "temporal_monte_carlo_draws": 2000,
+    "temporal_random_seed": 0,
+    "temporal_p_adjust_method": "within_gene_bonferroni",
+    "temporal_minimum_scored_nodes": 3
   }
 }

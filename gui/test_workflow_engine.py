@@ -84,8 +84,24 @@ class WorkflowEngineTests(unittest.TestCase):
             "adaptor_scaffold", config["path"]["allowed_intermediate_classes"]
         )
         self.assertEqual(
+            config["temporal_validation"],
+            {
+                "enabled": False,
+                "prior_df": 4.0,
+                "alpha": 0.05,
+                "monte_carlo_draws": 2000,
+                "random_seed": 0,
+                "p_adjust_method": "within_gene_bonferroni",
+                "minimum_scored_nodes": 3,
+            },
+        )
+        self.assertEqual(
             config["edge_streams"]["scaffold_triadic_closure"]["parameters"],
             {"anchor_probability_cutoff": 0.9, "closure_likelihood": 0.9},
+        )
+        self.assertFalse(config["node_integration"]["penalize_unobserved"])
+        self.assertEqual(
+            config["node_integration"]["unobserved_bayes_factor"], 0.5
         )
 
     def test_exact_half_priors_are_valid_html_values(self) -> None:
@@ -97,6 +113,10 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertIn('min="0.000001"', tag)
             self.assertIn('max="0.999999"', tag)
             self.assertIn('step="any"', tag)
+        nondetection = re.search(r'<input id="unobserved-bf"[^>]*>', html)
+        self.assertIsNotNone(nondetection)
+        self.assertIn('min="0.000001"', nondetection.group(0))
+        self.assertIn('max="1"', nondetection.group(0))
 
     def test_gui_exposes_cooperative_cancellation(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -106,6 +126,37 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("/cancel`, { method: \"POST\" }", javascript)
         self.assertIn('job.status === "cancelled"', javascript)
         self.assertIn('/api/jobs/active', javascript)
+
+    def test_gui_distinguishes_server_disconnect_from_bad_configuration(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        self.assertIn('id="error-title"', html)
+        self.assertIn('id="reconnect-server"', html)
+        self.assertIn("function showWorkflowError", javascript)
+        self.assertIn("Local analysis server is not running", javascript)
+        self.assertIn("failed to fetch", javascript.casefold())
+        self.assertIn("window.location.reload()", javascript)
+
+    def test_gui_exposes_optional_temporal_path_validation(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        for control in (
+            "temporal-enabled",
+            "temporal-prior-df",
+            "temporal-alpha",
+            "temporal-draws",
+            "temporal-seed",
+            "temporal-p-adjust",
+            "temporal-min-scored",
+        ):
+            self.assertIn(f'id="{control}"', html)
+        self.assertIn("temporal_validation:", javascript)
+        self.assertIn("preview.temporal_validation", javascript)
+        self.assertIn("Primary Bayesian ranks were preserved", javascript)
+        for control in ("temporal-prior-df", "temporal-alpha"):
+            match = re.search(rf'<input id="{control}"[^>]*>', html)
+            self.assertIsNotNone(match, control)
+            self.assertIn('step="any"', match.group(0))
 
     def test_run_button_waits_for_configuration_initialization(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -236,6 +287,7 @@ class WorkflowEngineTests(unittest.TestCase):
             distribution["above_output_cutoff_count"],
             summary["selected_protein_count"],
         )
+        self.assertEqual(distribution["below_prior_count"], 0)
 
     def test_neutral_node_evidence_preserves_independent_half_priors(self) -> None:
         config = normalize_configuration(None, self.registry)
@@ -251,6 +303,66 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(summary["selected_protein_count"], 0)
         self.assertEqual(summary["neutral_posterior_count"], len(factors))
         self.assertEqual(len(selected), 20)
+
+    def test_optional_nondetection_evidence_can_lower_node_posteriors(self) -> None:
+        supplied = default_configuration(self.registry)
+        supplied["node_integration"]["penalize_unobserved"] = True
+        supplied["node_integration"]["unobserved_bayes_factor"] = 0.5
+        config = normalize_configuration(supplied, self.registry)
+
+        factors, selected, summary = select_nodes(
+            PROJECT_ROOT, self.registry, config
+        )
+
+        self.assertTrue(summary["penalize_unobserved"])
+        self.assertEqual(summary["unobserved_bayes_factor"], 0.5)
+        self.assertGreater(summary["total_unobserved_penalties_applied"], 0)
+        self.assertGreater(summary["candidates_below_prior"], 0)
+        self.assertEqual(
+            summary["probability_distribution"]["below_prior_count"],
+            summary["candidates_below_prior"],
+        )
+        self.assertLess(summary["posterior_minimum"], 0.5)
+        self.assertLess(summary["selected_protein_count"], 871)
+        self.assertEqual(len(selected), summary["selected_protein_count"] + 20)
+
+        active_ids = [stream["id"] for stream in summary["active_streams"]]
+        effective_bfs = factors[
+            [f"gui_{stream_id}_bayes_factor" for stream_id in active_ids]
+        ].to_numpy(float)
+        expected = 1.0 / (1.0 + np.exp(-np.log(effective_bfs).sum(axis=1)))
+        self.assertTrue(
+            np.allclose(expected, factors["gui_posterior"].to_numpy(float))
+        )
+
+    def test_kinase_nondetection_penalty_is_scope_aware(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["node_streams"].values():
+            state["enabled"] = False
+        supplied["node_streams"]["kinase_activity"]["enabled"] = True
+        supplied["node_integration"]["penalize_unobserved"] = True
+        config = normalize_configuration(supplied, self.registry)
+
+        factors, _, summary = select_nodes(PROJECT_ROOT, self.registry, config)
+        eligible = factors["gui_kinase_activity_negative_evidence_eligible"]
+        observed = factors["gui_kinase_activity_observed"]
+        applied = factors["gui_kinase_activity_unobserved_penalty_applied"]
+        effective = factors["gui_kinase_activity_bayes_factor"]
+
+        self.assertTrue((~applied[~eligible]).all())
+        self.assertTrue((effective[~eligible] == 1.0).all())
+        self.assertTrue((effective[eligible & ~observed] == 0.5).all())
+        self.assertEqual(
+            summary["active_streams"][0]["unobserved_penalties_applied"],
+            int((eligible & ~observed).sum()),
+        )
+
+    def test_nondetection_bayes_factor_must_be_positive_and_at_most_one(self) -> None:
+        for invalid in (0.0, 1.000001):
+            supplied = default_configuration(self.registry)
+            supplied["node_integration"]["unobserved_bayes_factor"] = invalid
+            with self.assertRaisesRegex(ValueError, "unobserved node Bayes factor"):
+                normalize_configuration(supplied, self.registry)
 
     def test_protein_and_pc_only_configuration_is_valid_subset(self) -> None:
         supplied = default_configuration(self.registry)
@@ -307,6 +419,33 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(config["path"]["top_k"], 500)
         supplied["path"]["top_k"] = 501
         with self.assertRaisesRegex(ValueError, "top paths"):
+            normalize_configuration(supplied, self.registry)
+
+    def test_temporal_validation_configuration_is_normalized_and_requires_paths(self) -> None:
+        supplied = default_configuration(self.registry)
+        supplied["temporal_validation"].update(
+            {
+                "enabled": True,
+                "prior_df": 8,
+                "alpha": 0.1,
+                "monte_carlo_draws": 500,
+                "random_seed": 22,
+                "p_adjust_method": "none",
+                "minimum_scored_nodes": 4,
+            }
+        )
+        config = normalize_configuration(supplied, self.registry)
+        self.assertEqual(
+            config["temporal_validation"], supplied["temporal_validation"]
+        )
+
+        supplied["path"]["enabled"] = False
+        with self.assertRaisesRegex(ValueError, "requires path finding"):
+            normalize_configuration(supplied, self.registry)
+
+        supplied["path"]["enabled"] = True
+        supplied["temporal_validation"]["p_adjust_method"] = "unknown"
+        with self.assertRaisesRegex(ValueError, "p-adjustment"):
             normalize_configuration(supplied, self.registry)
 
     def test_each_node_stream_has_an_independent_tq_control(self) -> None:

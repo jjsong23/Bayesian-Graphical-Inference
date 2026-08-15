@@ -24,6 +24,7 @@ node_modules/
 
 # Local runtime/editor files.
 *.log
+.workbench.pid
 *.tmp
 *.bak
 .env

@@ -52,6 +52,15 @@ from ontology_directionality import (  # noqa: E402
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
 )
+from temporal_path_ranking import (  # noqa: E402
+    P_ADJUST_METHODS,
+    build_replicate_responses,
+    load_site_trajectories,
+    rank_paths_replicate,
+    replicate_response_table,
+    temporal_validation_summary,
+    variance_trend_table,
+)
 
 
 ProgressCallback = Callable[[str, float], None]
@@ -71,6 +80,7 @@ UNIPROT_RELATIVE = Path(
     "phosphosite_database/raw/uniprot_mouse_reference_proteome.tsv.gz"
 )
 RUNS_RELATIVE = Path("results/gui_runs")
+TEMPORAL_PHOSPHO_RELATIVE = Path("data/phospho_data_original.xlsx")
 PROTEIN_RAW_RELATIVE = Path("results/mpkccd_protein_abundance_bayes_factors.tsv")
 PC_RAW_RELATIVE = Path("results/pc_median_tpm_bayes_factors.tsv")
 PHOSPHOPROTEIN_RAW_RELATIVE = Path(
@@ -204,6 +214,10 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "non_neutral_tolerance": float(defaults["node_non_neutral_tolerance"]),
             "prior_probability": float(defaults["node_prior_probability"]),
             "output_probability_cutoff": float(defaults["node_probability_cutoff"]),
+            "penalize_unobserved": bool(defaults["penalize_unobserved_nodes"]),
+            "unobserved_bayes_factor": float(
+                defaults["unobserved_node_bayes_factor"]
+            ),
         },
         "edge_streams": {
             stream["id"]: {
@@ -254,6 +268,15 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
                 for item in registry["path_ontology_classes"]
                 if item.get("default_enabled")
             ],
+        },
+        "temporal_validation": {
+            "enabled": bool(defaults["temporal_validation_enabled"]),
+            "prior_df": float(defaults["temporal_prior_df"]),
+            "alpha": float(defaults["temporal_alpha"]),
+            "monte_carlo_draws": int(defaults["temporal_monte_carlo_draws"]),
+            "random_seed": int(defaults["temporal_random_seed"]),
+            "p_adjust_method": str(defaults["temporal_p_adjust_method"]),
+            "minimum_scored_nodes": int(defaults["temporal_minimum_scored_nodes"]),
         },
     }
 
@@ -310,10 +333,20 @@ def normalize_configuration(
     config["node_integration"].update(supplied.get("node_integration", {}))
     config["edge_integration"].update(supplied.get("edge_integration", {}))
     config["path"].update(supplied.get("path", {}))
+    config["temporal_validation"].update(supplied.get("temporal_validation", {}))
 
     node_integration = config["node_integration"]
     node_integration["include_second_messengers"] = bool(
         node_integration["include_second_messengers"]
+    )
+    node_integration["penalize_unobserved"] = bool(
+        node_integration["penalize_unobserved"]
+    )
+    node_integration["unobserved_bayes_factor"] = _number(
+        node_integration["unobserved_bayes_factor"],
+        "unobserved node Bayes factor",
+        1e-6,
+        1.0,
     )
     node_integration["non_neutral_tolerance"] = _number(
         node_integration["non_neutral_tolerance"],
@@ -379,6 +412,41 @@ def normalize_configuration(
     ]
     if path["enabled"] and (not path["start"] or not path["target"]):
         raise ValueError("both a starting node and target are required for path finding")
+
+    temporal = config["temporal_validation"]
+    temporal["enabled"] = bool(temporal["enabled"])
+    temporal["prior_df"] = _number(
+        temporal["prior_df"], "temporal prior degrees of freedom", 0.1, 1000.0
+    )
+    temporal["alpha"] = _number(
+        temporal["alpha"], "temporal significance alpha", 1e-6, 1.0
+    )
+    temporal["monte_carlo_draws"] = int(
+        _number(
+            temporal["monte_carlo_draws"],
+            "temporal Monte-Carlo draws",
+            100,
+            100000,
+        )
+    )
+    temporal["random_seed"] = int(
+        _number(temporal["random_seed"], "temporal random seed", 0, 2**32 - 1)
+    )
+    temporal["p_adjust_method"] = str(temporal["p_adjust_method"]).strip()
+    if temporal["p_adjust_method"] not in P_ADJUST_METHODS:
+        raise ValueError(
+            "temporal p-adjustment must be one of: " + ", ".join(P_ADJUST_METHODS)
+        )
+    temporal["minimum_scored_nodes"] = int(
+        _number(
+            temporal["minimum_scored_nodes"],
+            "minimum temporally scored path nodes",
+            2,
+            20,
+        )
+    )
+    if temporal["enabled"] and not path["enabled"]:
+        raise ValueError("temporal path validation requires path finding to be enabled")
 
     effective_nodes = [
         stream_id
@@ -455,6 +523,7 @@ def probability_distribution_summary(
                 atol=1e-12,
             ).sum()
         ),
+        "below_prior_count": int((probabilities < prior_probability).sum()),
         "above_output_cutoff_count": int((probabilities > output_cutoff).sum()),
         "bin_edges": [float(value) for value in edges],
         "bin_counts": [int(value) for value in counts],
@@ -580,6 +649,84 @@ def node_stream_values(
     raise ValueError(f"unsupported node normalization handler: {handler}")
 
 
+def _boolean_mask(values: pd.Series) -> np.ndarray:
+    """Interpret stored boolean-like observation flags without truthy strings."""
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).to_numpy(bool).copy()
+    return (
+        values.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.casefold()
+        .isin({"true", "1", "yes"})
+        .to_numpy(bool)
+    )
+
+
+def node_stream_negative_evidence_policy(
+    definition: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return an explicit or conventional observation policy for a node stream."""
+    policy = definition.get("negative_evidence")
+    if not policy and definition.get("observed_column"):
+        policy = {
+            "observed_column": definition["observed_column"],
+            "eligibility": "all_candidates",
+            "absence_definition": (
+                "No positive segment-specific abundance mapped to the candidate."
+            ),
+        }
+    return policy
+
+
+def node_stream_observation_masks(
+    factors: pd.DataFrame,
+    definition: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (eligible, observed) masks for optional negative node evidence.
+
+    Eligibility is explicit: most abundance streams can assess every protein
+    candidate, whereas kinase activity can assess only kinase-annotated nodes.
+    Nodes outside a stream's scope remain neutral.
+    """
+    policy = node_stream_negative_evidence_policy(definition)
+    if not policy:
+        return np.zeros(len(factors), dtype=bool), np.zeros(len(factors), dtype=bool)
+
+    observed_column = str(policy.get("observed_column", "")).strip()
+    if observed_column not in factors.columns:
+        raise ValueError(
+            f"node stream {definition['id']} lacks observation column "
+            f"{observed_column!r}"
+        )
+    observed = _boolean_mask(factors[observed_column])
+
+    eligibility = str(policy.get("eligibility", "all_candidates"))
+    if eligibility == "all_candidates":
+        eligible = np.ones(len(factors), dtype=bool)
+    elif eligibility == "ontology_class":
+        ontology_class = str(policy.get("ontology_class", "")).strip()
+        if not ontology_class:
+            raise ValueError(
+                f"node stream {definition['id']} has no negative-evidence ontology class"
+            )
+        eligible = (
+            factors["node_classes"]
+            .fillna("")
+            .astype(str)
+            .str.split(";")
+            .apply(lambda classes: ontology_class in classes)
+            .to_numpy(bool)
+        )
+    else:
+        raise ValueError(
+            f"node stream {definition['id']} has unsupported negative-evidence "
+            f"eligibility {eligibility!r}"
+        )
+    observed &= eligible
+    return eligible, observed
+
+
 def load_node_factor_catalog(
     project: Path,
     registry: dict[str, Any],
@@ -627,6 +774,12 @@ def select_nodes(
     tolerance = config["node_integration"]["non_neutral_tolerance"]
     prior_probability = float(config["node_integration"]["prior_probability"])
     output_cutoff = float(config["node_integration"]["output_probability_cutoff"])
+    penalize_unobserved = bool(
+        config["node_integration"]["penalize_unobserved"]
+    )
+    unobserved_bayes_factor = float(
+        config["node_integration"]["unobserved_bayes_factor"]
+    )
     prior_log_odds = math.log(prior_probability / (1.0 - prior_probability))
     log_odds = np.full(len(factors), prior_log_odds, dtype=float)
     if "initial_prior" in factors.columns:
@@ -635,6 +788,7 @@ def select_nodes(
     any_non_neutral = np.zeros(len(factors), dtype=bool)
     any_positive_support = np.zeros(len(factors), dtype=bool)
     active_streams: list[dict[str, Any]] = []
+    stream_audit_columns: dict[str, np.ndarray] = {}
     for stream_id, state in config["node_streams"].items():
         if not state["enabled"] or state["weight"] <= 0:
             continue
@@ -645,7 +799,12 @@ def select_nodes(
         neutral_value = float(definition["neutral_value"])
         if not math.isfinite(neutral_value) or neutral_value <= 0.0:
             raise ValueError(f"node stream {stream_id} has an invalid neutral value")
-        bayes_factors = values / neutral_value
+        source_bayes_factors = values / neutral_value
+        bayes_factors = source_bayes_factors.copy()
+        eligible, observed = node_stream_observation_masks(factors, definition)
+        unobserved_eligible = eligible & ~observed
+        penalty_applied = penalize_unobserved & unobserved_eligible
+        bayes_factors[penalty_applied] = unobserved_bayes_factor
         weight = float(state["weight"])
         weighted_log_bf = weight * np.log(bayes_factors)
         log_odds += weighted_log_bf
@@ -653,10 +812,18 @@ def select_nodes(
         positive_support = bayes_factors > 1.0 + tolerance
         any_non_neutral |= non_neutral
         any_positive_support |= positive_support
-        factors[f"gui_{stream_id}_non_neutral"] = non_neutral
-        factors[f"gui_{stream_id}_factor"] = values
-        factors[f"gui_{stream_id}_bayes_factor"] = bayes_factors
-        factors[f"gui_{stream_id}_weighted_log_bayes_factor"] = weighted_log_bf
+        stream_audit_columns.update(
+            {
+                f"gui_{stream_id}_non_neutral": non_neutral,
+                f"gui_{stream_id}_factor": values,
+                f"gui_{stream_id}_source_bayes_factor": source_bayes_factors,
+                f"gui_{stream_id}_bayes_factor": bayes_factors,
+                f"gui_{stream_id}_weighted_log_bayes_factor": weighted_log_bf,
+                f"gui_{stream_id}_negative_evidence_eligible": eligible,
+                f"gui_{stream_id}_observed": observed,
+                f"gui_{stream_id}_unobserved_penalty_applied": penalty_applied,
+            }
+        )
         active_streams.append(
             {
                 "id": stream_id,
@@ -667,8 +834,23 @@ def select_nodes(
                 "dependence_group": definition.get("dependence_group"),
                 "non_neutral_candidates": int(non_neutral.sum()),
                 "positive_support_candidates": int(positive_support.sum()),
+                "negative_evidence_eligible_candidates": int(eligible.sum()),
+                "observed_eligible_candidates": int(observed.sum()),
+                "unobserved_eligible_candidates": int(unobserved_eligible.sum()),
+                "unobserved_penalties_applied": int(penalty_applied.sum()),
+                "unobserved_bayes_factor": (
+                    unobserved_bayes_factor if penalize_unobserved else None
+                ),
+                "negative_evidence_scope": node_stream_negative_evidence_policy(
+                    definition
+                ),
                 "source_neutral_value": neutral_value,
             }
+        )
+    if stream_audit_columns:
+        factors = pd.concat(
+            [factors, pd.DataFrame(stream_audit_columns, index=factors.index)],
+            axis=1,
         )
     posterior = stable_expit(log_odds)
     selected_probability = posterior > output_cutoff
@@ -772,6 +954,12 @@ def select_nodes(
         "active_streams": active_streams,
         "node_prior_probability": prior_probability,
         "node_output_probability_cutoff": output_cutoff,
+        "penalize_unobserved": penalize_unobserved,
+        "unobserved_bayes_factor": unobserved_bayes_factor,
+        "total_unobserved_penalties_applied": int(
+            sum(stream["unobserved_penalties_applied"] for stream in active_streams)
+        ),
+        "candidates_below_prior": int((posterior < prior_probability).sum()),
         "posterior_minimum": float(posterior.min()),
         "posterior_mean": float(posterior.mean()),
         "posterior_maximum": float(posterior.max()),
@@ -788,7 +976,9 @@ def select_nodes(
             "Each protein is an independent present-versus-absent hypothesis. Every "
             "protein begins at the configured Bernoulli prior (default 0.5). Source "
             "scores are divided by their neutral values to obtain BF=1 at neutrality; "
-            "weighted Bayes factors multiply prior odds. A protein is selected when "
+            "weighted Bayes factors multiply prior odds. When the optional missing-data "
+            "penalty is enabled, each eligible nondetection receives the configured "
+            "BF<1; out-of-scope nodes remain at BF=1. A protein is selected when "
             "its posterior is strictly above the configured node cutoff (default 0.5). "
             "Posteriors are not normalized across proteins."
         ),
@@ -1849,6 +2039,10 @@ def run_workflow(
         path_edges = pd.DataFrame()
         eligibility = pd.DataFrame()
         path_summary: dict[str, Any] | None = None
+        temporal_path_rows = pd.DataFrame()
+        temporal_gene_rows = pd.DataFrame()
+        temporal_trend_rows = pd.DataFrame()
+        temporal_summary: dict[str, Any] | None = None
         if config["path"]["enabled"]:
             update("Ranking paths", 0.74)
             path_rows, path_edges, eligibility, path_summary = run_paths(
@@ -1862,6 +2056,82 @@ def run_workflow(
             if path_summary is not None:
                 path_summary["ontology_directionality"] = directionality_summary
 
+        if config["temporal_validation"]["enabled"]:
+            temporal_config = config["temporal_validation"]
+            if path_rows.empty:
+                temporal_summary = {
+                    "enabled": True,
+                    "executed": False,
+                    "reason": "No Bayesian paths were available for temporal validation.",
+                    "primary_bayesian_rank_changed": False,
+                }
+                warnings.append(
+                    "Temporal validation was enabled, but no supported Bayesian path "
+                    "was available to score."
+                )
+            else:
+                temporal_source = project / TEMPORAL_PHOSPHO_RELATIVE
+                update("Loading dDAVP temporal phosphoproteomics", 0.76)
+                temporal_sites = load_site_trajectories(
+                    temporal_source,
+                    progress=(
+                        lambda message, fraction: update(
+                            message, 0.76 + 0.04 * float(fraction)
+                        )
+                    ),
+                    cancel_check=lambda: (check_cancel() or False),
+                )
+                temporal_responses, temporal_trend = build_replicate_responses(
+                    temporal_sites,
+                    prior_df=temporal_config["prior_df"],
+                    alpha=temporal_config["alpha"],
+                    n_boot=temporal_config["monte_carlo_draws"],
+                    seed=temporal_config["random_seed"],
+                    p_adjust_method=temporal_config["p_adjust_method"],
+                    progress=(
+                        lambda message, fraction: update(
+                            message, 0.80 + 0.08 * float(fraction)
+                        )
+                    ),
+                    cancel_check=lambda: (check_cancel() or False),
+                )
+                update("Scoring temporal path order", 0.89)
+                temporal_path_rows = rank_paths_replicate(
+                    path_rows,
+                    temporal_responses,
+                    minimum_scored_nodes=temporal_config["minimum_scored_nodes"],
+                )
+                temporal_gene_rows = replicate_response_table(temporal_responses)
+                temporal_trend_rows = variance_trend_table(temporal_trend)
+                temporal_summary = {
+                    **temporal_validation_summary(
+                        temporal_path_rows,
+                        temporal_responses,
+                        site_count=len(temporal_sites),
+                        prior_df=temporal_config["prior_df"],
+                        alpha=temporal_config["alpha"],
+                        n_boot=temporal_config["monte_carlo_draws"],
+                        seed=temporal_config["random_seed"],
+                        p_adjust_method=temporal_config["p_adjust_method"],
+                        minimum_scored_nodes=temporal_config[
+                            "minimum_scored_nodes"
+                        ],
+                    ),
+                    "executed": True,
+                    "source_file": str(TEMPORAL_PHOSPHO_RELATIVE).replace("\\", "/"),
+                }
+                if temporal_summary["temporally_informative_path_count"] == 0:
+                    warnings.append(
+                        "Temporal validation found no path with enough significant, "
+                        "measured nodes for the configured temporal evidence rank."
+                    )
+                elif temporal_summary["temporally_informative_path_count"] < len(path_rows):
+                    warnings.append(
+                        "Temporal ordering is only interpretable for "
+                        f"{temporal_summary['temporally_informative_path_count']} of "
+                        f"{len(path_rows)} paths at the configured coverage gate."
+                    )
+
         update("Writing reproducible outputs", 0.92)
         config_path = output / "configuration.json"
         node_factors_path = output / "node_posteriors.tsv.gz"
@@ -1872,6 +2142,10 @@ def run_workflow(
         directionality_audit_path = output / "ontology_directionality_audit.tsv.gz"
         directionality_class_catalog_path = output / "ontology_class_pair_catalog.tsv"
         directionality_rules_path = output / "ontology_direction_rules.json"
+        temporal_paths_path = output / "ranked_paths_temporal.tsv"
+        temporal_genes_path = output / "temporal_gene_responses.tsv.gz"
+        temporal_trend_path = output / "temporal_variance_trend.tsv"
+        temporal_summary_path = output / "temporal_validation_summary.json"
         summary_path = output / "analysis_summary.json"
         check_cancel()
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -1940,6 +2214,36 @@ def run_workflow(
             path_edges.to_csv(path_edges_path, sep="\t", index=False, float_format="%.12g")
             eligibility.to_csv(eligibility_path, sep="\t", index=False)
             files.extend([paths_path, path_edges_path, eligibility_path])
+        if temporal_summary is not None:
+            check_cancel()
+            temporal_summary_path.write_text(
+                json.dumps(temporal_summary, indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+            files.append(temporal_summary_path)
+            if temporal_summary.get("executed"):
+                temporal_path_rows.to_csv(
+                    temporal_paths_path,
+                    sep="\t",
+                    index=False,
+                    float_format="%.12g",
+                )
+                temporal_gene_rows.to_csv(
+                    temporal_genes_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                    float_format="%.12g",
+                )
+                temporal_trend_rows.to_csv(
+                    temporal_trend_path,
+                    sep="\t",
+                    index=False,
+                    float_format="%.12g",
+                )
+                files.extend(
+                    [temporal_paths_path, temporal_genes_path, temporal_trend_path]
+                )
 
         summary = {
             "schema_version": 1,
@@ -1953,6 +2257,7 @@ def run_workflow(
                 "reported_supported_edge_count": int(len(supported)),
             },
             "path_finding": path_summary,
+            "temporal_validation": temporal_summary,
             "ontology_directionality": directionality_summary,
             "external_target": (
                 {
@@ -1979,8 +2284,29 @@ def run_workflow(
                 10,
             ),
             "top_paths": _records(
-                path_rows,
-                ["rank", "hop_count", "path_probability_product", "path_symbols"],
+                (
+                    temporal_path_rows
+                    if not temporal_path_rows.empty
+                    else path_rows
+                ),
+                [
+                    "rank",
+                    "hop_count",
+                    "path_probability_product",
+                    "path_symbols",
+                    *(
+                        [
+                            "temporal_n_scored",
+                            "temporal_kendall_tau_mean",
+                            "temporal_kendall_tau_low",
+                            "temporal_kendall_tau_high",
+                            "temporal_order_informative",
+                            "temporal_evidence_rank",
+                        ]
+                        if not temporal_path_rows.empty
+                        else []
+                    ),
+                ],
                 config["path"]["top_k"],
             )
             if not path_rows.empty
@@ -1990,6 +2316,7 @@ def run_workflow(
                 "edges": edge_summary["probability_distribution"],
             },
             "directionality": directionality_summary,
+            "temporal_validation": temporal_summary,
             "warnings": warnings,
             "files": [path.name for path in [*files, summary_path]],
         }

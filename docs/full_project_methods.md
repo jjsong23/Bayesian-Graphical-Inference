@@ -137,14 +137,58 @@ O_i^{\mathrm{new}}
 P_i^{\mathrm{new}}=\frac{O_i^{\mathrm{new}}}{1+O_i^{\mathrm{new}}}.
 $$
 
-Missing measurements receive \(BF=1\) rather than being interpreted as
-evidence that the protein is absent. Posterior probabilities are not divided
-by a sum over other proteins.
+In the reproducibility default, missing measurements receive \(BF=1\) rather
+than being interpreted as evidence that the protein is absent. Posterior
+probabilities are not divided by a sum over other proteins.
 
 The stored values between 0.5 and 1 are most precisely described as
 **Bayes-factor-like likelihood scores**. The revised integrator explicitly
 divides them by their neutral value before updating odds, so the operational
 Bayes factors are neutral at 1.
+
+### Optional negative evidence from nondetection
+
+The workbench additionally provides a deliberately simple, optional rule for
+using nondetection as evidence against node presence. When `penalize_unobserved`
+is enabled, an eligible candidate that is not observed in active stream \(j\)
+receives a user-configured nondetection Bayes factor \(B^-\), constrained to
+
+$$
+0 < B^- \leq 1.
+$$
+
+The default value is \(B^-=0.5\), representing two-to-one evidence against the
+presence hypothesis. The effective stream Bayes factor is
+
+$$
+BF_{ij}^{\mathrm{effective}}=
+\begin{cases}
+B^- & \text{if candidate }i\text{ is eligible but unobserved in stream }j,\\
+BF_{ij}^{\mathrm{source}} & \text{if it is observed},\\
+1 & \text{if stream }j\text{ cannot assess that candidate.}
+\end{cases}
+$$
+
+It then enters the same weighted odds update used by every other node and edge
+factor. From a 0.5 prior, one unweighted nondetection at \(B^-=0.5\) gives a
+posterior of \(1/3\); two give 0.20; three give approximately 0.111; and four
+give approximately 0.0588. Repeated nondetections therefore drive the posterior
+toward zero. An exact zero BF is intentionally prohibited because it would make
+the absence conclusion irreversible regardless of later positive evidence.
+
+Eligibility prevents absence from being inferred where the assay is
+conceptually inapplicable. All protein candidates are eligible for the protein,
+RNA, phosphoprotein-response, and segment-abundance streams. Only proteins with
+the `kinase` ontology class are eligible for kinase-activity nondetection;
+non-kinases remain neutral. Curated small-molecule second messengers are added
+after protein scoring and are not penalized by protein-assay nondetection.
+
+The option is disabled by default so historical node universes remain exactly
+reproducible. Each run records the option, \(B^-\), per-stream eligible and
+observed counts, every applied penalty, the original source BF, the effective
+BF, and the weighted log BF in its configuration, summary, and node audit
+table. Nondetection is not proof of biological absence; users should enable the
+rule only when they accept the assay-coverage assumption.
 
 ## 3. mpkCCD protein-abundance evidence
 
@@ -1515,7 +1559,95 @@ negative-effect interpretation in the catalog, but activation and inhibition
 do not yet affect path scoring. Directed OmniPath annotations are likewise not
 yet combined with this ontology-only layer.
 
-# Part VIII: Reproducibility and quality control
+# Part VIII: Temporal validation of ranked paths
+
+## 29. Scope and input
+
+Temporal validation was implemented as an optional post-path annotation. It did
+not contribute a node or edge Bayes factor and did not change the primary path
+rank. The GUI source was `data/phospho_data_original.xlsx`, a rat inner-medullary
+collecting-duct dDAVP/vehicle phosphoproteomic time course with raw sheets at 1,
+2, 5, and 15 minutes and three biological replicates. For each replicate, a
+log2 treated/control ratio was calculated only when both reporter intensities
+were positive. Missing measurements remained missing.
+
+Sheets were merged by UniProt accession and phosphosite position. Records with
+no usable gene symbol or protein identifier were excluded. Path-symbol matching
+was case-insensitive. The temporal layer did not perform a new rat-to-mouse
+orthology mapping and therefore retained that limitation explicitly.
+
+## 30. Replicate variance moderation and representative sites
+
+Raw replicate variance at a site/timepoint was stabilized toward an empirical
+intensity-dependent prior. Median variance was calculated in quantile bins of
+log10 median reporter intensity and linearly interpolated. With raw variance
+\(s^2\), \(n\) replicates, residual degrees of freedom \(d=n-1\), prior variance
+\(s_0^2(I)\), and configured prior degrees of freedom \(d_0\), the moderated
+variance was:
+
+\[
+\widetilde{s}^2 = \frac{d_0s_0^2(I)+ds^2}{d_0+d}.
+\]
+
+The moderated standard error was
+\(\sqrt{\widetilde{s}^2/n}\). A two-sided Student-t p-value used
+\(d_0+d\) degrees of freedom. Each gene was represented by the phosphosite with
+the largest peak moderated absolute t statistic across its timepoints.
+
+Because selecting among multiple sites and timepoints inflates an unadjusted
+minimum p-value, the GUI default used a within-gene Bonferroni correction:
+
+\[
+p_{adjusted}=\min(1,m_gp_{raw}),
+\]
+
+where \(m_g\) was the number of tested site/timepoint combinations for that
+gene. A gene entered path scoring when \(p_{adjusted}<\alpha\), with default
+\(\alpha=0.05\). An unadjusted option was retained only to reproduce the
+contributed prototype. The correction addresses the within-gene search but is
+not a study-wide path or gene false-discovery-rate procedure.
+
+## 31. Response-time uncertainty and path scores
+
+At each timepoint, response draws were sampled from a normal distribution with
+the observed mean and moderated standard error. For every draw, absolute LFC
+response time was calculated as:
+
+\[
+\tau=\frac{\sum_t t|x_t|}{\sum_t |x_t|}.
+\]
+
+The default used 2,000 draws and random seed 0. For every ordered pair of scored
+nodes \(i<j\), soft precedence was \(P(\tau_i<\tau_j)\). The path-level soft-
+precedence score averaged these probabilities. Draw-wise Kendall tau-a supplied
+a mean and 2.5/97.5 percentile interval. These were described as parametric
+Monte-Carlo uncertainty intervals, not as posterior credible intervals from a
+full longitudinal model.
+
+Paths with fewer than two significant measured nodes had no temporal order
+statistic. A separate `temporal_evidence_rank` was assigned only at or above the
+configured coverage threshold (default three scored nodes). That secondary rank
+used the lower Kendall bound, mean Kendall, soft precedence, and Bayesian path
+probability as successive sort keys. The original Bayesian row order and `rank`
+column were preserved.
+
+Temporal runs wrote `ranked_paths_temporal.tsv`,
+`temporal_gene_responses.tsv.gz`, `temporal_variance_trend.tsv`, and
+`temporal_validation_summary.json`. Detailed methods and limitations are in
+`docs/temporal_path_validation.md`.
+
+## 32. Initial temporal coverage
+
+The initial integration validation used the current ontology-directed default
+Prkaca-to-Aqp2 graph. It loaded 6,755 valid phosphosite trajectories and
+assigned representative trajectories to 2,661 genes; 237 genes passed the
+within-gene-corrected 0.05 gate. All 25 Bayesian paths and ranks were preserved.
+Seven paths had at least two scored nodes, but none reached the default three-
+node coverage threshold. Therefore no path received an interpretable temporal
+evidence rank. This was treated as insufficient temporal coverage rather than
+negative evidence against those paths.
+
+# Part IX: Reproducibility and quality control
 
 The project preserved:
 
@@ -1598,6 +1730,12 @@ For scientific accuracy:
   network or protein expression/localization streams. They were added by
   curated rule; 14 of the 20 now receive a separate STITCH protein–chemical
   association stream. The other six remain neutral for that stream.
+- Do not say temporal validation updated an edge Bayes factor, changed the
+  canonical Bayesian rank, or proved causal transmission. Unrankable paths had
+  insufficient significant measured nodes and were not treated as negative.
+- Do not call the temporal Kendall percentile range a fully Bayesian credible
+  interval. It is a conditional parametric Monte-Carlo interval under the
+  moderated normal approximation.
 
 # Key project artifacts
 
@@ -1619,6 +1757,10 @@ For scientific accuracy:
   `code/path_finding/ontology_direction_rules.json`
 - Initial ontology-direction validation summary:
   `results/gui_runs/ontology_directionality_validation_20260812/analysis_summary.json`
+- Temporal path-validation method:
+  `docs/temporal_path_validation.md`
+- Initial temporal integration summary:
+  `results/gui_runs/temporal_integration_validation_20260814_v3/temporal_validation_summary.json`
 - Configurable local analysis workbench:
   `gui/README.md`
 - Extensible evidence-stream registry:

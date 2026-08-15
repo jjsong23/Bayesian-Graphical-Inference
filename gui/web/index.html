@@ -32,6 +32,14 @@
               <input id="include-messengers" type="checkbox" />
               <span>Include curated second messengers</span>
             </label>
+            <label class="check-field span-two">
+              <input id="penalize-unobserved" type="checkbox" />
+              <span>Treat eligible nondetections as evidence against a node</span>
+            </label>
+            <label>
+              <span>Nondetection BF</span>
+              <input id="unobserved-bf" type="number" min="0.000001" max="1" step="any" inputmode="decimal" />
+            </label>
             <label>
               <span>Node prior</span>
               <input id="node-prior" type="number" min="0.000001" max="0.999999" step="any" inputmode="decimal" />
@@ -41,7 +49,7 @@
               <input id="node-cutoff" type="number" min="0" max="1" step="0.01" />
             </label>
           </div>
-          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source. The CCD/OMCD/IMCD streams are separately selectable, but the three streams within each assay share one experimental source; they are off in the generic default profile.</p>
+          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. The optional nondetection rule assigns one configurable BF below 1 whenever an enabled dataset could assess a protein but did not observe it. Repeated nondetections multiply the odds downward; out-of-scope nodes remain neutral (for example, non-kinases in the kinase-activity stream). A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source. The CCD/OMCD/IMCD streams are separately selectable, but the three streams within each assay share one experimental source; they are off in the generic default profile.</p>
         </section>
 
         <section class="stage" aria-labelledby="edge-title">
@@ -128,6 +136,52 @@
           </div>
         </section>
 
+        <section class="stage" aria-labelledby="temporal-title">
+          <div class="stage-heading path-heading">
+            <span class="stage-number">04</span>
+            <div>
+              <h2 id="temporal-title">Validate temporal order</h2>
+              <p>Compare proposed path order with the dDAVP phosphoproteomic time course.</p>
+            </div>
+            <label class="switch" title="Enable temporal path validation">
+              <input id="temporal-enabled" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+          <div id="temporal-controls">
+            <div class="parameter-grid">
+              <label>
+                <span>Variance prior df</span>
+                <input id="temporal-prior-df" type="number" min="0.1" max="1000" step="any" />
+              </label>
+              <label>
+                <span>Significance alpha</span>
+                <input id="temporal-alpha" type="number" min="0.000001" max="1" step="any" />
+              </label>
+              <label>
+                <span>Monte-Carlo draws</span>
+                <input id="temporal-draws" type="number" min="100" max="100000" step="100" />
+              </label>
+              <label>
+                <span>Minimum scored nodes</span>
+                <input id="temporal-min-scored" type="number" min="2" max="20" step="1" />
+              </label>
+              <label>
+                <span>Random seed</span>
+                <input id="temporal-seed" type="number" min="0" max="4294967295" step="1" />
+              </label>
+              <label>
+                <span>Peak-p correction</span>
+                <select id="temporal-p-adjust">
+                  <option value="within_gene_bonferroni">Within-gene Bonferroni</option>
+                  <option value="none">None (legacy reproduction)</option>
+                </select>
+              </label>
+            </div>
+            <p class="scientific-note temporal-note">This optional layer uses replicate log2(dDAVP/vehicle) trajectories at 1, 2, 5, and 15 minutes. It selects one phosphosite per gene by moderated signal-to-noise, propagates response-time uncertainty, and reports soft precedence plus a Monte-Carlo Kendall interval. The default multiple-testing correction accounts for searching across a gene's sites and timepoints. Temporal evidence never changes edge probabilities or the primary Bayesian path rank.</p>
+          </div>
+        </section>
+
         <div class="form-actions">
           <button id="reset-button" type="button" class="secondary-button">Reset</button>
           <button id="run-button" type="submit" class="primary-button" disabled>
@@ -204,10 +258,18 @@
             </div>
             <strong id="oriented-edge-percent">—</strong>
           </section>
+          <section id="temporal-result" class="temporal-result hidden" aria-labelledby="temporal-result-title">
+            <div>
+              <p class="eyebrow">Temporal path validation</p>
+              <h3 id="temporal-result-title"><strong id="temporal-informative-count">—</strong> paths have interpretable temporal order</h3>
+              <p id="temporal-result-detail"></p>
+            </div>
+            <strong id="temporal-passing-genes">—</strong>
+          </section>
           <div class="table-heading"><h3>Most likely paths</h3><span>Product score</span></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Rank</th><th>Route</th><th>Hops</th><th>Score</th></tr></thead>
+              <thead><tr><th>Rank</th><th>Route</th><th>Hops</th><th>Score</th><th class="temporal-column hidden">Temporal nodes</th><th class="temporal-column hidden">Temporal τ [95% interval]</th></tr></thead>
               <tbody id="paths-body"></tbody>
             </table>
           </div>
@@ -218,9 +280,10 @@
         </div>
 
         <div id="error-state" class="error-state hidden">
-          <p class="eyebrow">Run stopped</p>
-          <h2>Configuration needs attention</h2>
+          <p id="error-eyebrow" class="eyebrow">Run stopped</p>
+          <h2 id="error-title">Configuration needs attention</h2>
           <p id="error-message"></p>
+          <button id="reconnect-server" type="button" class="primary-button hidden">Reconnect to local server</button>
           <button id="dismiss-error" type="button" class="secondary-button">Return to settings</button>
         </div>
       </aside>

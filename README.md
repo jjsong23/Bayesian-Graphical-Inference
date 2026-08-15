@@ -1,12 +1,13 @@
 # Bayesian Graphical Inference of Renal Signaling
 
-This research codebase builds and explores a probabilistic signaling graph for renal principal cells. Bayesian node and edge inference first produces an undirected association graph; an auditable ontology layer can then partially orient supported edges for signal-propagation path searches. It combines heterogeneous evidence in three stages:
+This research codebase builds and explores a probabilistic signaling graph for renal principal cells. Bayesian node and edge inference first produces an undirected association graph; an auditable ontology layer can then partially orient supported edges for signal-propagation path searches. It combines heterogeneous evidence in four stages:
 
 1. **Node selection** estimates which candidate signaling participants are relevant to the biological system.
 2. **Edge characterization** estimates the probability that two selected nodes are associated.
 3. **Path inference** ranks plausible paths from a chosen signaling receptor or regulator to a target protein.
+4. **Temporal validation** optionally tests whether measured dDAVP phosphoproteomic response times are consistent with the proposed path order.
 
-The current local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, ontology-based partial directionality and path constraints, external-target insertion, and auditable ranked paths.
+The current local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, an optional scope-aware nondetection Bayes factor below 1 for node selection, ontology-based partial directionality and path constraints, external-target insertion, auditable ranked paths, and optional uncertainty-aware temporal annotations. Temporal validation preserves the primary Bayesian path rank and is disabled by default.
 
 For the lab-specific Aqp2 analysis, node selection additionally exposes rat
 proteome and mouse RNA abundance for CCD, OMCD, and IMCD as six separate
@@ -27,10 +28,12 @@ Python 3.10 or newer is recommended.
 
 ```powershell
 python -m pip install -r requirements.txt
-.\gui\run_workbench.ps1
+.\gui\run_workbench.ps1 -Background
 ```
 
 The workbench binds to `127.0.0.1` and opens at `http://127.0.0.1:8765/`.
+Omit `-Background` when you prefer a foreground server that stops with
+Ctrl+C or when its PowerShell window closes.
 
 ## Main directories
 

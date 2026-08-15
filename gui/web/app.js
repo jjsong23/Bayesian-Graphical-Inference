@@ -13,6 +13,7 @@ function svgElement(name, attributes = {}, text = "") {
 }
 
 function formatProbability(value) {
+  if (value === null || value === undefined || value === "") return "—";
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
   return number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
@@ -77,17 +78,18 @@ function renderProbabilityDistribution(kind, distribution) {
   svg.appendChild(svgElement("text", { x: margin.left - 9, y: margin.top + plotHeight + 4, class: "chart-label", "text-anchor": "end" }, "0"));
 
   const statItems = [
-    ["At prior", distribution.at_exact_prior_count],
-    ["Above cutoff", distribution.above_output_cutoff_count],
-    ["Mean", formatProbability(distribution.mean)],
-    ["Range", `${formatProbability(distribution.minimum)}–${formatProbability(distribution.maximum)}`],
+    ["Below prior", distribution.below_prior_count, true],
+    ["At prior", distribution.at_exact_prior_count, true],
+    ["Above cutoff", distribution.above_output_cutoff_count, true],
+    ["Mean", formatProbability(distribution.mean), false],
+    ["Range", `${formatProbability(distribution.minimum)}–${formatProbability(distribution.maximum)}`, false],
   ];
-  statItems.forEach(([label, value], index) => {
+  statItems.forEach(([label, value, isCount]) => {
     const wrapper = document.createElement("div");
     const term = document.createElement("dt");
     const detail = document.createElement("dd");
     term.textContent = label;
-    detail.textContent = index < 2 ? formatInt(value) : value;
+    detail.textContent = isCount ? formatInt(value) : value;
     wrapper.append(term, detail);
     stats.appendChild(wrapper);
   });
@@ -183,6 +185,9 @@ function populateControls() {
   renderStreams("edge");
   const node = state.defaults.node_integration;
   $("include-messengers").checked = node.include_second_messengers;
+  $("penalize-unobserved").checked = node.penalize_unobserved;
+  $("unobserved-bf").value = node.unobserved_bayes_factor;
+  $("unobserved-bf").disabled = !node.penalize_unobserved;
   $("node-prior").value = node.prior_probability;
   $("node-cutoff").value = node.output_probability_cutoff;
   const edge = state.defaults.edge_integration;
@@ -199,6 +204,14 @@ function populateControls() {
   $("signal-only").checked = path.signaling_intermediates_only;
   $("exclude-multirole-scaffolds").checked = path.exclude_multirole_scaffolds;
   renderPathOntologyClasses(path);
+  const temporal = state.defaults.temporal_validation;
+  $("temporal-enabled").checked = temporal.enabled;
+  $("temporal-prior-df").value = temporal.prior_df;
+  $("temporal-alpha").value = temporal.alpha;
+  $("temporal-draws").value = temporal.monte_carlo_draws;
+  $("temporal-seed").value = temporal.random_seed;
+  $("temporal-p-adjust").value = temporal.p_adjust_method;
+  $("temporal-min-scored").value = temporal.minimum_scored_nodes;
   setPathControls(path.enabled);
 }
 
@@ -224,6 +237,8 @@ function collectConfiguration() {
     node_streams: collectStreams("node"),
     node_integration: {
       include_second_messengers: $("include-messengers").checked,
+      penalize_unobserved: $("penalize-unobserved").checked,
+      unobserved_bayes_factor: Number($("unobserved-bf").value),
       prior_probability: Number($("node-prior").value),
       output_probability_cutoff: Number($("node-cutoff").value),
     },
@@ -246,6 +261,15 @@ function collectConfiguration() {
         document.querySelectorAll(".path-ontology-class:checked")
       ).map((input) => input.value),
     },
+    temporal_validation: {
+      enabled: $("temporal-enabled").checked,
+      prior_df: Number($("temporal-prior-df").value),
+      alpha: Number($("temporal-alpha").value),
+      monte_carlo_draws: Number($("temporal-draws").value),
+      random_seed: Number($("temporal-seed").value),
+      p_adjust_method: $("temporal-p-adjust").value,
+      minimum_scored_nodes: Number($("temporal-min-scored").value),
+    },
   };
 }
 
@@ -253,6 +277,7 @@ function setPathControls(enabled) {
   $("path-controls").querySelectorAll("input, button").forEach((control) => { control.disabled = !enabled; });
   $("path-controls").style.opacity = enabled ? "1" : ".45";
   setOntologyControls(enabled);
+  setTemporalControls(enabled);
 }
 
 function setOntologyControls(pathEnabled) {
@@ -263,9 +288,35 @@ function setOntologyControls(pathEnabled) {
   $("ontology-selector").classList.toggle("inactive", !enabled);
 }
 
+function setTemporalControls(pathEnabled) {
+  const toggle = $("temporal-enabled");
+  toggle.disabled = !pathEnabled;
+  if (!pathEnabled) toggle.checked = false;
+  const enabled = pathEnabled && toggle.checked;
+  $("temporal-controls").querySelectorAll("input, select").forEach((control) => {
+    control.disabled = !enabled;
+  });
+  $("temporal-controls").classList.toggle("inactive", !enabled);
+}
+
 function showPanel(name) {
   ["empty-state", "job-state", "result-state", "error-state"].forEach((id) => $(id).classList.add("hidden"));
   $(name).classList.remove("hidden");
+}
+
+function showWorkflowError(error, fallbackMessage = "The analysis could not be completed.") {
+  const rawMessage = String(error?.message || error || fallbackMessage);
+  const disconnected = error instanceof TypeError
+    || /failed to fetch|networkerror|load failed|network request failed/i.test(rawMessage);
+  $("error-eyebrow").textContent = disconnected ? "Local connection lost" : "Run stopped";
+  $("error-title").textContent = disconnected
+    ? "Local analysis server is not running"
+    : "Configuration needs attention";
+  $("error-message").textContent = disconnected
+    ? "The browser interface is still open, but its Python backend is unavailable. Start the workbench server, then reconnect. Your saved project data are unaffected."
+    : rawMessage;
+  $("reconnect-server").classList.toggle("hidden", !disconnected);
+  showPanel("error-state");
 }
 
 function updateJob(job) {
@@ -299,14 +350,28 @@ function renderResult(job) {
     $("oriented-edge-percent").textContent = `${percent.toFixed(1)}%`;
     $("directionality-result-detail").textContent = `${formatInt(directionality.retained_unique_edge_count)} edges above the output cutoff; ${formatInt(directionality.unresolved_no_matching_rule_count)} had no matching rule and ${formatInt(directionality.unresolved_conflicting_rules_count)} had conflicting multi-role rules.`;
   }
+  const temporal = preview.temporal_validation;
+  const temporalExecuted = Boolean(temporal?.executed);
+  $("temporal-result").classList.toggle("hidden", !temporalExecuted);
+  document.querySelectorAll(".temporal-column").forEach((column) => {
+    column.classList.toggle("hidden", !temporalExecuted);
+  });
+  if (temporalExecuted) {
+    $("temporal-informative-count").textContent = formatInt(temporal.temporally_informative_path_count);
+    $("temporal-passing-genes").textContent = `${formatInt(temporal.genes_passing_gate)} genes pass`;
+    $("temporal-result-detail").textContent = `${formatInt(temporal.measured_gene_count)} genes measured; ${formatInt(temporal.paths_with_at_least_two_scored_nodes)} paths had at least two scored nodes. Peak p adjustment: ${String(temporal.p_adjust_method).replaceAll("_", " ")}. Primary Bayesian ranks were preserved.`;
+  }
   const body = $("paths-body");
   body.innerHTML = "";
   if (!preview.top_paths.length) {
-    body.innerHTML = `<tr><td colspan="4" class="muted">Path finding was disabled or no supported route was found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${temporalExecuted ? 6 : 4}" class="muted">Path finding was disabled or no supported route was found.</td></tr>`;
   } else {
     preview.top_paths.forEach((path) => {
       const row = document.createElement("tr");
-      row.innerHTML = `<td>${path.rank}</td><td class="route">${path.path_symbols}</td><td>${path.hop_count}</td><td class="score">${formatScore(path.path_probability_product)}</td>`;
+      const temporalCells = temporalExecuted
+        ? `<td>${formatInt(path.temporal_n_scored)}</td><td class="score">${formatProbability(path.temporal_kendall_tau_mean)} [${formatProbability(path.temporal_kendall_tau_low)}, ${formatProbability(path.temporal_kendall_tau_high)}]</td>`
+        : "";
+      row.innerHTML = `<td>${path.rank}</td><td class="route">${path.path_symbols}</td><td>${path.hop_count}</td><td class="score">${formatScore(path.path_probability_product)}</td>${temporalCells}`;
       body.appendChild(row);
     });
   }
@@ -342,8 +407,7 @@ async function pollJob() {
       state.pollTimer = null;
       $("run-button").disabled = false;
       $("cancel-job-button").disabled = true;
-      $("error-message").textContent = job.error || "The analysis could not be completed.";
-      showPanel("error-state");
+      showWorkflowError(job.error || "The analysis could not be completed.");
     } else if (job.status === "cancelled") {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
@@ -355,8 +419,7 @@ async function pollJob() {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
     $("run-button").disabled = false;
-    $("error-message").textContent = error.message;
-    showPanel("error-state");
+    showWorkflowError(error);
   }
 }
 
@@ -373,8 +436,7 @@ async function cancelRun() {
   } catch (error) {
     button.disabled = false;
     button.textContent = "Cancel analysis";
-    $("error-message").textContent = error.message;
-    showPanel("error-state");
+    showWorkflowError(error);
   }
 }
 
@@ -421,8 +483,7 @@ async function startRun(event) {
       // Preserve the original submission error when recovery is unavailable.
     }
     $("run-button").disabled = false;
-    $("error-message").textContent = error.message;
-    showPanel("error-state");
+    showWorkflowError(error);
   }
 }
 
@@ -446,8 +507,7 @@ async function initialize() {
       $("run-button").disabled = false;
     }
   } catch (error) {
-    $("error-message").textContent = error.message;
-    showPanel("error-state");
+    showWorkflowError(error);
   }
 }
 
@@ -455,7 +515,11 @@ $("workflow-form").addEventListener("submit", startRun);
 $("cancel-job-button").addEventListener("click", cancelRun);
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));
+$("temporal-enabled").addEventListener("change", () => setTemporalControls($("path-enabled").checked));
 $("signal-only").addEventListener("change", () => setOntologyControls($("path-enabled").checked));
+$("penalize-unobserved").addEventListener("change", (event) => {
+  $("unobserved-bf").disabled = !event.target.checked;
+});
 $("ontology-all").addEventListener("click", () => {
   document.querySelectorAll(".path-ontology-class").forEach((input) => { input.checked = true; });
 });
@@ -463,4 +527,5 @@ $("ontology-none").addEventListener("click", () => {
   document.querySelectorAll(".path-ontology-class").forEach((input) => { input.checked = false; });
 });
 $("dismiss-error").addEventListener("click", () => showPanel("empty-state"));
+$("reconnect-server").addEventListener("click", () => window.location.reload());
 initialize();

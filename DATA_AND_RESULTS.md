@@ -19,6 +19,7 @@ The archive is a point-in-time research record. Do not overwrite an older archiv
 - `data/edge_characterization/`: edge evidence, raw-source downloads, compatibility tables, factor catalogs, and the incremental unordered-pair cache.
 - `data/colocalization/`: localization profiles and scientist-reviewable compartment compatibility matrices.
 - `data/experimental_ppi/`: STRING/BioGRID/IntAct-derived prior-support resources and evidence tiers.
+- `data/phospho_data_original.xlsx`: raw 1/2/5/15-minute dDAVP/vehicle replicate phosphoproteomics used only by the optional temporal path-validation stage.
 - `results/`: versioned node, edge, colocalization, AlphaFold-candidate, path, and GUI-run outputs.
 - `outputs/`: auxiliary generated output files.
 
@@ -30,5 +31,4 @@ This file is an inventory, not a redistribution license. Before public sharing, 
 
 ## Reproducibility convention
 
-Each GUI run creates a new directory under `results/gui_runs/` with its configuration, node posterior table, selected universe, edge matrix, supported edge list, path tables, eligibility audit, and summary. Treat these directories as immutable records. The SQLite edge cache stores raw pair-level observations for reuse; changes to weights or normalization settings rescore cached observations without recomputing unchanged source lookups.
-
+Each GUI run creates a new directory under `results/gui_runs/` with its configuration, node posterior table, selected universe, edge matrix, supported edge list, path tables, eligibility audit, and summary. Temporal runs additionally write the annotated path table, gene-level response audit, intensity–variance trend, and temporal summary. Treat these directories as immutable records. The SQLite edge cache stores raw pair-level observations for reuse; changes to weights or normalization settings rescore cached observations without recomputing unchanged source lookups.

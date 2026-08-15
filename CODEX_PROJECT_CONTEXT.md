@@ -35,7 +35,7 @@ validated 891-node baseline.
 ## Bayesian conventions
 
 - Node and edge evidence are represented as positive Bayes factors (BFs).
-- Missing or inapplicable evidence is neutral: `BF = 1`. It is not evidence against a node or edge.
+- Missing node evidence is neutral by default. The GUI also exposes an optional scope-aware nondetection rule: an eligible but unobserved node receives one configurable `BF < 1` per enabled stream (default penalty BF 0.5), while an inapplicable node remains at `BF = 1`. Missing sparse edge evidence remains neutral.
 - For a probability prior `p`, integration is performed in odds space: `posterior_odds = prior_odds * product(BF_i ** weight_i)`, then converted back to probability.
 - The common continuous-evidence transformation uses a source-specific threshold `T_q`. The GUI permits independent normalization multipliers for each applicable dataset.
 - STRING and STITCH instead use score odds relative to configurable reference scores, not the Gaussian-complement threshold kernel.
@@ -63,9 +63,11 @@ each protein's prior odds independently. A protein is selected when its
 posterior is strictly greater than the configured node cutoff, which defaults
 to 0.5. There is no across-protein sum-to-one normalization.
 
-Non-kinases remain neutral under kinase-activity evidence. Proteins with no detected phosphosite remain neutral under phosphoprotein evidence. Curated secondary messengers are inserted separately because they are not gene products measured by the protein/RNA screens.
+The optional `penalize_unobserved` node policy is disabled in the reproducibility default. When enabled, the engine replaces the neutral BF for each eligible nondetection with `unobserved_bayes_factor` (default 0.5) before applying the stream weight. Repeated nondetection BFs multiply the node's odds downward. Eligibility is stream-specific: non-kinases always remain neutral under kinase-activity evidence, whereas protein, RNA, phosphoprotein-response, and collecting-duct abundance streams treat all protein candidates as eligible. The engine writes eligible, observed, penalty-applied, source-BF, effective-BF, and weighted-log-BF audit columns for every active node stream. A strictly positive BF is required; posteriors can approach zero but are not made irreversibly equal to zero.
 
-For the six collecting-duct streams, zero is nondetection and receives BF=1;
+With the option disabled, proteins with no detected phosphosite remain neutral under phosphoprotein evidence. Curated secondary messengers are inserted separately because they are not gene products measured by the protein/RNA screens and are never subjected to protein nondetection penalties.
+
+For the six collecting-duct streams, zero is a nondetection and receives BF=1 when the optional penalty is off, or the configured nondetection BF when it is on;
 each q75 uses all positive finite source values in that assay segment before
 candidate filtering. Rat mapping uses UniProt first and rat-symbol fallback,
 prefers high-confidence orthologs, flags low-confidence fallbacks, retains valid
@@ -115,15 +117,28 @@ Validation output: `results/gui_runs/scaffold_binary_closure_validation_20260804
 
 Path intermediates are controlled by ontology-derived role classes in the GUI. The sensitivity-oriented interface exposes all current role labels and lets the user select which may propagate signals. Multi-role kinase/scaffold proteins remain eligible whenever they match any selected relay role. The separate strict scaffold override excludes every scaffold-tagged intermediate and should remain optional. Start and target nodes are endpoint exemptions.
 
+## Optional temporal path validation
+
+`code/path_finding/temporal_path_ranking.py` annotates each current ranked path with response-order evidence from the raw 1/2/5/15-minute dDAVP phosphoproteomic workbook at `data/phospho_data_original.xlsx`. Replicate mode uses intensity-moderated site/timepoint variances, selects one site per gene by peak moderated signal-to-noise, applies a within-gene Bonferroni correction by default, and propagates response-time uncertainty with Monte-Carlo draws. The GUI exposes the prior df, alpha, draw count, seed, p-adjustment method, and minimum measured-node coverage. This layer is disabled by default.
+
+Temporal validation is post-path annotation, not another edge Bayes factor. It never changes the symmetric edge-existence matrix, ontology directionality, path probabilities, or primary Bayesian rank. It writes `ranked_paths_temporal.tsv`, a gene-level response audit, the empirical intensity–variance trend, and a dedicated JSON summary. Paths with insufficient measured nodes remain temporally unrankable; that is missing temporal information, not evidence that the path is absent. Detailed methods and reporting cautions are in `docs/temporal_path_validation.md`. `code/path_finding/temporal_sensitivity.py` audits dependence on variance prior df and alpha.
+
 ## Workbench entry points
 
 - Start: `gui/run_workbench.ps1`
+- Detached start: `gui/run_workbench.ps1 -Background`
+- Detached launcher: `gui/launch_workbench.py`
 - Server: `gui/server.py`
 - Main workflow: `gui/workflow_engine.py`
 - Evidence metadata: `gui/evidence_registry.json`
 - Browser client: `gui/web/`
 - Bayesian primitives: `code/bayes_factors.py`
 - Incremental edge cache: `code/edge_characterization/incremental_edge_cache.py`
+
+Use the detached start when the backend must survive its launching terminal or
+Codex execution session. It performs an `/api/config` health check, records
+`gui/.workbench.pid`, and reuses an already healthy listener. A visible browser
+tab alone does not mean the Python backend is still running.
 
 The registry drives the cards and generic factor combination. A genuinely new raw-data transformation still needs a dedicated, audited preprocessing module that emits the standard factor-table shape.
 
@@ -156,3 +171,4 @@ The full data/results tree is not stored in GitHub. Restore it from the dated co
 - A database association can represent functional linkage or co-complex support rather than direct physical binding.
 - Preserve raw score, mapping, direction/sign, threshold, and source columns in audits even when the active graph simplifies them.
 - Do not silently change node identifiers, species mappings, zero handling, threshold backgrounds, neutral defaults, edge directionality, or path eligibility semantics.
+- Do not describe temporal validation as updating a Bayes factor or as re-ranking the canonical path table. Its `temporal_evidence_rank` is separate, and the primary Bayesian `rank` is preserved.
