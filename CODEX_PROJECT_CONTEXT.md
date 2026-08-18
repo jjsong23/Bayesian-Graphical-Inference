@@ -174,3 +174,18 @@ The full data/results tree is not stored in GitHub. Restore it from the dated co
 - Preserve raw score, mapping, direction/sign, threshold, and source columns in audits even when the active graph simplifies them.
 - Do not silently change node identifiers, species mappings, zero handling, threshold backgrounds, neutral defaults, edge directionality, or path eligibility semantics.
 - Do not describe temporal validation as updating a Bayes factor or as re-ranking the canonical path table. Its `temporal_evidence_rank` is separate, and the primary Bayesian `rank` is preserved.
+
+## Optional positive-control parameter calibration (2026-08-17)
+
+The GUI now has a disabled-by-default stage 00 that fits node weights/Tq scales
+and edge weights/Tq scales independently to user-supplied known-present controls.
+Unknown nodes and pairs are unlabeled, not negatives. The objective is mean
+positive-control negative log probability plus one standardized quadratic
+regularizer. It uses deterministic bounded multi-start SciPy Powell; weights are
+bounded 0–3, ordinary Tq/reference multipliers 0.25–4, and phosphoproteomic
+multipliers 0.05–1. Preferred weights are 1; preferred multipliers are 1 except
+PKA-KO kinase activity, PKA-KO phosphoprotein response, and KinasePredictor,
+whose configurable default preference is 0.1. Derived scaffold closure is held
+fixed. Node fitting precedes node selection; edge fitting follows endpoint
+extension and incremental-pair caching. Read
+`docs/positive_control_parameter_calibration.md` before changing this logic.

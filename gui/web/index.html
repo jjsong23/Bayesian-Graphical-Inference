@@ -18,6 +18,45 @@
 
     <main class="workspace">
       <form id="workflow-form" class="configuration" aria-label="Workflow configuration">
+        <section class="stage" aria-labelledby="calibration-title">
+          <div class="stage-heading path-heading">
+            <span class="stage-number">00</span>
+            <div>
+              <h2 id="calibration-title">Calibrate evidence</h2>
+              <p>Fit conservative weights and Tq scales to known-present controls.</p>
+            </div>
+            <label class="switch" title="Enable positive-control calibration">
+              <input id="calibration-enabled" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+          <div id="calibration-controls">
+            <div class="calibration-target-grid">
+              <label>
+                <span>Known nodes</span>
+                <textarea id="calibration-known-nodes" rows="5" placeholder="Prkaca&#10;Pde4d"></textarea>
+                <small>One modeled signaling gene symbol per line.</small>
+              </label>
+              <label>
+                <span>Known undirected edges</span>
+                <textarea id="calibration-known-edges" rows="5" placeholder="Prkaca,Aqp2&#10;Calm1,Pde4d"></textarea>
+                <small>One pair per line, separated by a comma or tab.</small>
+              </label>
+            </div>
+            <div class="parameter-grid">
+              <label>
+                <span>Regularization λ</span>
+                <input id="calibration-lambda" type="number" min="0" max="100" step="any" inputmode="decimal" />
+              </label>
+              <label>
+                <span>Phosphoproteomic preferred Tq ×</span>
+                <input id="calibration-phospho-tq" type="number" min="0.05" max="1" step="any" inputmode="decimal" />
+              </label>
+            </div>
+            <p class="scientific-note calibration-note">Known nodes and edges are positive controls, not a complete truth set: unknown hypotheses are not called absent. Node settings are fitted first; node selection is rerun with them; edge settings are then fitted independently on the resulting graph. One quadratic “rubber-band” penalty keeps weights near 1 and Tq/reference multipliers near their preferred values. Tq is optimized on a log scale. The phosphoproteomic preference defaults to 0.10 (never zero); derived scaffold closure remains fixed.</p>
+          </div>
+        </section>
+
         <section class="stage" aria-labelledby="node-title">
           <div class="stage-heading">
             <span class="stage-number">01</span>
@@ -233,6 +272,14 @@
             <div><strong id="metric-paths">—</strong><span>ranked paths</span></div>
           </div>
           <div id="warning-box" class="warning-box hidden"></div>
+          <section id="calibration-result" class="calibration-result hidden" aria-labelledby="calibration-result-title">
+            <div>
+              <p class="eyebrow">Positive-control calibration</p>
+              <h3 id="calibration-result-title">Fitted evidence confidence</h3>
+              <p id="calibration-result-detail"></p>
+            </div>
+            <strong id="calibration-result-score">—</strong>
+          </section>
           <section class="distribution-section" aria-labelledby="distribution-title">
             <div class="table-heading distribution-heading">
               <h3 id="distribution-title">Posterior probability distributions</h3>

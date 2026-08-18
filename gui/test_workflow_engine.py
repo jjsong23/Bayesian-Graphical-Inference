@@ -104,6 +104,17 @@ class WorkflowEngineTests(unittest.TestCase):
             config["edge_streams"]["scaffold_triadic_closure"]["parameters"],
             {"anchor_probability_cutoff": 0.9, "closure_likelihood": 0.9},
         )
+        self.assertEqual(
+            config["calibration"],
+            {
+                "enabled": False,
+                "known_nodes": [],
+                "known_edges": [],
+                "regularization_strength": 0.1,
+                "phosphoproteomic_preferred_tq_multiplier": 0.1,
+                "multistart_count": 2,
+            },
+        )
         self.assertFalse(config["node_integration"]["penalize_unobserved"])
         self.assertEqual(
             config["node_integration"]["unobserved_bayes_factor"], 0.5
@@ -162,6 +173,36 @@ class WorkflowEngineTests(unittest.TestCase):
             match = re.search(rf'<input id="{control}"[^>]*>', html)
             self.assertIsNotNone(match, control)
             self.assertIn('step="any"', match.group(0))
+
+    def test_gui_exposes_positive_control_parameter_calibration(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        for control in (
+            "calibration-enabled",
+            "calibration-known-nodes",
+            "calibration-known-edges",
+            "calibration-lambda",
+            "calibration-phospho-tq",
+            "calibration-result",
+        ):
+            self.assertIn(f'id="{control}"', html)
+        self.assertIn("calibration:", javascript)
+        self.assertIn("setCalibrationControls", javascript)
+        self.assertIn("preview.calibration", javascript)
+        self.assertIn("Unknown hypotheses were not treated as negatives", javascript)
+
+    def test_calibration_targets_are_normalized_without_negative_labels(self) -> None:
+        supplied = default_configuration(self.registry)
+        supplied["calibration"].update(
+            {
+                "enabled": True,
+                "known_nodes": ["Prkaca", "prkaca", " Pde4d "],
+                "known_edges": ["Prkaca,Aqp2", ["Aqp2", "Prkaca"]],
+            }
+        )
+        config = normalize_configuration(supplied, self.registry)
+        self.assertEqual(config["calibration"]["known_nodes"], ["Prkaca", "Pde4d"])
+        self.assertEqual(config["calibration"]["known_edges"], [["Prkaca", "Aqp2"]])
 
     def test_run_button_waits_for_configuration_initialization(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")

@@ -1090,6 +1090,74 @@ def incremental_factor_table(
         connection.close()
 
 
+def incremental_pair_factor_table(
+    project: Path,
+    handler: str,
+    multiplier: float,
+    pairs: list[tuple[str, str]],
+) -> pd.DataFrame:
+    """Rescore only named cached pairs, avoiding a full incremental-cache scan."""
+    signature, _ = evidence_signature(project)
+    connection = _connect(project)
+    select_sql = """
+        SELECT node_a, node_b, mpkccd_dot_product, mpkccd_tq_a, mpkccd_tq_b,
+               kinase_hits_json, string_score,
+               hpa_primary_similarity, hpa_primary_tq_a, hpa_primary_tq_b,
+               hpa_high_similarity, hpa_high_tq_a, hpa_high_tq_b,
+               omnipath_curation_effort, stitch_score
+        FROM pair_evidence
+        WHERE evidence_signature=? AND node_a=? AND node_b=?
+    """
+    output: list[tuple[str, str, float]] = []
+    try:
+        for left, right in dict.fromkeys(canonical_pair(*pair) for pair in pairs):
+            row = connection.execute(select_sql, (signature, left, right)).fetchone()
+            if row is None:
+                continue
+            factor = 1.0
+            if handler == "mpkccd_localization" and row[2] is not None and row[3] is not None and row[4] is not None:
+                factor = (
+                    _complement(float(row[2]), float(row[3]) * multiplier)
+                    + _complement(float(row[2]), float(row[4]) * multiplier)
+                ) / (2.0 * NEUTRAL)
+            elif handler == "kinase_predictor":
+                log_factor = 0.0
+                for hit in json.loads(row[5] or "[]"):
+                    likelihood = _complement(
+                        float(hit["raw_score"]), float(hit["site_tq"]) * multiplier
+                    )
+                    log_factor += math.log(likelihood / NEUTRAL)
+                factor = math.exp(min(log_factor, 700.0))
+            elif handler == "string_v12" and row[6] is not None:
+                factor = _odds_factor(float(row[6]), STRING_REFERENCE * multiplier)
+            elif handler == "hpa_primary" and row[7] is not None and row[8] is not None and row[9] is not None:
+                factor = (
+                    _complement(float(row[7]), float(row[8]) * multiplier)
+                    + _complement(float(row[7]), float(row[9]) * multiplier)
+                ) / (2.0 * NEUTRAL)
+            elif handler == "hpa_high_confidence" and row[10] is not None and row[11] is not None and row[12] is not None:
+                factor = (
+                    _complement(float(row[10]), float(row[11]) * multiplier)
+                    + _complement(float(row[10]), float(row[12]) * multiplier)
+                ) / (2.0 * NEUTRAL)
+            elif handler == "omnipath_core" and row[13] is not None:
+                support = 1.0 - math.exp(
+                    -0.5 * (float(row[13]) / (6.0 * multiplier)) ** 2
+                )
+                factor = (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
+            elif handler == "stitch_secondary_messenger" and row[14] is not None:
+                factor = _odds_factor(
+                    float(row[14]), STITCH_REFERENCE * multiplier, floor=True
+                )
+            if factor > 0 and math.isfinite(factor) and abs(factor - 1.0) > 1e-12:
+                output.append((row[0], row[1], factor))
+        return pd.DataFrame.from_records(
+            output, columns=["node_a", "node_b", "bayes_factor"]
+        )
+    finally:
+        connection.close()
+
+
 def incremental_node_scope_table(
     project: Path,
     graph_symbols: list[str],

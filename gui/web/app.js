@@ -183,6 +183,12 @@ function renderPathOntologyClasses(path) {
 function populateControls() {
   renderStreams("node");
   renderStreams("edge");
+  const calibration = state.defaults.calibration;
+  $("calibration-enabled").checked = calibration.enabled;
+  $("calibration-known-nodes").value = (calibration.known_nodes || []).join("\n");
+  $("calibration-known-edges").value = (calibration.known_edges || []).map((pair) => pair.join(",")).join("\n");
+  $("calibration-lambda").value = calibration.regularization_strength;
+  $("calibration-phospho-tq").value = calibration.phosphoproteomic_preferred_tq_multiplier;
   const node = state.defaults.node_integration;
   $("include-messengers").checked = node.include_second_messengers;
   $("penalize-unobserved").checked = node.penalize_unobserved;
@@ -215,6 +221,7 @@ function populateControls() {
   $("temporal-seed").value = temporal.random_seed;
   $("temporal-p-adjust").value = temporal.p_adjust_method;
   $("temporal-min-scored").value = temporal.minimum_scored_nodes;
+  setCalibrationControls(calibration.enabled);
   setPathControls(path.enabled);
 }
 
@@ -237,6 +244,14 @@ function collectStreams(group) {
 
 function collectConfiguration() {
   return {
+    calibration: {
+      enabled: $("calibration-enabled").checked,
+      known_nodes: $("calibration-known-nodes").value.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean),
+      known_edges: $("calibration-known-edges").value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+      regularization_strength: Number($("calibration-lambda").value),
+      phosphoproteomic_preferred_tq_multiplier: Number($("calibration-phospho-tq").value),
+      multistart_count: 2,
+    },
     node_streams: collectStreams("node"),
     node_integration: {
       include_second_messengers: $("include-messengers").checked,
@@ -276,6 +291,13 @@ function collectConfiguration() {
       minimum_scored_nodes: Number($("temporal-min-scored").value),
     },
   };
+}
+
+function setCalibrationControls(enabled) {
+  $("calibration-controls").querySelectorAll("input, textarea").forEach((control) => {
+    control.disabled = !enabled;
+  });
+  $("calibration-controls").classList.toggle("inactive", !enabled);
 }
 
 function setPathControls(enabled) {
@@ -347,6 +369,20 @@ function renderResult(job) {
   $("metric-paths").textContent = formatInt(preview.metrics.ranked_paths);
   renderProbabilityDistribution("node", preview.probability_distributions?.nodes);
   renderProbabilityDistribution("edge", preview.probability_distributions?.edges);
+  const calibration = preview.calibration;
+  $("calibration-result").classList.toggle("hidden", !calibration?.enabled);
+  if (calibration?.enabled) {
+    const fits = [calibration.node, calibration.edge].filter(Boolean);
+    const targetCount = fits.reduce((total, fit) => total + Number(fit.target_count || 0), 0);
+    const initialMean = fits.length
+      ? fits.reduce((total, fit) => total + Number(fit.initial_mean_target_probability || 0), 0) / fits.length
+      : 0;
+    const finalMean = fits.length
+      ? fits.reduce((total, fit) => total + Number(fit.final_mean_target_probability || 0), 0) / fits.length
+      : 0;
+    $("calibration-result-score").textContent = `${formatProbability(initialMean)} → ${formatProbability(finalMean)}`;
+    $("calibration-result-detail").textContent = `${formatInt(targetCount)} positive controls fitted in ${fits.length} independent stage${fits.length === 1 ? "" : "s"} using bounded SciPy Powell. Unknown hypotheses were not treated as negatives; derived scaffold closure was fixed.`;
+  }
   const directionality = preview.directionality?.edge_output_graph;
   $("directionality-result").classList.toggle("hidden", !directionality);
   if (directionality) {
@@ -519,6 +555,7 @@ async function initialize() {
 $("workflow-form").addEventListener("submit", startRun);
 $("cancel-job-button").addEventListener("click", cancelRun);
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
+$("calibration-enabled").addEventListener("change", (event) => setCalibrationControls(event.target.checked));
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));
 $("temporal-enabled").addEventListener("change", () => setTemporalControls($("path-enabled").checked));
 $("signal-only").addEventListener("change", () => setOntologyControls($("path-enabled").checked));

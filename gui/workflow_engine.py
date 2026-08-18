@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import gzip
+import copy
 import json
 import math
 import re
@@ -45,6 +46,7 @@ from find_ranked_paths import (  # noqa: E402
 from incremental_edge_cache import (  # noqa: E402
     ensure_incremental_pairs,
     incremental_factor_table,
+    incremental_pair_factor_table,
     incremental_node_scope_table,
 )
 from ontology_directionality import (  # noqa: E402
@@ -61,6 +63,9 @@ from temporal_path_ranking import (  # noqa: E402
     replicate_response_table,
     temporal_validation_summary,
     variance_trend_table,
+)
+from parameter_calibration import (  # noqa: E402
+    bounded_powell_positive_calibration,
 )
 
 
@@ -126,6 +131,14 @@ STRING_REFERENCE_SCORE = 0.041
 STITCH_REFERENCE_SCORE = 0.150
 NEUTRAL_LIKELIHOOD = 0.5
 FACTOR_EPSILON = 1e-12
+PHOSPHOPROTEOMIC_CALIBRATION_STREAMS = {
+    "kinase_activity",
+    "phosphoprotein_response",
+    "kinase_predictor",
+}
+CALIBRATION_WEIGHT_BOUNDS = (0.0, 3.0)
+CALIBRATION_TQ_BOUNDS = (0.25, 4.0)
+CALIBRATION_PHOSPHO_TQ_BOUNDS = (0.05, 1.0)
 
 
 @dataclass
@@ -199,6 +212,14 @@ def validate_registry(registry: dict[str, Any], project: Path) -> None:
 def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
     defaults = registry["defaults"]
     return {
+        "calibration": {
+            "enabled": False,
+            "known_nodes": [],
+            "known_edges": [],
+            "regularization_strength": 0.1,
+            "phosphoproteomic_preferred_tq_multiplier": 0.1,
+            "multistart_count": 2,
+        },
         "node_streams": {
             stream["id"]: {
                 "enabled": bool(stream["default_enabled"]),
@@ -346,6 +367,74 @@ def normalize_configuration(
     config["edge_integration"].update(supplied.get("edge_integration", {}))
     config["path"].update(supplied.get("path", {}))
     config["temporal_validation"].update(supplied.get("temporal_validation", {}))
+
+    calibration = config["calibration"]
+    calibration.update(supplied.get("calibration", {}))
+    calibration["enabled"] = bool(calibration["enabled"])
+    calibration["regularization_strength"] = _number(
+        calibration["regularization_strength"],
+        "calibration regularization strength",
+        0.0,
+        100.0,
+    )
+    calibration["phosphoproteomic_preferred_tq_multiplier"] = _number(
+        calibration["phosphoproteomic_preferred_tq_multiplier"],
+        "phosphoproteomic preferred Tq multiplier",
+        CALIBRATION_PHOSPHO_TQ_BOUNDS[0],
+        CALIBRATION_PHOSPHO_TQ_BOUNDS[1],
+    )
+    calibration["multistart_count"] = int(
+        _number(
+            calibration["multistart_count"],
+            "calibration multistart count",
+            1,
+            3,
+        )
+    )
+    raw_nodes = calibration.get("known_nodes", [])
+    if isinstance(raw_nodes, str):
+        raw_nodes = re.split(r"[\s,;]+", raw_nodes)
+    if not isinstance(raw_nodes, list):
+        raise ValueError("known calibration nodes must be a list")
+    normalized_nodes: list[str] = []
+    seen_nodes: set[str] = set()
+    for value in raw_nodes:
+        symbol = str(value).strip()
+        if symbol and symbol.casefold() not in seen_nodes:
+            normalized_nodes.append(symbol)
+            seen_nodes.add(symbol.casefold())
+    calibration["known_nodes"] = normalized_nodes
+    raw_edges = calibration.get("known_edges", [])
+    if isinstance(raw_edges, str):
+        raw_edges = [line for line in raw_edges.splitlines() if line.strip()]
+    if not isinstance(raw_edges, list):
+        raise ValueError("known calibration edges must be a list")
+    normalized_edges: list[list[str]] = []
+    seen_edges: set[tuple[str, str]] = set()
+    for item in raw_edges:
+        if isinstance(item, str):
+            fields = [field.strip() for field in re.split(r"[\t,;]+", item) if field.strip()]
+        elif isinstance(item, (list, tuple)):
+            fields = [str(field).strip() for field in item if str(field).strip()]
+        else:
+            raise ValueError("each known edge must be a two-node list or delimited line")
+        if len(fields) != 2:
+            raise ValueError(
+                "each known edge must contain exactly two nodes, for example Prkaca,Aqp2"
+            )
+        if fields[0].casefold() == fields[1].casefold():
+            raise ValueError("known calibration edges cannot be self-edges")
+        key = tuple(sorted((fields[0].casefold(), fields[1].casefold())))
+        if key not in seen_edges:
+            normalized_edges.append(fields)
+            seen_edges.add(key)
+    calibration["known_edges"] = normalized_edges
+    if calibration["enabled"] and not (
+        calibration["known_nodes"] or calibration["known_edges"]
+    ):
+        raise ValueError(
+            "calibration is enabled but no known nodes or known edges were supplied"
+        )
 
     node_integration = config["node_integration"]
     node_integration["include_second_messengers"] = bool(
@@ -1012,6 +1101,201 @@ def select_nodes(
     return factors, selected_rows, summary
 
 
+def _calibration_parameter_specs(
+    registry: dict[str, Any],
+    config: dict[str, Any],
+    group: str,
+) -> list[dict[str, Any]]:
+    """Describe bounded primary-stream weights and scale multipliers."""
+    definitions = {item["id"]: item for item in registry[group]}
+    specs: list[dict[str, Any]] = []
+    phospho_preference = float(
+        config["calibration"]["phosphoproteomic_preferred_tq_multiplier"]
+    )
+    for stream_id, state in config[group].items():
+        definition = definitions[stream_id]
+        if not state["enabled"] or definition.get("derived"):
+            continue
+        specs.append(
+            {
+                "key": f"{stream_id}:weight",
+                "stream_id": stream_id,
+                "parameter": "weight",
+                "current": float(state["weight"]),
+                "preferred": 1.0,
+                "bounds": CALIBRATION_WEIGHT_BOUNDS,
+                "scale": 0.5,
+                "transform": "linear",
+            }
+        )
+        if definition.get("normalization", {}).get("user_control", True):
+            phosphoproteomic = stream_id in PHOSPHOPROTEOMIC_CALIBRATION_STREAMS
+            specs.append(
+                {
+                    "key": f"{stream_id}:tq_multiplier",
+                    "stream_id": stream_id,
+                    "parameter": "tq_multiplier",
+                    "current": _stream_multiplier(state),
+                    "preferred": phospho_preference if phosphoproteomic else 1.0,
+                    "bounds": (
+                        CALIBRATION_PHOSPHO_TQ_BOUNDS
+                        if phosphoproteomic
+                        else CALIBRATION_TQ_BOUNDS
+                    ),
+                    "scale": math.log(2.0),
+                    "transform": "log",
+                }
+            )
+    return specs
+
+
+def _apply_calibrated_parameters(
+    config: dict[str, Any],
+    group: str,
+    parameter_rows: list[dict[str, Any]],
+) -> None:
+    for row in parameter_rows:
+        stream_id = str(row["stream_id"])
+        parameter = str(row["parameter"])
+        config[group][stream_id][parameter] = float(row["fitted"])
+
+
+def _prepare_node_calibration_context(
+    project: Path,
+    factors: pd.DataFrame,
+    definition: dict[str, Any],
+    target_indices: np.ndarray,
+) -> dict[str, np.ndarray]:
+    genes = factors["gene_symbol"].astype(str)
+    handler = definition["normalization"]["handler"]
+    values: np.ndarray
+    thresholds: np.ndarray
+    if handler == "protein_abundance":
+        raw = pd.read_csv(project / PROTEIN_RAW_RELATIVE, sep="\t")
+        values = _aligned_series(raw, "gene_symbol", "linear_relative_abundance", genes)
+        threshold = float(pd.to_numeric(raw["T_q"], errors="coerce").dropna().iloc[0])
+        thresholds = np.full(len(factors), threshold, dtype=float)
+    elif handler == "pc_transcript":
+        raw = pd.read_csv(project / PC_RAW_RELATIVE, sep="\t")
+        values = _aligned_series(raw, "gene_symbol", "pc_median_tpm", genes)
+        threshold = float(pd.to_numeric(raw["T_q"], errors="coerce").dropna().iloc[0])
+        thresholds = np.full(len(factors), threshold, dtype=float)
+    elif handler == "kinase_activity":
+        values = pd.to_numeric(factors["kinase_absolute_lfc"], errors="coerce").to_numpy(float)
+        thresholds = np.full(len(factors), 0.17, dtype=float)
+    elif handler == "phosphoprotein_response":
+        raw = pd.read_csv(project / PHOSPHOPROTEIN_RAW_RELATIVE, sep="\t")
+        values = _aligned_series(raw, "gene_symbol", "max_absolute_lfc", genes)
+        thresholds = _aligned_series(raw, "gene_symbol", "matched_T_q", genes)
+    elif handler == "collecting_duct_abundance":
+        values = pd.to_numeric(
+            factors[definition["raw_value_column"]], errors="coerce"
+        ).to_numpy(float)
+        tq_values = pd.to_numeric(
+            factors[definition["tq_column"]], errors="coerce"
+        ).dropna()
+        if tq_values.empty:
+            raise ValueError(f"node stream {definition['id']} has no stored Tq")
+        thresholds = np.full(len(factors), float(tq_values.iloc[0]), dtype=float)
+    else:
+        raise ValueError(f"unsupported node calibration handler: {handler}")
+    eligible, observed = node_stream_observation_masks(factors, definition)
+    return {
+        "values": values[target_indices],
+        "thresholds": thresholds[target_indices],
+        "eligible": eligible[target_indices],
+        "observed": observed[target_indices],
+    }
+
+
+def calibrate_node_parameters(
+    project: Path,
+    registry: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    progress: Callable[[str, float], None] | None = None,
+    check_cancel: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    """Fit node stream settings against supplied known-present candidates."""
+    requested = config["calibration"]["known_nodes"]
+    factors = load_node_factor_catalog(project, registry)
+    symbol_lookup = {
+        symbol.casefold(): (index, symbol)
+        for index, symbol in enumerate(factors["gene_symbol"].astype(str))
+    }
+    missing = [value for value in requested if value.casefold() not in symbol_lookup]
+    if missing:
+        raise ValueError(
+            "known calibration nodes are not modeled signaling candidates: "
+            + ", ".join(missing)
+        )
+    resolved = [symbol_lookup[value.casefold()][1] for value in requested]
+    target_indices = np.asarray(
+        [symbol_lookup[value.casefold()][0] for value in requested], dtype=int
+    )
+    definitions = {item["id"]: item for item in registry["node_streams"]}
+    contexts = {
+        stream_id: _prepare_node_calibration_context(
+            project, factors, definitions[stream_id], target_indices
+        )
+        for stream_id, state in config["node_streams"].items()
+        if state["enabled"]
+    }
+    specs = _calibration_parameter_specs(registry, config, "node_streams")
+    prior = float(config["node_integration"]["prior_probability"])
+    prior_log_odds = math.log(prior / (1.0 - prior))
+    penalize = bool(config["node_integration"]["penalize_unobserved"])
+    missing_factor = float(config["node_integration"]["unobserved_bayes_factor"])
+
+    def probabilities(settings: dict[str, float]) -> np.ndarray:
+        log_odds = np.full(len(target_indices), prior_log_odds, dtype=float)
+        for stream_id, context in contexts.items():
+            multiplier = settings[f"{stream_id}:tq_multiplier"]
+            weight = settings[f"{stream_id}:weight"]
+            bayes_factors = np.ones(len(target_indices), dtype=float)
+            observed = context["observed"].astype(bool)
+            calculable = (
+                observed
+                & np.isfinite(context["values"])
+                & np.isfinite(context["thresholds"])
+                & (context["thresholds"] > 0)
+            )
+            bayes_factors[calculable] = complement_minimum_likelihood(
+                context["values"][calculable],
+                context["thresholds"][calculable] * multiplier,
+            ) / NEUTRAL_LIKELIHOOD
+            if penalize:
+                bayes_factors[context["eligible"].astype(bool) & ~observed] = missing_factor
+            log_odds += weight * np.log(bayes_factors)
+        return stable_expit(log_odds)
+
+    summary, trace = bounded_powell_positive_calibration(
+        specs,
+        probabilities,
+        target_count=len(resolved),
+        regularization_strength=config["calibration"]["regularization_strength"],
+        multistart_count=config["calibration"]["multistart_count"],
+        progress=progress,
+        check_cancel=check_cancel,
+        stage_label="node evidence",
+    )
+    _apply_calibrated_parameters(config, "node_streams", summary["parameters"])
+    target_table = pd.DataFrame(
+        {
+            "requested_node": requested,
+            "resolved_symbol": resolved,
+            "initial_probability": summary.pop("initial_probabilities"),
+            "fitted_probability": summary.pop("final_probabilities"),
+        }
+    )
+    summary["known_nodes"] = resolved
+    summary["scope_note"] = (
+        "Only known-present node controls entered the fit loss. All other candidates "
+        "remained unlabeled and were evaluated only after fitting."
+    )
+    return summary, target_table, trace
+
+
 def resolve_target_for_graph(
     target: str,
     universe: pd.DataFrame,
@@ -1026,6 +1310,56 @@ def resolve_target_for_graph(
         "target_uniprot": str(entry["Entry"]),
         "target_protein_name": str(entry["Protein names"]),
     }
+
+
+def append_requested_graph_endpoint(
+    query: str,
+    graph_symbols: list[str],
+    graph_metadata: pd.DataFrame,
+    universe: pd.DataFrame,
+    node_factors: pd.DataFrame,
+    project: Path,
+    *,
+    reason: str,
+) -> tuple[str, pd.DataFrame, dict[str, Any] | None]:
+    """Resolve and append an endpoint needed by paths or calibration."""
+    selected_ci = {symbol.casefold(): symbol for symbol in graph_symbols}
+    if query.casefold() in selected_ci:
+        return selected_ci[query.casefold()], graph_metadata, None
+    universe_ci = {
+        symbol.casefold(): symbol for symbol in universe["symbol"].astype(str)
+    }
+    resolution: dict[str, Any] | None = None
+    if query.casefold() in universe_ci:
+        symbol = universe_ci[query.casefold()]
+        row = universe.loc[universe["symbol"].astype(str).eq(symbol)].iloc[0].to_dict()
+    else:
+        symbol, _, resolution = resolve_target_for_graph(query, universe, project)
+        candidate = node_factors.loc[
+            node_factors["gene_symbol"].astype(str).str.casefold().eq(symbol.casefold())
+        ]
+        row = {
+            "symbol": symbol,
+            "display_symbol": symbol,
+            "name": (
+                str(candidate.iloc[0]["node_name"])
+                if len(candidate)
+                else (resolution or {}).get("target_protein_name", "")
+            ),
+            "classes": (
+                str(candidate.iloc[0]["node_classes"])
+                if len(candidate)
+                else "external_target"
+            ),
+            "node_type": "protein",
+            "selected_uniprot": (resolution or {}).get("target_uniprot", ""),
+        }
+    row["gui_selection_reason"] = reason
+    graph_symbols.append(symbol)
+    graph_metadata = pd.concat(
+        [graph_metadata, pd.DataFrame([row])], ignore_index=True, sort=False
+    ).fillna("")
+    return symbol, graph_metadata, resolution
 
 
 def _read_aligned_matrix(
@@ -1445,6 +1779,181 @@ def edge_stream_eligibility_matrix(
         )
     np.fill_diagonal(eligible, False)
     return eligible
+
+
+def _canonical_undirected_pair(left: str, right: str) -> tuple[str, str]:
+    return tuple(sorted((str(left), str(right)), key=lambda value: (value.casefold(), value)))
+
+
+def _raw_seed_edge_factor_table(
+    project: Path,
+    definition: dict[str, Any],
+    symbols: list[str],
+    multiplier: float,
+) -> pd.DataFrame:
+    """Rescore a small set of seed endpoints without loading full BF catalogs."""
+    handler = definition["normalization"]["handler"]
+    if len(symbols) < 2:
+        return pd.DataFrame(columns=["node_a", "node_b", "bayes_factor"])
+    if handler == "mpkccd_localization":
+        return _localization_edge_factors(project, symbols, multiplier)
+    if handler == "kinase_predictor":
+        return _kinase_predictor_edge_factors(project, symbols, multiplier)
+    if handler == "string_v12":
+        return _string_edge_factors(project, symbols, multiplier)
+    if handler == "hpa_primary":
+        return _hpa_edge_factors(project, symbols, multiplier, high_confidence=False)
+    if handler == "hpa_high_confidence":
+        return _hpa_edge_factors(project, symbols, multiplier, high_confidence=True)
+    if handler == "omnipath_core":
+        return _omnipath_edge_factors(project, symbols, multiplier)
+    if handler == "stitch_secondary_messenger":
+        return _stitch_edge_factors(project, symbols, multiplier)
+    raise ValueError(f"unsupported edge calibration handler: {handler}")
+
+
+def calibrate_edge_parameters(
+    project: Path,
+    registry: dict[str, Any],
+    config: dict[str, Any],
+    graph_symbols: list[str],
+    graph_metadata: pd.DataFrame,
+    known_edges: list[tuple[str, str]],
+    *,
+    progress: Callable[[str, float], None] | None = None,
+    check_cancel: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    """Fit primary edge-stream settings against known undirected relationships."""
+    if not known_edges:
+        raise ValueError("edge calibration requires at least one known edge")
+    target_symbols = list(
+        dict.fromkeys(symbol for pair in known_edges for symbol in pair)
+    )
+    target_index = {symbol: index for index, symbol in enumerate(target_symbols)}
+    pair_keys = [_canonical_undirected_pair(*pair) for pair in known_edges]
+    seed_set = set(
+        pd.read_csv(project / UNIVERSE_RELATIVE, sep="\t", usecols=["symbol"])[
+            "symbol"
+        ].astype(str)
+    )
+    seed_targets = [symbol for symbol in target_symbols if symbol in seed_set]
+    incremental_targets = [
+        pair for pair in known_edges if pair[0] not in seed_set or pair[1] not in seed_set
+    ]
+    definitions = {item["id"]: item for item in registry["edge_streams"]}
+    active = {
+        stream_id: definitions[stream_id]
+        for stream_id, state in config["edge_streams"].items()
+        if state["enabled"] and not definitions[stream_id].get("derived")
+    }
+    metadata_subset = graph_metadata.loc[
+        graph_metadata["symbol"].astype(str).isin(target_symbols)
+    ].copy()
+    eligibility: dict[str, np.ndarray] = {}
+    for stream_id, definition in active.items():
+        matrix = edge_stream_eligibility_matrix(
+            project,
+            definition,
+            target_symbols,
+            graph_metadata=metadata_subset,
+        )
+        eligibility[stream_id] = np.asarray(
+            [
+                matrix[target_index[left], target_index[right]]
+                for left, right in known_edges
+            ],
+            dtype=bool,
+        )
+    factor_cache: dict[tuple[str, float], np.ndarray] = {}
+    penalize = bool(config["edge_integration"]["penalize_unsupported"])
+    unsupported_factor = float(
+        config["edge_integration"]["unsupported_bayes_factor"]
+    )
+
+    def stream_factors(stream_id: str, multiplier: float) -> np.ndarray:
+        cache_key = (stream_id, round(float(multiplier), 12))
+        cached = factor_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        definition = active[stream_id]
+        tables = [
+            _raw_seed_edge_factor_table(
+                project, definition, seed_targets, multiplier
+            )
+        ]
+        if incremental_targets:
+            tables.append(
+                incremental_pair_factor_table(
+                    project,
+                    definition["normalization"]["handler"],
+                    multiplier,
+                    incremental_targets,
+                )
+            )
+        lookup: dict[tuple[str, str], float] = {}
+        for table in tables:
+            for row in table.itertuples(index=False):
+                key = _canonical_undirected_pair(row.node_a, row.node_b)
+                factor = float(row.bayes_factor)
+                lookup[key] = lookup.get(key, 1.0) * factor
+        factors = np.ones(len(known_edges), dtype=float)
+        observed = np.zeros(len(known_edges), dtype=bool)
+        for index, key in enumerate(pair_keys):
+            if key in lookup:
+                factors[index] = lookup[key]
+                observed[index] = True
+        if penalize and definition.get("negative_evidence"):
+            factors[eligibility[stream_id] & ~observed] = unsupported_factor
+        if (~np.isfinite(factors) | (factors <= 0)).any():
+            raise ValueError(
+                f"edge calibration stream {stream_id} produced invalid factors"
+            )
+        factor_cache[cache_key] = factors
+        return factors
+
+    specs = _calibration_parameter_specs(registry, config, "edge_streams")
+    prior = float(config["edge_integration"]["prior_probability"])
+    prior_log_odds = math.log(prior / (1.0 - prior))
+
+    def probabilities(settings: dict[str, float]) -> np.ndarray:
+        log_odds = np.full(len(known_edges), prior_log_odds, dtype=float)
+        for stream_id in active:
+            multiplier = settings[f"{stream_id}:tq_multiplier"]
+            weight = settings[f"{stream_id}:weight"]
+            log_odds += weight * np.log(stream_factors(stream_id, multiplier))
+        return stable_expit(log_odds)
+
+    summary, trace = bounded_powell_positive_calibration(
+        specs,
+        probabilities,
+        target_count=len(known_edges),
+        regularization_strength=config["calibration"]["regularization_strength"],
+        multistart_count=config["calibration"]["multistart_count"],
+        progress=progress,
+        check_cancel=check_cancel,
+        stage_label="edge evidence",
+    )
+    _apply_calibrated_parameters(config, "edge_streams", summary["parameters"])
+    target_table = pd.DataFrame(
+        {
+            "node_a": [pair[0] for pair in known_edges],
+            "node_b": [pair[1] for pair in known_edges],
+            "initial_probability": summary.pop("initial_probabilities"),
+            "fitted_probability": summary.pop("final_probabilities"),
+        }
+    )
+    summary["known_edges"] = [list(pair) for pair in known_edges]
+    summary["derived_streams_excluded"] = [
+        stream_id
+        for stream_id, state in config["edge_streams"].items()
+        if state["enabled"] and definitions[stream_id].get("derived")
+    ]
+    summary["scope_note"] = (
+        "Only known-present undirected edge controls entered the fit loss. Unknown "
+        "pairs were unlabeled. Derived scaffold closure was held fixed and excluded "
+        "from optimization."
+    )
+    return summary, target_table, trace
 
 
 def scaffold_triadic_closure_factors(
@@ -2225,6 +2734,7 @@ def run_workflow(
     project = Path(project_root).resolve()
     registry = load_registry(project)
     config = normalize_configuration(supplied_configuration, registry)
+    submitted_config = copy.deepcopy(config)
     run_id = run_id or (
         datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
     )
@@ -2241,7 +2751,38 @@ def run_workflow(
             progress(message, fraction)
 
     try:
-        update("Selecting nodes", 0.08)
+        calibration_summary: dict[str, Any] | None = None
+        node_calibration_targets = pd.DataFrame()
+        node_calibration_trace = pd.DataFrame()
+        edge_calibration_targets = pd.DataFrame()
+        edge_calibration_trace = pd.DataFrame()
+        if config["calibration"]["enabled"]:
+            calibration_summary = {
+                "enabled": True,
+                "model": "positive-control target fitting with one quadratic regularizer",
+                "unknown_hypotheses_are_negative_labels": False,
+                "node": None,
+                "edge": None,
+            }
+            if config["calibration"]["known_nodes"]:
+                update("Preparing node calibration", 0.02)
+                (
+                    calibration_summary["node"],
+                    node_calibration_targets,
+                    node_calibration_trace,
+                ) = calibrate_node_parameters(
+                    project,
+                    registry,
+                    config,
+                    progress=(
+                        lambda message, fraction: update(
+                            message, 0.02 + 0.12 * float(fraction)
+                        )
+                    ),
+                    check_cancel=check_cancel,
+                )
+
+        update("Selecting nodes", 0.16 if calibration_summary else 0.08)
         node_factors, selected_nodes, node_summary = select_nodes(
             project, registry, config
         )
@@ -2255,47 +2796,82 @@ def run_workflow(
         graph_symbols = selected_symbols.copy()
         graph_metadata = selected_nodes.copy()
         if config["path"]["enabled"]:
-            selected_ci = {symbol.casefold(): symbol for symbol in selected_symbols}
-            target_key = config["path"]["target"].casefold()
-            if target_key in selected_ci:
-                target_symbol = selected_ci[target_key]
-            else:
-                target_symbol, target_external, target_resolution = resolve_target_for_graph(
-                    config["path"]["target"], universe, project
+            target_symbol, graph_metadata, target_resolution = append_requested_graph_endpoint(
+                config["path"]["target"],
+                graph_symbols,
+                graph_metadata,
+                universe,
+                node_factors,
+                project,
+                reason="path_endpoint_incremental",
+            )
+            target_external = target_symbol not in set(universe["symbol"].astype(str))
+
+        resolved_known_edges: list[tuple[str, str]] = []
+        calibration_endpoint_resolutions: list[dict[str, Any]] = []
+        if calibration_summary and config["calibration"]["known_edges"]:
+            seen_resolved: set[tuple[str, str]] = set()
+            for requested_left, requested_right in config["calibration"]["known_edges"]:
+                left, graph_metadata, left_resolution = append_requested_graph_endpoint(
+                    requested_left,
+                    graph_symbols,
+                    graph_metadata,
+                    universe,
+                    node_factors,
+                    project,
+                    reason="calibration_edge_endpoint",
                 )
-            if target_symbol not in graph_symbols:
-                graph_symbols.append(target_symbol)
-                if target_external:
-                    candidate = node_factors.loc[
-                        node_factors["gene_symbol"].str.casefold().eq(target_symbol.casefold())
-                    ]
-                    target_row = {
-                        "symbol": target_symbol,
-                        "display_symbol": target_symbol,
-                        "name": (
-                            str(candidate.iloc[0]["node_name"])
-                            if len(candidate)
-                            else (target_resolution or {}).get("target_protein_name", "")
-                        ),
-                        "classes": (
-                            str(candidate.iloc[0]["node_classes"])
-                            if len(candidate)
-                            else "external_target"
-                        ),
-                        "node_type": "protein",
-                        "selected_uniprot": (target_resolution or {}).get("target_uniprot", ""),
-                        "gui_selection_reason": "path_endpoint_incremental",
+                right, graph_metadata, right_resolution = append_requested_graph_endpoint(
+                    requested_right,
+                    graph_symbols,
+                    graph_metadata,
+                    universe,
+                    node_factors,
+                    project,
+                    reason="calibration_edge_endpoint",
+                )
+                if left.casefold() == right.casefold():
+                    raise ValueError(
+                        f"known edge {requested_left},{requested_right} resolves to a self-edge"
+                    )
+                canonical = _canonical_undirected_pair(left, right)
+                if canonical not in seen_resolved:
+                    resolved_known_edges.append((left, right))
+                    seen_resolved.add(canonical)
+                calibration_endpoint_resolutions.append(
+                    {
+                        "requested_node_a": requested_left,
+                        "requested_node_b": requested_right,
+                        "resolved_node_a": left,
+                        "resolved_node_b": right,
+                        "node_a_resolution": left_resolution,
+                        "node_b_resolution": right_resolution,
                     }
-                else:
-                    target_row = universe.loc[universe["symbol"] == target_symbol].iloc[0].to_dict()
-                graph_metadata = pd.concat(
-                    [graph_metadata, pd.DataFrame([target_row])], ignore_index=True
+                )
+            forced_endpoints = sorted(
+                {
+                    symbol
+                    for pair in resolved_known_edges
+                    for symbol in pair
+                    if symbol not in set(selected_symbols)
+                },
+                key=lambda value: (value.casefold(), value),
+            )
+            calibration_summary["edge_endpoints_added_beyond_node_selection"] = (
+                forced_endpoints
+            )
+            if forced_endpoints:
+                warnings.append(
+                    "Known-edge calibration forced these endpoints into the graph "
+                    "even though node selection did not select them: "
+                    + ", ".join(forced_endpoints)
+                    + "."
                 )
 
         seed_symbols = universe["symbol"].astype(str).tolist()
         cache_summary: dict[str, Any] | None = None
         if any(symbol not in set(seed_symbols) for symbol in graph_symbols):
-            update("Characterizing and caching new edge pairs", 0.18)
+            update("Characterizing and caching new edge pairs", 0.22)
             cache_update = ensure_incremental_pairs(
                 project,
                 graph_metadata,
@@ -2309,7 +2885,31 @@ def run_workflow(
             )
             cache_summary = cache_update.as_dict()
 
-        update("Integrating edge evidence", 0.62)
+        if calibration_summary and resolved_known_edges:
+            update("Preparing edge calibration", 0.48)
+            (
+                calibration_summary["edge"],
+                edge_calibration_targets,
+                edge_calibration_trace,
+            ) = calibrate_edge_parameters(
+                project,
+                registry,
+                config,
+                graph_symbols,
+                graph_metadata,
+                resolved_known_edges,
+                progress=(
+                    lambda message, fraction: update(
+                        message, 0.48 + 0.12 * float(fraction)
+                    )
+                ),
+                check_cancel=check_cancel,
+            )
+            calibration_summary["edge"]["endpoint_resolution"] = (
+                calibration_endpoint_resolutions
+            )
+
+        update("Integrating edge evidence", 0.64 if calibration_summary else 0.62)
         derived_audits: dict[str, pd.DataFrame] = {}
         matrix, edge_summary = combine_edge_factors(
             project,
@@ -2464,6 +3064,14 @@ def run_workflow(
 
         update("Writing reproducible outputs", 0.92)
         config_path = output / "configuration.json"
+        submitted_config_path = output / "submitted_configuration.json"
+        calibration_summary_path = output / "calibration_summary.json"
+        node_calibration_parameters_path = output / "node_calibrated_parameters.tsv"
+        node_calibration_targets_path = output / "node_calibration_targets.tsv"
+        node_calibration_trace_path = output / "node_calibration_optimizer_trace.tsv.gz"
+        edge_calibration_parameters_path = output / "edge_calibrated_parameters.tsv"
+        edge_calibration_targets_path = output / "edge_calibration_targets.tsv"
+        edge_calibration_trace_path = output / "edge_calibration_optimizer_trace.tsv.gz"
         node_factors_path = output / "node_posteriors.tsv.gz"
         selected_nodes_path = output / "selected_nodes.tsv"
         matrix_path = output / "edge_adjacency_matrix.tsv"
@@ -2494,6 +3102,60 @@ def run_workflow(
             matrix_path,
             supported_path,
         ]
+        if calibration_summary is not None:
+            warnings.append(
+                "Calibration used known-present positive controls only. It improves "
+                "their fitted probabilities but does not by itself demonstrate "
+                "specificity, population calibration, or performance on unknown pairs."
+            )
+            submitted_config_path.write_text(
+                json.dumps(submitted_config, indent=2) + "\n", encoding="utf-8"
+            )
+            calibration_summary_path.write_text(
+                json.dumps(calibration_summary, indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+            files.extend([submitted_config_path, calibration_summary_path])
+            if calibration_summary.get("node") is not None:
+                pd.DataFrame(calibration_summary["node"]["parameters"]).to_csv(
+                    node_calibration_parameters_path, sep="\t", index=False
+                )
+                node_calibration_targets.to_csv(
+                    node_calibration_targets_path, sep="\t", index=False
+                )
+                node_calibration_trace.to_csv(
+                    node_calibration_trace_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                )
+                files.extend(
+                    [
+                        node_calibration_parameters_path,
+                        node_calibration_targets_path,
+                        node_calibration_trace_path,
+                    ]
+                )
+            if calibration_summary.get("edge") is not None:
+                pd.DataFrame(calibration_summary["edge"]["parameters"]).to_csv(
+                    edge_calibration_parameters_path, sep="\t", index=False
+                )
+                edge_calibration_targets.to_csv(
+                    edge_calibration_targets_path, sep="\t", index=False
+                )
+                edge_calibration_trace.to_csv(
+                    edge_calibration_trace_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                )
+                files.extend(
+                    [
+                        edge_calibration_parameters_path,
+                        edge_calibration_targets_path,
+                        edge_calibration_trace_path,
+                    ]
+                )
         if directionality_summary is not None and directionality_catalog is not None:
             check_cancel()
             propagation_matrix.to_csv(
@@ -2579,6 +3241,7 @@ def run_workflow(
             "schema_version": 1,
             "run_id": run_id,
             "generated_at": utc_now(),
+            "calibration": calibration_summary,
             "node_selection": node_summary,
             "edge_characterization": {
                 **edge_summary,
@@ -2647,6 +3310,7 @@ def run_workflow(
             },
             "directionality": directionality_summary,
             "temporal_validation": temporal_summary,
+            "calibration": calibration_summary,
             "warnings": warnings,
             "files": [path.name for path in [*files, summary_path]],
         }
