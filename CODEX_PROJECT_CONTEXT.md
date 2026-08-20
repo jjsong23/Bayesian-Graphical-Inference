@@ -28,9 +28,11 @@ The validated seed graph contains **891 nodes: 871 proteins and 20 curated secon
 
 A lab-specific Aqp2/collecting-duct profile additionally enables proteome and
 RNA abundance for CCD, OMCD, and IMCD. All six new streams plus the existing
-four select **3,296 proteins**, or **3,316 total nodes** with second messengers.
-This large profile is stored separately; the generic GUI defaults remain at the
-validated 891-node baseline.
+four select **3,330 proteins**, or **3,350 total nodes** with second messengers.
+This large profile is stored separately. The 891-node graph remains the
+immutable edge-catalog seed, but the current generic node defaults select
+1,051 proteins (1,071 nodes with messengers) after the site-centric
+phosphoprotein revision and therefore extend beyond that seed dynamically.
 
 ## Bayesian conventions
 
@@ -50,6 +52,8 @@ The selectable streams currently include:
 - principal-cell RNA expression, using raw abundance with zero-valued observations excluded from the evidence-background calculation;
 - inferred kinase activity from PKA-knockout phosphosite changes; and
 - protein-level differential phosphorylation after PKA deletion;
+- selective PKA-Cα-knockout and PKA-Cβ-knockout protein-level differential
+  phosphorylation, registered as two optional streams;
 - rat proteome abundance for CCD, OMCD, and IMCD, harmonized to mouse with
   audited Ensembl release 116 orthology; and
 - mouse renal-tubule RNA abundance for CCD, OMCD, and IMCD.
@@ -76,6 +80,18 @@ maximum abundance. The three segment streams within each assay share a
 dependence group. Entry points are
 `code/node_selection/build_collecting_duct_evidence.py` and
 `code/node_selection/run_collecting_duct_node_selection.py`.
+
+The selective PKA-subunit streams are built by
+`code/node_selection/build_pka_subunit_ko_evidence.py`. Duplicate source rows
+are collapsed by median signed LFC for each UniProt/site-pattern key. Each
+comparison uses its own all-source-site absolute-LFC background. Every site is
+scored against the comparison's single q75, and a protein inherits its
+strongest site-level factor; there is no adjustment for its number of detected
+sites and no accumulation across sites. The double-KO phosphoprotein-response
+stream follows the same rule. Pmod is audit-only. Both streams are disabled
+in the generic default and share dependence group
+`pka_subunit_ko_phosphoproteomics`. Read
+`docs/pka_subunit_ko_node_evidence.md` before changing this logic.
 
 The canonical symbol field is `symbol`; duplicate symbols were removed when the original liberal signaling universe was consolidated.
 
@@ -183,9 +199,11 @@ Unknown nodes and pairs are unlabeled, not negatives. The objective is mean
 positive-control negative log probability plus one standardized quadratic
 regularizer. It uses deterministic bounded multi-start SciPy Powell; weights are
 bounded 0–3, ordinary Tq/reference multipliers 0.25–4, and phosphoproteomic
-multipliers 0.05–1. Preferred weights are 1; preferred multipliers are 1 except
-PKA-KO kinase activity, PKA-KO phosphoprotein response, and KinasePredictor,
-whose configurable default preference is 0.1. Derived scaffold closure is held
-fixed. Node fitting precedes node selection; edge fitting follows endpoint
+multipliers 0.05–1. Preferred weights are 1. Every primary stream has its own
+GUI-editable preferred Tq/reference multiplier: ordinary streams default to 1,
+while PKA-KO kinase activity, PKA-KO phosphoprotein response, both selective
+PKA-subunit phosphoprotein responses, and KinasePredictor default to 0.1.
+Preferred values are regularization anchors, not direct scoring controls.
+Derived scaffold closure is held fixed. Node fitting precedes node selection; edge fitting follows endpoint
 extension and incremental-pair caching. Read
 `docs/positive_control_parameter_calibration.md` before changing this logic.

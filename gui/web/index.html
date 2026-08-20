@@ -48,12 +48,8 @@
                 <span>Regularization λ</span>
                 <input id="calibration-lambda" type="number" min="0" max="100" step="any" inputmode="decimal" />
               </label>
-              <label>
-                <span>Phosphoproteomic preferred Tq ×</span>
-                <input id="calibration-phospho-tq" type="number" min="0.05" max="1" step="any" inputmode="decimal" />
-              </label>
             </div>
-            <p class="scientific-note calibration-note">Known nodes and edges are positive controls, not a complete truth set: unknown hypotheses are not called absent. Node settings are fitted first; node selection is rerun with them; edge settings are then fitted independently on the resulting graph. One quadratic “rubber-band” penalty keeps weights near 1 and Tq/reference multipliers near their preferred values. Tq is optimized on a log scale. The phosphoproteomic preference defaults to 0.10 (never zero); derived scaffold closure remains fixed.</p>
+            <p class="scientific-note calibration-note">Known nodes and edges are positive controls, not a complete truth set: unknown hypotheses are not called absent. Node settings are fitted first; node selection is rerun with them; edge settings are then fitted independently on the resulting graph. One quadratic “rubber-band” penalty keeps weights near 1 and Tq/reference multipliers near the per-dataset <strong>Preferred Tq/Ref ×</strong> values shown on the evidence cards below. Tq/reference scales are optimized on a log scale. Preferred values must remain positive; derived scaffold closure has no Tq/reference scale and remains fixed.</p>
           </div>
         </section>
 

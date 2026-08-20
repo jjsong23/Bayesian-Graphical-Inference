@@ -71,14 +71,15 @@ h3 { font-size: 13px; letter-spacing: 0.02em; }
   transition: border-color .16s ease, background .16s ease;
 }
 .stream-card.with-parameters { grid-template-columns: auto minmax(170px, 1fr) 62px 62px 76px; }
+.stream-card.with-preferred-tq { grid-template-columns: auto minmax(150px, 1fr) 62px 62px 78px; }
 .stream-card.enabled { border-color: #9eb6a9; background: #f7faf7; }
 .stream-card input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--green); }
 .stream-copy strong { display: block; font-size: 13px; font-weight: 700; }
 .stream-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.35; }
 .stream-copy small { display: block; margin-top: 4px; color: #78827b; font-size: 9px; line-height: 1.3; }
-.weight-field, .normalization-field, .stream-parameter-field { display: grid; gap: 3px; }
-.weight-field span, .normalization-field span, .stream-parameter-field span { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.weight-field input, .normalization-field input, .stream-parameter-field input { width: 100%; }
+.weight-field, .normalization-field, .preferred-tq-field, .stream-parameter-field { display: grid; gap: 3px; }
+.weight-field span, .normalization-field span, .preferred-tq-field span, .stream-parameter-field span { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.weight-field input, .normalization-field input, .preferred-tq-field input, .stream-parameter-field input { width: 100%; }
 
 input[type="text"], input[type="number"], select, textarea {
   min-width: 0;
@@ -238,6 +239,8 @@ td.score { font-variant-numeric: tabular-nums; }
   .configuration, .results { padding: 24px 18px 34px; }
   .stream-card { grid-template-columns: auto 1fr 58px 58px; gap: 8px; }
   .stream-card.with-parameters { grid-template-columns: auto 1fr 58px 58px; }
+  .stream-card.with-preferred-tq { grid-template-columns: auto 1fr 58px 58px; }
+  .stream-card.with-preferred-tq .preferred-tq-field { grid-column: 3 / 5; }
   .stream-card.with-parameters .stream-parameter-field { grid-column: 3 / 5; }
   .parameter-grid, .compact-grid { grid-template-columns: 1fr; }
   .calibration-target-grid { grid-template-columns: 1fr; }

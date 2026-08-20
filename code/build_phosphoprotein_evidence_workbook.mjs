@@ -18,7 +18,7 @@ const workbook = Workbook.create();
 const readme = workbook.worksheets.add("README");
 const allSheet = workbook.worksheets.add("Integrated Posterior");
 const proteinSheet = workbook.worksheets.add("Phosphoprotein Nodes");
-const thresholdSheet = workbook.worksheets.add("Matched Thresholds");
+const thresholdSheet = workbook.worksheets.add("Site Threshold");
 const siteSheet = workbook.worksheets.add("Phosphosite Audit");
 
 const teal = "#00756F";
@@ -47,8 +47,9 @@ const readmeRows = [
   ["Sites at maximum absolute LFC", summary.sites_at_maximum_absolute_lfc],
   ["Selected proteins at maximum absolute LFC", summary.selected_proteins_at_maximum_absolute_lfc],
   ["Protein statistic", summary.protein_statistic],
-  ["Matched threshold", summary.matched_threshold_method],
-  ["Evidence factor", "max(0.5, 1 - exp[-0.5 * (maximum absolute LFC / matched T_q)^2])"],
+  ["Site threshold", summary.site_threshold_method],
+  ["Protein hit rule", summary.protein_evidence_rule],
+  ["Evidence factor", "Each site: max(0.5, 1 - exp[-0.5 * (absolute LFC / site T_q)^2]); protein receives its maximum site factor."],
   ["Relative multiplier", "Evidence factor / 0.5, giving a neutral floor of 1 and an upper bound approaching 2."],
   ["Normalization constant", null],
   ["Integrated posterior sum", null],
@@ -73,7 +74,7 @@ readme.getRange("B:B").format.columnWidth = 120;
 readme.getRange("B5:B11").format.numberFormat = "#,##0";
 readme.getRange("B12:B14").format.numberFormat = "0.000000";
 readme.getRange("B15:B17").format.numberFormat = "#,##0";
-readme.getRange("B22:B23").format.numberFormat = "0.000000000000";
+readme.getRange("B23:B24").format.numberFormat = "0.000000000000";
 readme.freezePanes.freezeRows(2);
 readme.showGridLines = false;
 
@@ -83,7 +84,7 @@ const allHeaders = [
   "Node Name", "Node Classes", "Phosphosite Evidence Observed", "Detected Phosphosites", "Maximum Absolute LFC",
   "Selected Signed LFC", "Selected Site Key", "Selected UniProt", "Selected Site", "Selected P Value (Raw)",
   "Selected P Value (Valid)", "Mean Absolute LFC", "Median Absolute LFC", "Valid Site P Values",
-  "Sites with P < 0.05", "% Valid Sites with P < 0.05", "Effective Site Quantile", "Matched T_q",
+  "Sites with P < 0.05", "% Valid Sites with P < 0.05", "Sites with Positive Evidence", "Site T_q",
   "Raw Evidence Factor", "Relative Multiplier", "At Neutral Floor", "Posterior before Phosphosite (Calc)",
   "Unnormalized after Phosphosite", "Posterior after Phosphosite", "Posterior Change", "Posterior Fold Change",
   "Rank before Phosphosite", "Rank after Phosphosite", "Rank Change",
@@ -96,7 +97,7 @@ const allRows = integrated.map((r) => [
   r.selected_site, finiteOrNull(r.selected_site_p_value_raw), finiteOrNull(r.selected_site_p_value_valid),
   finiteOrNull(r.mean_absolute_lfc), finiteOrNull(r.median_absolute_lfc), finiteOrNull(r.valid_site_p_values),
   finiteOrNull(r.sites_with_p_lt_0_05), finiteOrNull(r.percent_valid_sites_with_p_lt_0_05),
-  finiteOrNull(r.effective_site_quantile), finiteOrNull(r.matched_T_q), finiteOrNull(r.raw_evidence_factor),
+  finiteOrNull(r.sites_with_positive_evidence), finiteOrNull(r.site_T_q), finiteOrNull(r.raw_evidence_factor),
   null, r.at_neutral_floor, null, null, null, null, null, r.rank_before_phosphosite,
   r.rank_after_phosphosite, r.rank_change,
 ]);
@@ -108,14 +109,14 @@ allSheet.getRange("AE2").formulas = [["=H2"]];
 allSheet.getRange(`AE2:AE${allLast}`).fillDown();
 allSheet.getRange("AF2").formulas = [["=AE2*AC2"]];
 allSheet.getRange(`AF2:AF${allLast}`).fillDown();
-readme.getRange("B22").formulas = [[`=SUM('Integrated Posterior'!$AF$2:$AF$${allLast})`]];
-allSheet.getRange("AG2").formulas = [["=AF2/'README'!$B$22"]];
+readme.getRange("B23").formulas = [[`=SUM('Integrated Posterior'!$AF$2:$AF$${allLast})`]];
+allSheet.getRange("AG2").formulas = [["=AF2/'README'!$B$23"]];
 allSheet.getRange(`AG2:AG${allLast}`).fillDown();
 allSheet.getRange("AH2").formulas = [["=AG2-AE2"]];
 allSheet.getRange(`AH2:AH${allLast}`).fillDown();
 allSheet.getRange("AI2").formulas = [["=AG2/AE2"]];
 allSheet.getRange(`AI2:AI${allLast}`).fillDown();
-readme.getRange("B23").formulas = [[`=SUM('Integrated Posterior'!$AG$2:$AG$${allLast})`]];
+readme.getRange("B24").formulas = [[`=SUM('Integrated Posterior'!$AG$2:$AG$${allLast})`]];
 allSheet.getRange("A1:AL1").format = headerFormat;
 allSheet.getRange("A1:AL1").format.rowHeight = 58;
 allSheet.getRange(`A2:AL${allLast}`).format.borders = { insideHorizontal: { style: "thin", color: "#EEF2F2" } };
@@ -128,8 +129,8 @@ allSheet.freezePanes.freezeRows(1);
 allSheet.freezePanes.freezeColumns(3);
 allSheet.showGridLines = false;
 
-const proteinHeaders = ["Gene Symbol", "Node Name", "Node Classes", "Detected Sites", "Maximum Absolute LFC", "Selected Signed LFC", "Selected Site", "Selected UniProt", "Selected P (Raw)", "Selected P (Valid)", "Mean Absolute LFC", "Median Absolute LFC", "Valid P Values", "Sites P < 0.05", "% Valid Sites P < 0.05", "Effective Quantile", "Matched T_q", "Raw Factor", "Relative Multiplier", "Posterior Before", "Posterior After", "Fold Change", "Rank Before", "Rank After", "Rank Change"];
-const proteinRows = proteinNodes.map((r) => [r.gene_symbol, r.node_name, r.node_classes, r.detected_phosphosites, r.max_absolute_lfc, r.selected_signed_lfc, r.selected_site_key, r.selected_uniprot, finiteOrNull(r.selected_site_p_value_raw), finiteOrNull(r.selected_site_p_value_valid), r.mean_absolute_lfc, r.median_absolute_lfc, r.valid_site_p_values, r.sites_with_p_lt_0_05, finiteOrNull(r.percent_valid_sites_with_p_lt_0_05), r.effective_site_quantile, r.matched_T_q, r.raw_evidence_factor, r.relative_multiplier, r.posterior_before_phosphosite, r.posterior_after_phosphosite, r.posterior_fold_change, r.rank_before_phosphosite, r.rank_after_phosphosite, r.rank_change]);
+const proteinHeaders = ["Gene Symbol", "Node Name", "Node Classes", "Detected Sites", "Maximum Absolute LFC", "Selected Signed LFC", "Selected Site", "Selected UniProt", "Selected P (Raw)", "Selected P (Valid)", "Mean Absolute LFC", "Median Absolute LFC", "Valid P Values", "Sites P < 0.05", "% Valid Sites P < 0.05", "Sites with Positive Evidence", "Site T_q", "Raw Factor", "Relative Multiplier", "Posterior Before", "Posterior After", "Fold Change", "Rank Before", "Rank After", "Rank Change"];
+const proteinRows = proteinNodes.map((r) => [r.gene_symbol, r.node_name, r.node_classes, r.detected_phosphosites, r.max_absolute_lfc, r.selected_signed_lfc, r.selected_site_key, r.selected_uniprot, finiteOrNull(r.selected_site_p_value_raw), finiteOrNull(r.selected_site_p_value_valid), r.mean_absolute_lfc, r.median_absolute_lfc, r.valid_site_p_values, r.sites_with_p_lt_0_05, finiteOrNull(r.percent_valid_sites_with_p_lt_0_05), r.sites_with_positive_evidence, r.site_T_q, r.raw_evidence_factor, r.relative_multiplier, r.posterior_before_phosphosite, r.posterior_after_phosphosite, r.posterior_fold_change, r.rank_before_phosphosite, r.rank_after_phosphosite, r.rank_change]);
 const pLast = proteinRows.length + 1;
 proteinSheet.getRangeByIndexes(0, 0, pLast, proteinHeaders.length).values = [proteinHeaders, ...proteinRows];
 proteinSheet.getRange("A1:Y1").format = headerFormat;
@@ -143,28 +144,28 @@ proteinSheet.freezePanes.freezeRows(1);
 proteinSheet.freezePanes.freezeColumns(2);
 proteinSheet.showGridLines = false;
 
-const thresholdHeaders = ["Detected Phosphosites (n)", "Proteins with Site Count", "Effective Quantile q^(1/n)", "Matched T_q"];
-const thresholdRows = thresholds.map((r) => [r.detected_phosphosites, r.proteins_with_site_count, r.effective_site_quantile, r.matched_T_q]);
+const thresholdHeaders = ["Background Phosphosites", "Quantile q", "Site T_q", "Site-count Adjustment", "Protein Rule"];
+const thresholdRows = thresholds.map((r) => [r.background_phosphosites, r.q, r.site_T_q, r.site_count_adjustment, r.protein_rule]);
 const tLast = thresholdRows.length + 1;
-thresholdSheet.getRangeByIndexes(0, 0, tLast, 4).values = [thresholdHeaders, ...thresholdRows];
-thresholdSheet.getRange("A1:D1").format = headerFormat;
-thresholdSheet.getRange("A1:D1").format.rowHeight = 44;
-thresholdSheet.getRange(`A2:B${tLast}`).format.numberFormat = "#,##0";
-thresholdSheet.getRange(`C2:D${tLast}`).format.numberFormat = "0.000000";
-for (const [col, width] of [["A",24],["B",24],["C",27],["D",18]]) thresholdSheet.getRange(`${col}:${col}`).format.columnWidth = width;
+thresholdSheet.getRangeByIndexes(0, 0, tLast, 5).values = [thresholdHeaders, ...thresholdRows];
+thresholdSheet.getRange("A1:E1").format = headerFormat;
+thresholdSheet.getRange("A1:E1").format.rowHeight = 44;
+thresholdSheet.getRange(`A2:A${tLast}`).format.numberFormat = "#,##0";
+thresholdSheet.getRange(`B2:C${tLast}`).format.numberFormat = "0.000000";
+for (const [col, width] of [["A",24],["B",18],["C",18],["D",24],["E",70]]) thresholdSheet.getRange(`${col}:${col}`).format.columnWidth = width;
 thresholdSheet.freezePanes.freezeRows(1);
 thresholdSheet.showGridLines = false;
 
-const siteHeaders = ["Site Key", "UniProt", "Gene Symbol", "Site", "Annotation", "Centralized Sequence", "Raw Log2 Change", "Absolute Log2 Change", "P Value (Raw)", "P Value (Valid)", "P Value Valid", "Source Row Count", "Top-10 Unique Kinases", "In Signaling Universe", "Selected for Protein Statistic"];
-const siteRows = sites.map((r) => [r.site_key, r.uniprot, r.gene_symbol, r.site, r.annotation, r.centralized_sequence, r.raw_log2_change, r.absolute_log2_change, finiteOrNull(r.site_p_value_raw), finiteOrNull(r.site_p_value_valid), r.site_p_value_valid_flag, r.source_row_count, r.top10_unique_kinases, r.in_signaling_universe, r.selected_for_protein_statistic]);
+const siteHeaders = ["Site Key", "UniProt", "Gene Symbol", "Site", "Annotation", "Centralized Sequence", "Raw Log2 Change", "Absolute Log2 Change", "P Value (Raw)", "P Value (Valid)", "P Value Valid", "Source Row Count", "Top-10 Unique Kinases", "In Signaling Universe", "Site T_q", "Site Likelihood", "Site Bayes Factor", "Positive Site Hit", "Selected for Protein Statistic"];
+const siteRows = sites.map((r) => [r.site_key, r.uniprot, r.gene_symbol, r.site, r.annotation, r.centralized_sequence, r.raw_log2_change, r.absolute_log2_change, finiteOrNull(r.site_p_value_raw), finiteOrNull(r.site_p_value_valid), r.site_p_value_valid_flag, r.source_row_count, r.top10_unique_kinases, r.in_signaling_universe, r.site_T_q, r.site_evidence_likelihood, r.site_bayes_factor, r.site_positive_hit, r.selected_for_protein_statistic]);
 const sLast = siteRows.length + 1;
 siteSheet.getRangeByIndexes(0, 0, sLast, siteHeaders.length).values = [siteHeaders, ...siteRows];
-siteSheet.getRange("A1:O1").format = headerFormat;
-siteSheet.getRange("A1:O1").format.rowHeight = 50;
-siteSheet.getRange(`A2:O${sLast}`).format.borders = { insideHorizontal: { style: "thin", color: "#EEF2F2" } };
-for (const col of ["G","H","I","J"]) siteSheet.getRange(`${col}2:${col}${sLast}`).format.numberFormat = "0.000000E+00";
+siteSheet.getRange("A1:S1").format = headerFormat;
+siteSheet.getRange("A1:S1").format.rowHeight = 50;
+siteSheet.getRange(`A2:S${sLast}`).format.borders = { insideHorizontal: { style: "thin", color: "#EEF2F2" } };
+for (const col of ["G","H","I","J","O","P","Q"]) siteSheet.getRange(`${col}2:${col}${sLast}`).format.numberFormat = "0.000000E+00";
 for (const col of ["L","M"]) siteSheet.getRange(`${col}2:${col}${sLast}`).format.numberFormat = "#,##0";
-const siteWidths = [["A",20],["B",14],["C",15],["D",13],["E",38],["F",24],["G",17],["H",18],["I",17],["J",17],["K",15],["L",16],["M",20],["N",20],["O",23]];
+const siteWidths = [["A",20],["B",14],["C",15],["D",13],["E",38],["F",24],["G",17],["H",18],["I",17],["J",17],["K",15],["L",16],["M",20],["N",20],["O",17],["P",17],["Q",17],["R",18],["S",23]];
 for (const [col, width] of siteWidths) siteSheet.getRange(`${col}:${col}`).format.columnWidth = width;
 siteSheet.freezePanes.freezeRows(1);
 siteSheet.freezePanes.freezeColumns(3);
@@ -178,8 +179,8 @@ const previews = [
   ["Integrated Posterior", "A1:M18", "integrated-left.png", 0.7],
   ["Integrated Posterior", "N1:AL18", "integrated-right.png", 0.65],
   ["Phosphoprotein Nodes", "A1:Y18", "phosphoprotein-nodes.png", 0.68],
-  ["Matched Thresholds", `A1:D${tLast}`, "matched-thresholds.png", 0.9],
-  ["Phosphosite Audit", "A1:O18", "phosphosite-audit.png", 0.72],
+  ["Site Threshold", `A1:E${tLast}`, "site-threshold.png", 0.9],
+  ["Phosphosite Audit", "A1:S18", "phosphosite-audit.png", 0.72],
 ];
 for (const [sheetName, range, fileName, scale] of previews) {
   const blob = await workbook.render({ sheetName, range, scale, format: "png" });
@@ -187,7 +188,7 @@ for (const [sheetName, range, fileName, scale] of previews) {
 }
 
 const inspections = {};
-for (const [sheetName, range] of [["README", `A1:B${readmeRows.length}`], ["Integrated Posterior", "A1:AL7"], ["Phosphoprotein Nodes", "A1:Y8"], ["Matched Thresholds", `A1:D${tLast}`], ["Phosphosite Audit", "A1:O8"]]) {
+for (const [sheetName, range] of [["README", `A1:B${readmeRows.length}`], ["Integrated Posterior", "A1:AL7"], ["Phosphoprotein Nodes", "A1:Y8"], ["Site Threshold", `A1:E${tLast}`], ["Phosphosite Audit", "A1:S8"]]) {
   const check = await workbook.inspect({ kind: "table", range: `${sheetName}!${range}`, include: "values,formulas", tableMaxRows: 40, tableMaxCols: 40, maxChars: 24000 });
   inspections[sheetName] = check.ndjson;
 }

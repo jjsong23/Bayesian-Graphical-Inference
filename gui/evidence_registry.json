@@ -62,6 +62,8 @@
         "handler": "kinase_activity",
         "control_label": "Tq ×",
         "default_multiplier": 1.0,
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
         "reference": "q75 = 0.17 absolute LFC",
         "help": "Multiplies the q75 threshold from all kinase-level absolute median phosphosite LFC values."
       }
@@ -69,7 +71,7 @@
     {
       "id": "phosphoprotein_response",
       "label": "PKA-KO phosphoprotein response",
-      "description": "Maximum absolute raw phosphosite LFC assigned to the phosphorylated protein.",
+      "description": "Strongest site-level response: at least one positively scoring phosphosite makes the protein a hit.",
       "column": "phosphoprotein_relative_multiplier",
       "neutral_value": 1.0,
       "default_enabled": true,
@@ -84,8 +86,66 @@
         "handler": "phosphoprotein_response",
         "control_label": "Tq ×",
         "default_multiplier": 1.0,
-        "reference": "site-count-matched q^(1/n) thresholds",
-        "help": "Multiplies each protein's site-count-matched threshold; proteins without detected sites remain neutral."
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
+        "reference": "single all-phosphosite q75; no site-count adjustment",
+        "help": "Multiplies the same site-level q75 for every observed phosphosite. The protein inherits its strongest site's factor; additional sites do not raise the threshold or accumulate extra evidence."
+      }
+    },
+    {
+      "id": "pka_ca_ko_phosphoprotein_response",
+      "label": "PKA-Cα KO phosphoprotein response",
+      "description": "Strongest site-pattern response after selective Prkaca knockout; one positively scoring site is sufficient.",
+      "factor_file": "data/node_selection/pka_subunit_ko/processed/pka_subunit_ko_node_factors.tsv.gz",
+      "column": "pka_ca_ko_phosphoprotein_factor",
+      "raw_value_column": "pka_ca_ko_max_absolute_lfc",
+      "observed_column": "pka_ca_ko_observed",
+      "tq_column": "pka_ca_ko_site_tq",
+      "neutral_value": 1.0,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "pka_subunit_ko_phosphoproteomics",
+      "negative_evidence": {
+        "observed_column": "pka_ca_ko_observed",
+        "eligibility": "all_candidates",
+        "absence_definition": "No phosphosite pattern from the PKA-Cα-null versus matched-intact comparison mapped to the candidate."
+      },
+      "normalization": {
+        "handler": "site_level_phosphoprotein_response",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
+        "reference": "single source-site q75 = 0.226039 absolute LFC; no site-count adjustment",
+        "help": "Multiplies the same PKA-Cα-KO site-level q75 for every site pattern. Each protein inherits its strongest site's factor; proteins without detected sites remain neutral."
+      }
+    },
+    {
+      "id": "pka_cb_ko_phosphoprotein_response",
+      "label": "PKA-Cβ KO phosphoprotein response",
+      "description": "Strongest site-pattern response after selective Prkacb knockout; one positively scoring site is sufficient.",
+      "factor_file": "data/node_selection/pka_subunit_ko/processed/pka_subunit_ko_node_factors.tsv.gz",
+      "column": "pka_cb_ko_phosphoprotein_factor",
+      "raw_value_column": "pka_cb_ko_max_absolute_lfc",
+      "observed_column": "pka_cb_ko_observed",
+      "tq_column": "pka_cb_ko_site_tq",
+      "neutral_value": 1.0,
+      "default_enabled": false,
+      "default_weight": 1.0,
+      "dependence_group": "pka_subunit_ko_phosphoproteomics",
+      "negative_evidence": {
+        "observed_column": "pka_cb_ko_observed",
+        "eligibility": "all_candidates",
+        "absence_definition": "No phosphosite pattern from the PKA-Cβ-null versus matched-intact comparison mapped to the candidate."
+      },
+      "normalization": {
+        "handler": "site_level_phosphoprotein_response",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
+        "reference": "single source-site q75 = 0.183712 absolute LFC; no site-count adjustment",
+        "help": "Multiplies the same PKA-Cβ-KO site-level q75 for every site pattern. Each protein inherits its strongest site's factor; proteins without detected sites remain neutral."
       }
     },
     {
@@ -254,6 +314,8 @@
         "handler": "kinase_predictor",
         "control_label": "Tq ×",
         "default_multiplier": 1.0,
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
         "reference": "per-phosphosite q75 motif-score thresholds",
         "help": "Multiplies each observed phosphosite's motif-score threshold before top-ten kinase hits are combined."
       }

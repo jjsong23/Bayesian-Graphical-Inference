@@ -11,6 +11,7 @@ import pandas as pd
 from workflow_engine import (
     DEFAULT_SIGNAL_RELAY_CLASSES,
     PROJECT_ROOT,
+    _calibration_parameter_specs,
     append_external_target,
     combine_edge_factors,
     default_configuration,
@@ -111,7 +112,6 @@ class WorkflowEngineTests(unittest.TestCase):
                 "known_nodes": [],
                 "known_edges": [],
                 "regularization_strength": 0.1,
-                "phosphoproteomic_preferred_tq_multiplier": 0.1,
                 "multistart_count": 2,
             },
         )
@@ -182,11 +182,13 @@ class WorkflowEngineTests(unittest.TestCase):
             "calibration-known-nodes",
             "calibration-known-edges",
             "calibration-lambda",
-            "calibration-phospho-tq",
             "calibration-result",
         ):
             self.assertIn(f'id="{control}"', html)
+        self.assertNotIn('id="calibration-phospho-tq"', html)
         self.assertIn("calibration:", javascript)
+        self.assertIn("stream-preferred-tq", javascript)
+        self.assertIn("preferred_tq_multiplier", javascript)
         self.assertIn("setCalibrationControls", javascript)
         self.assertIn("preview.calibration", javascript)
         self.assertIn("Unknown hypotheses were not treated as negatives", javascript)
@@ -203,6 +205,64 @@ class WorkflowEngineTests(unittest.TestCase):
         config = normalize_configuration(supplied, self.registry)
         self.assertEqual(config["calibration"]["known_nodes"], ["Prkaca", "Pde4d"])
         self.assertEqual(config["calibration"]["known_edges"], [["Prkaca", "Aqp2"]])
+
+    def test_every_primary_stream_has_an_independent_preferred_tq(self) -> None:
+        supplied = default_configuration(self.registry)
+        for group in ("node_streams", "edge_streams"):
+            definitions = {item["id"]: item for item in self.registry[group]}
+            for stream_id, state in supplied[group].items():
+                definition = definitions[stream_id]
+                if definition.get("normalization", {}).get("user_control", True):
+                    self.assertIn("preferred_tq_multiplier", state, stream_id)
+                else:
+                    self.assertNotIn("preferred_tq_multiplier", state, stream_id)
+
+        supplied["node_streams"]["protein_abundance"]["preferred_tq_multiplier"] = 2.0
+        supplied["node_streams"]["kinase_activity"]["preferred_tq_multiplier"] = 0.2
+        supplied["edge_streams"]["string_v12"]["preferred_tq_multiplier"] = 0.5
+        config = normalize_configuration(supplied, self.registry)
+        self.assertEqual(
+            config["node_streams"]["protein_abundance"]["preferred_tq_multiplier"],
+            2.0,
+        )
+        self.assertEqual(
+            config["node_streams"]["kinase_activity"]["preferred_tq_multiplier"],
+            0.2,
+        )
+        self.assertEqual(
+            config["edge_streams"]["string_v12"]["preferred_tq_multiplier"],
+            0.5,
+        )
+
+        node_specs = _calibration_parameter_specs(
+            self.registry, config, "node_streams"
+        )
+        edge_specs = _calibration_parameter_specs(
+            self.registry, config, "edge_streams"
+        )
+        preferred = {
+            row["key"]: row["preferred"] for row in node_specs + edge_specs
+        }
+        self.assertEqual(preferred["protein_abundance:tq_multiplier"], 2.0)
+        self.assertEqual(preferred["kinase_activity:tq_multiplier"], 0.2)
+        self.assertEqual(preferred["string_v12:tq_multiplier"], 0.5)
+
+    def test_legacy_global_phosphoproteomic_preference_is_migrated(self) -> None:
+        supplied = {"calibration": {"phosphoproteomic_preferred_tq_multiplier": 0.3}}
+        config = normalize_configuration(supplied, self.registry)
+        self.assertNotIn(
+            "phosphoproteomic_preferred_tq_multiplier", config["calibration"]
+        )
+        for group in ("node_streams", "edge_streams"):
+            for stream_id, state in config[group].items():
+                if stream_id in {
+                    "kinase_activity",
+                    "phosphoprotein_response",
+                    "pka_ca_ko_phosphoprotein_response",
+                    "pka_cb_ko_phosphoprotein_response",
+                    "kinase_predictor",
+                }:
+                    self.assertEqual(state["preferred_tq_multiplier"], 0.3)
 
     def test_run_button_waits_for_configuration_initialization(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -283,8 +343,8 @@ class WorkflowEngineTests(unittest.TestCase):
         supplied["edge_streams"]["scaffold_triadic_closure"]["enabled"] = True
         config = normalize_configuration(supplied, self.registry)
         _, selected, _ = select_nodes(PROJECT_ROOT, self.registry, config)
-        self.assertEqual(len(selected), 3316)
-        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 5_496_270)
+        self.assertEqual(len(selected), 3350)
+        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 5_609_575)
 
     def test_path_ontology_class_selection_is_normalized_and_validated(self) -> None:
         supplied = default_configuration(self.registry)
@@ -304,12 +364,13 @@ class WorkflowEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown intermediate ontology"):
             normalize_configuration(supplied, self.registry)
 
-    def test_default_node_selection_reconstructs_891_node_universe(self) -> None:
+    def test_default_node_selection_uses_current_site_level_evidence(self) -> None:
         config = normalize_configuration(None, self.registry)
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
         self.assertEqual(len(factors), 9170)
-        self.assertEqual(len(selected), 891)
-        self.assertEqual(summary["selected_protein_count"], 871)
+        self.assertEqual(len(selected), 1071)
+        self.assertEqual(summary["selected_protein_count"], 1051)
+        self.assertEqual(summary["incrementally_added_protein_count"], 180)
         self.assertEqual(summary["curated_second_messenger_count"], 20)
         self.assertTrue(summary["posterior_probabilities_are_independent"])
         self.assertEqual(summary["node_prior_probability"], 0.5)
@@ -369,7 +430,7 @@ class WorkflowEngineTests(unittest.TestCase):
             summary["candidates_below_prior"],
         )
         self.assertLess(summary["posterior_minimum"], 0.5)
-        self.assertLess(summary["selected_protein_count"], 871)
+        self.assertLess(summary["selected_protein_count"], 1051)
         self.assertEqual(len(selected), summary["selected_protein_count"] + 20)
 
         active_ids = [stream["id"] for stream in summary["active_streams"]]
@@ -429,13 +490,13 @@ class WorkflowEngineTests(unittest.TestCase):
             selected["symbol"].tolist(),
         )
         values = matrix.to_numpy(float)
-        self.assertEqual(matrix.shape, (891, 891))
+        self.assertEqual(matrix.shape, (1071, 1071))
         self.assertTrue(np.array_equal(values, values.T))
-        self.assertTrue(np.array_equal(np.diag(values), np.zeros(891)))
-        self.assertEqual(summary["pairs_above_output_cutoff"], 169414)
+        self.assertTrue(np.array_equal(np.diag(values), np.zeros(1071)))
+        self.assertGreater(summary["pairs_above_output_cutoff"], 169414)
         distribution = summary["probability_distribution"]
-        self.assertEqual(distribution["hypothesis_count"], 396495)
-        self.assertEqual(sum(distribution["bin_counts"]), 396495)
+        self.assertEqual(distribution["hypothesis_count"], 572985)
+        self.assertEqual(sum(distribution["bin_counts"]), 572985)
         self.assertEqual(
             distribution["at_exact_prior_count"], summary["pairs_at_exact_prior"]
         )
@@ -608,6 +669,118 @@ class WorkflowEngineTests(unittest.TestCase):
             )
             self.assertTrue(np.all(sensitive >= original - 1e-14), stream_id)
             self.assertTrue(np.any(sensitive > original + 1e-14), stream_id)
+
+    def test_selective_pka_subunit_ko_streams_are_separate_and_optional(self) -> None:
+        stream_ids = {
+            "pka_ca_ko_phosphoprotein_response",
+            "pka_cb_ko_phosphoprotein_response",
+        }
+        definitions = {
+            item["id"]: item
+            for item in self.registry["node_streams"]
+            if item["id"] in stream_ids
+        }
+        self.assertEqual(set(definitions), stream_ids)
+        self.assertEqual(
+            {item["dependence_group"] for item in definitions.values()},
+            {"pka_subunit_ko_phosphoproteomics"},
+        )
+
+        supplied = default_configuration(self.registry)
+        self.assertTrue(
+            all(not supplied["node_streams"][stream_id]["enabled"] for stream_id in stream_ids)
+        )
+        for stream_id in stream_ids:
+            supplied["node_streams"][stream_id]["enabled"] = True
+        config = normalize_configuration(supplied, self.registry)
+        factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
+
+        self.assertEqual(len(factors), 9170)
+        self.assertEqual(summary["selected_protein_count"], 1232)
+        self.assertEqual(len(selected), 1252)
+        expected_counts = {
+            "pka_ca_ko_phosphoprotein_response": (776, 267),
+            "pka_cb_ko_phosphoprotein_response": (776, 261),
+        }
+        active = {item["id"]: item for item in summary["active_streams"]}
+        for stream_id, (observed_count, positive_count) in expected_counts.items():
+            definition = definitions[stream_id]
+            self.assertEqual(
+                int(factors[definition["observed_column"]].sum()), observed_count
+            )
+            self.assertEqual(active[stream_id]["observed_eligible_candidates"], observed_count)
+            self.assertEqual(active[stream_id]["positive_support_candidates"], positive_count)
+            self.assertTrue(
+                (factors[f"gui_{stream_id}_source_bayes_factor"] >= 1.0).all()
+            )
+            self.assertTrue(
+                (factors[f"gui_{stream_id}_source_bayes_factor"] <= 2.0).all()
+            )
+
+    def test_phosphoprotein_streams_use_one_site_tq_and_maximum_site_bf(self) -> None:
+        double_nodes = pd.read_csv(
+            PROJECT_ROOT
+            / "results/phosphoprotein_evidence/"
+            "node_selection_protein_pc_phosphosite_posterior.tsv",
+            sep="\t",
+        )
+        double_sites = pd.read_csv(
+            PROJECT_ROOT / "results/phosphoprotein_evidence/phosphosite_audit.tsv",
+            sep="\t",
+        )
+        observed_double = double_nodes.loc[
+            double_nodes["phosphosite_evidence_observed"]
+        ].set_index("gene_symbol")
+        expected_double = (
+            double_sites.loc[double_sites["in_signaling_universe"]]
+            .groupby("gene_symbol")["site_bayes_factor"]
+            .max()
+            .reindex(observed_double.index)
+        )
+        self.assertEqual(observed_double["site_T_q"].nunique(), 1)
+        self.assertNotIn("matched_T_q", observed_double.columns)
+        self.assertTrue(
+            np.allclose(
+                observed_double["relative_multiplier"],
+                expected_double,
+                rtol=0,
+                atol=1e-14,
+            )
+        )
+
+        subunit_nodes = pd.read_csv(
+            PROJECT_ROOT
+            / "data/node_selection/pka_subunit_ko/processed/"
+            "pka_subunit_ko_node_factors.tsv.gz",
+            sep="\t",
+        )
+        subunit_sites = pd.read_csv(
+            PROJECT_ROOT
+            / "data/node_selection/pka_subunit_ko/processed/"
+            "pka_subunit_ko_site_audit.tsv.gz",
+            sep="\t",
+        )
+        for prefix in ("pka_ca_ko", "pka_cb_ko"):
+            observed = subunit_nodes.loc[
+                subunit_nodes[f"{prefix}_observed"]
+            ].set_index("gene_symbol")
+            expected = (
+                subunit_sites.loc[subunit_sites["mapped_gene_symbol"].notna()]
+                .groupby("mapped_gene_symbol")[f"{prefix}_site_bayes_factor"]
+                .max()
+                .reindex(observed.index)
+            )
+            self.assertEqual(observed[f"{prefix}_site_tq"].nunique(), 1)
+            self.assertNotIn(f"{prefix}_matched_tq", observed.columns)
+            self.assertTrue(
+                np.allclose(
+                    observed[f"{prefix}_phosphoprotein_factor"],
+                    expected,
+                    rtol=0,
+                    atol=1e-14,
+                ),
+                prefix,
+            )
 
     def test_each_edge_stream_can_be_rescored_from_raw_evidence(self) -> None:
         config = normalize_configuration(None, self.registry)

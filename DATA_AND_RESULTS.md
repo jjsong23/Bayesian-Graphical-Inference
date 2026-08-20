@@ -14,7 +14,10 @@ The archive is a point-in-time research record. Do not overwrite an older archiv
 
 ## Data layout
 
-- `data/node_selection/`: signaling-universe definitions, GO terms, abundance/transcript evidence, and node-level Bayes-factor tables.
+- `data/node_selection/`: signaling-universe definitions, GO terms,
+  abundance/transcript evidence, node-level Bayes-factor tables, and the
+  selective PKA-Cα/PKA-Cβ knockout source and processed node evidence under
+  `pka_subunit_ko/`.
 - `data/kinase_predictor/` and `data/pka_ko/`: kinase-model resources and PKA-knockout phosphoproteomic inputs.
 - `data/edge_characterization/`: edge evidence, raw-source downloads, compatibility tables, factor catalogs, and the incremental unordered-pair cache.
 - `data/colocalization/`: localization profiles and scientist-reviewable compartment compatibility matrices.

@@ -37,7 +37,8 @@ server**.
 ## Workflow
 
 1. **Select nodes.** Enable any subset of protein abundance, principal-cell
-   RNA, kinase activity, phosphoprotein response, and the six lab-specific
+   RNA, kinase activity, double-KO phosphoprotein response, the separately
+   selectable PKA-Cα- and PKA-Cβ-KO phosphoprotein-response streams, and the six lab-specific
    collecting-duct streams (proteome and RNA for CCD, OMCD, and IMCD). Each enabled
    factor can be raised to a nonnegative user weight. Every protein is an
    independent present-versus-absent hypothesis with prior probability 0.5 by
@@ -50,8 +51,10 @@ server**.
    but unobserved candidate a configurable BF below 1 in every enabled node
    stream. It is off by default; the conservative default strength is BF 0.5.
    Non-kinases remain out of scope and neutral in the kinase-activity stream.
-   The six collecting-duct streams are off in the generic default so the
-   validated 891-node baseline remains exactly reproducible.
+   The six collecting-duct streams and two selective PKA-subunit-KO streams are
+   off in the generic default. The 891-node edge catalog remains the immutable
+   seed; the revised site-centric double-KO stream expands the current default
+   to 1,051 proteins, or 1,071 nodes with curated messengers.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
    KinasePredictor, STRING, HPA, OmniPath, STITCH, and the optional derived
    scaffold-closure stream. Edge prior odds are multiplied by
@@ -115,14 +118,27 @@ ontology-class IDs, while `intermediate_node_eligibility.tsv` reports every
 node's complete class list, matching selected roles, endpoint exemption, and
 final eligibility decision.
 
+## Per-dataset calibration preferences
+
+Every primary node and edge evidence card exposes a separate `Preferred Tq ×`
+control when positive-control calibration is enabled. STRING and STITCH show
+the same concept as `Preferred Ref ×`, matching their ordinary `Ref ×` controls.
+This preferred value is the center of that stream's regularization penalty; it
+does not change an ordinary uncalibrated run and is distinct from the submitted
+`Tq ×`/`Ref ×` starting value. Ordinary streams default to 1.0. The five
+designated phosphoproteomic streams default to 0.1. Each value is preserved in
+`configuration.json` and reported as the `preferred` entry in the calibrated
+parameter audit. Derived scaffold closure has no Tq/reference parameter and is
+therefore not given a preferred-scale control.
+
 ## Per-dataset normalization
 
 `Tq × = 1.00` reproduces the finalized analysis for any enabled stream. A value below 1 lowers a
 dataset's threshold and increases sensitivity; a value above 1 raises the
 threshold and is more stringent. Scalar thresholds (protein, RNA, kinase
-activity, the six collecting-duct abundance streams, and OmniPath) and
-observation-specific thresholds (phosphoprotein,
-mpkCCD localization, KinasePredictor, and HPA) are all recomputed from their
+activity, all three protein-level phosphoprotein-response streams, the six
+collecting-duct abundance streams, and OmniPath) and observation-specific
+thresholds (mpkCCD localization, KinasePredictor, and HPA) are all recomputed from their
 stored raw statistics. The multiplier is applied to every threshold belonging
 to that dataset before its likelihood and Bayes factor are recalculated.
 
@@ -166,7 +182,7 @@ only. Zeros are nondetections: they stay neutral when the optional nondetection
 rule is off and receive its configured BF when it is on. Rat proteome rows are mapped to
 mouse genes with Ensembl release 116 orthology (UniProt first, rat-symbol
 fallback), and every mapping decision is audited. Enabling all six new streams
-in addition to the existing four selects 3,296 proteins, or 3,316 nodes after
+in addition to the existing four selects 3,330 proteins, or 3,350 nodes after
 the 20 curated second messengers. The three segment streams within each assay
 share a source experiment and are tagged as dependent even though they remain
 separately selectable as requested.
@@ -229,6 +245,9 @@ the standard factor table.
 - Edge probabilities are independent Bernoulli updates from the selected prior.
 - Kinase activity and phosphoprotein response share a source and are visibly
   marked as dependent.
+- The selective PKA-Cα- and PKA-Cβ-KO response streams are separately
+  selectable but share a dependence-group warning because they come from the
+  same TMT experiment.
 - HPA alternatives are mutually exclusive.
 - Path products are ranking scores, not calibrated whole-path probabilities.
 - Every run preserves its exact configuration and complete audit tables.

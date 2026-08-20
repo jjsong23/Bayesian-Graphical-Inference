@@ -57,12 +57,16 @@ standardizing denominators already put weight deviations and multiplicative Tq
 deviations on interpretable scales. A weight movement of 0.5 and a two-fold Tq
 movement each count as one standardized unit. The default is lambda = 0.1.
 
-Preferred weights are 1. Preferred Tq/reference multipliers are 1 except for the
-three phosphoproteomic streams: PKA-KO kinase activity, PKA-KO phosphoprotein
-response, and edge-level KinasePredictor. Their default preferred multiplier is
-0.1, reflecting the intended low-sensitivity/high-specificity use. The preferred
-value can be changed in the GUI. A multiplier of zero is not allowed because Tq
-appears in a denominator and would make the likelihood kernel undefined.
+Preferred weights are 1. Every primary evidence stream has its own editable
+preferred Tq/reference multiplier on its evidence card in the GUI. Ordinary
+streams default to 1. The five designated phosphoproteomic streams—PKA double-KO
+kinase activity, PKA double-KO phosphoprotein response, selective PKA-Cα-KO
+response, selective PKA-Cβ-KO response, and edge-level KinasePredictor—default to
+0.1, reflecting their intended low-sensitivity/high-specificity use. A preferred
+multiplier is a regularization anchor used only during positive-control
+calibration; changing it does not directly rescore an uncalibrated run. A value
+of zero is not allowed because Tq appears in a denominator and because the
+multiplier is optimized on a logarithmic scale.
 
 ## Bounds and optimizer
 
@@ -73,8 +77,8 @@ records cross a neutral threshold, and does not require analytical gradients.
 The current bounds are:
 
 - evidence weights: 0 to 3;
-- ordinary Tq/reference multipliers: 0.25 to 4;
-- phosphoproteomic Tq multipliers: 0.05 to 1.
+- ordinary Tq/reference multipliers and their preferred values: 0.25 to 4;
+- phosphoproteomic Tq multipliers and their preferred values: 0.05 to 1.
 
 Tq/reference multipliers are optimized on the natural-log scale. The GUI
 requests two starts: the submitted configuration and the preferred anchor
@@ -110,8 +114,12 @@ Each calibrated run writes:
 - target-level probabilities before and after fitting;
 - compressed objective-evaluation traces for each fitted stage.
 
-The parameter tables contain current, preferred, fitted, lower/upper-bound,
-regularization-scale, and optimization-scale fields for every optimized value.
+The parameter tables contain current, independently configured preferred,
+fitted, lower/upper-bound, regularization-scale, and optimization-scale fields
+for every optimized value. Run configurations created before per-stream controls
+were introduced remain readable: the former global phosphoproteomic preference
+is migrated to any designated phosphoproteomic stream that does not already have
+an explicit per-stream value.
 
 ## Limitation
 

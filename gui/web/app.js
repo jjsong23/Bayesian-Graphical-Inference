@@ -118,11 +118,21 @@ function streamCard(stream, group, current) {
   weight.innerHTML = `<span>Weight</span><input class="stream-weight stream-setting" type="number" min="0" max="10" step="0.1" value="${current.weight}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} weight" />`;
   card.append(toggle, copy, weight);
   if (stream.normalization.user_control !== false) {
+    card.classList.add("with-preferred-tq");
     const normalization = document.createElement("label");
     normalization.className = "normalization-field";
     normalization.title = stream.normalization.help;
     normalization.innerHTML = `<span>${stream.normalization.control_label}</span><input class="stream-tq stream-setting" type="number" min="0.05" max="20" step="0.05" value="${current.tq_multiplier}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} ${stream.normalization.control_label}" />`;
     card.appendChild(normalization);
+    const preferred = document.createElement("label");
+    const bounds = stream.normalization.calibration_bounds || [0.25, 4];
+    const preferredLabel = stream.normalization.control_label.startsWith("Ref")
+      ? "Preferred Ref ×"
+      : "Preferred Tq ×";
+    preferred.className = "preferred-tq-field";
+    preferred.title = "Regularization anchor used when positive-control calibration is enabled; it does not directly rescore an ordinary uncalibrated run.";
+    preferred.innerHTML = `<span>${preferredLabel}</span><input class="stream-preferred-tq stream-calibration-setting" type="number" min="${bounds[0]}" max="${bounds[1]}" step="any" value="${current.preferred_tq_multiplier}" ${(current.enabled && state.defaults.calibration.enabled) ? "" : "disabled"} aria-label="${stream.label} ${preferredLabel}" />`;
+    card.appendChild(preferred);
   } else {
     card.classList.add("without-normalization");
   }
@@ -140,13 +150,16 @@ function streamCard(stream, group, current) {
         const otherDef = state.registry[`${group}_streams`].find((item) => item.id === other.dataset.stream);
         if (other !== card && otherDef?.exclusive_group === stream.exclusive_group) {
           other.querySelector(".stream-toggle").checked = false;
-          other.querySelectorAll(".stream-setting").forEach((input) => { input.disabled = true; });
+          other.querySelectorAll(".stream-setting, .stream-calibration-setting").forEach((input) => { input.disabled = true; });
           other.classList.remove("enabled");
         }
       });
     }
     card.classList.toggle("enabled", toggle.checked);
     card.querySelectorAll(".stream-setting").forEach((input) => { input.disabled = !toggle.checked; });
+    card.querySelectorAll(".stream-calibration-setting").forEach((input) => {
+      input.disabled = !toggle.checked || !$('calibration-enabled').checked;
+    });
   });
   return card;
 }
@@ -188,7 +201,6 @@ function populateControls() {
   $("calibration-known-nodes").value = (calibration.known_nodes || []).join("\n");
   $("calibration-known-edges").value = (calibration.known_edges || []).map((pair) => pair.join(",")).join("\n");
   $("calibration-lambda").value = calibration.regularization_strength;
-  $("calibration-phospho-tq").value = calibration.phosphoproteomic_preferred_tq_multiplier;
   const node = state.defaults.node_integration;
   $("include-messengers").checked = node.include_second_messengers;
   $("penalize-unobserved").checked = node.penalize_unobserved;
@@ -232,12 +244,15 @@ function collectStreams(group) {
     card.querySelectorAll(".stream-parameter").forEach((input) => {
       parameters[input.dataset.parameter] = Number(input.value);
     });
-    result[card.dataset.stream] = {
+    const streamState = {
       enabled: card.querySelector(".stream-toggle").checked,
       weight: Number(card.querySelector(".stream-weight").value),
       tq_multiplier: Number(card.querySelector(".stream-tq")?.value ?? 1),
       parameters,
     };
+    const preferred = card.querySelector(".stream-preferred-tq");
+    if (preferred) streamState.preferred_tq_multiplier = Number(preferred.value);
+    result[card.dataset.stream] = streamState;
   });
   return result;
 }
@@ -249,7 +264,6 @@ function collectConfiguration() {
       known_nodes: $("calibration-known-nodes").value.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean),
       known_edges: $("calibration-known-edges").value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
       regularization_strength: Number($("calibration-lambda").value),
-      phosphoproteomic_preferred_tq_multiplier: Number($("calibration-phospho-tq").value),
       multistart_count: 2,
     },
     node_streams: collectStreams("node"),
@@ -298,6 +312,10 @@ function setCalibrationControls(enabled) {
     control.disabled = !enabled;
   });
   $("calibration-controls").classList.toggle("inactive", !enabled);
+  document.querySelectorAll(".stream-calibration-setting").forEach((control) => {
+    const card = control.closest(".stream-card");
+    control.disabled = !enabled || !card.querySelector(".stream-toggle").checked;
+  });
 }
 
 function setPathControls(enabled) {

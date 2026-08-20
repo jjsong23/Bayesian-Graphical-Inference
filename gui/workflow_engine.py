@@ -134,11 +134,46 @@ FACTOR_EPSILON = 1e-12
 PHOSPHOPROTEOMIC_CALIBRATION_STREAMS = {
     "kinase_activity",
     "phosphoprotein_response",
+    "pka_ca_ko_phosphoprotein_response",
+    "pka_cb_ko_phosphoprotein_response",
     "kinase_predictor",
 }
 CALIBRATION_WEIGHT_BOUNDS = (0.0, 3.0)
 CALIBRATION_TQ_BOUNDS = (0.25, 4.0)
 CALIBRATION_PHOSPHO_TQ_BOUNDS = (0.05, 1.0)
+
+
+def _calibration_tq_bounds(definition: dict[str, Any]) -> tuple[float, float]:
+    """Return registry-defined calibration bounds for one scale multiplier."""
+    configured = definition.get("normalization", {}).get("calibration_bounds")
+    if configured is None:
+        return (
+            CALIBRATION_PHOSPHO_TQ_BOUNDS
+            if definition["id"] in PHOSPHOPROTEOMIC_CALIBRATION_STREAMS
+            else CALIBRATION_TQ_BOUNDS
+        )
+    if not isinstance(configured, list) or len(configured) != 2:
+        raise ValueError(
+            f"node/edge stream {definition['id']} has invalid calibration bounds"
+        )
+    lower, upper = map(float, configured)
+    if not (math.isfinite(lower) and math.isfinite(upper) and 0 < lower < upper):
+        raise ValueError(
+            f"node/edge stream {definition['id']} has invalid calibration bounds"
+        )
+    return lower, upper
+
+
+def _default_preferred_tq_multiplier(definition: dict[str, Any]) -> float:
+    """Return the scientist-editable regularization anchor for one stream."""
+    normalization = definition.get("normalization", {})
+    if "calibration_preferred_multiplier" in normalization:
+        return float(normalization["calibration_preferred_multiplier"])
+    return (
+        0.1
+        if definition["id"] in PHOSPHOPROTEOMIC_CALIBRATION_STREAMS
+        else 1.0
+    )
 
 
 @dataclass
@@ -217,7 +252,6 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "known_nodes": [],
             "known_edges": [],
             "regularization_strength": 0.1,
-            "phosphoproteomic_preferred_tq_multiplier": 0.1,
             "multistart_count": 2,
         },
         "node_streams": {
@@ -230,7 +264,10 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
                             stream.get("normalization", {}).get(
                                 "default_multiplier", 1.0
                             )
-                        )
+                        ),
+                        "preferred_tq_multiplier": (
+                            _default_preferred_tq_multiplier(stream)
+                        ),
                     }
                     if stream.get("normalization", {}).get("user_control", True)
                     else {}
@@ -258,7 +295,10 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
                             stream.get("normalization", {}).get(
                                 "default_multiplier", 1.0
                             )
-                        )
+                        ),
+                        "preferred_tq_multiplier": (
+                            _default_preferred_tq_multiplier(stream)
+                        ),
                     }
                     if stream.get("normalization", {}).get("user_control", True)
                     else {}
@@ -330,10 +370,22 @@ def normalize_configuration(
 ) -> dict[str, Any]:
     config = default_configuration(registry)
     supplied = supplied or {}
+    supplied_calibration = supplied.get("calibration", {})
+    if not isinstance(supplied_calibration, dict):
+        raise ValueError("calibration configuration must be an object")
+    legacy_phospho_preference: float | None = None
+    if "phosphoproteomic_preferred_tq_multiplier" in supplied_calibration:
+        legacy_phospho_preference = _number(
+            supplied_calibration["phosphoproteomic_preferred_tq_multiplier"],
+            "legacy phosphoproteomic preferred Tq multiplier",
+            CALIBRATION_PHOSPHO_TQ_BOUNDS[0],
+            CALIBRATION_PHOSPHO_TQ_BOUNDS[1],
+        )
     for group in ("node_streams", "edge_streams"):
         incoming = supplied.get(group, {})
         definitions = {item["id"]: item for item in registry[group]}
         for stream_id, state in config[group].items():
+            definition = definitions[stream_id]
             if stream_id in incoming:
                 state["enabled"] = bool(incoming[stream_id].get("enabled", state["enabled"]))
                 state["weight"] = _number(
@@ -342,7 +394,6 @@ def normalize_configuration(
                     0.0,
                     10.0,
                 )
-                definition = definitions[stream_id]
                 if definition.get("normalization", {}).get("user_control", True):
                     state["tq_multiplier"] = _number(
                         incoming[stream_id].get(
@@ -363,25 +414,47 @@ def normalize_configuration(
                         float(parameter["minimum"]),
                         float(parameter["maximum"]),
                     )
+            if definition.get("normalization", {}).get("user_control", True):
+                preferred_value = state["preferred_tq_multiplier"]
+                if stream_id in incoming:
+                    preferred_value = incoming[stream_id].get(
+                        "preferred_tq_multiplier", preferred_value
+                    )
+                if (
+                    legacy_phospho_preference is not None
+                    and stream_id in PHOSPHOPROTEOMIC_CALIBRATION_STREAMS
+                    and (
+                        stream_id not in incoming
+                        or "preferred_tq_multiplier" not in incoming[stream_id]
+                    )
+                ):
+                    preferred_value = legacy_phospho_preference
+                preferred_bounds = _calibration_tq_bounds(definition)
+                state["preferred_tq_multiplier"] = _number(
+                    preferred_value,
+                    f"{stream_id} preferred Tq/reference multiplier",
+                    preferred_bounds[0],
+                    preferred_bounds[1],
+                )
     config["node_integration"].update(supplied.get("node_integration", {}))
     config["edge_integration"].update(supplied.get("edge_integration", {}))
     config["path"].update(supplied.get("path", {}))
     config["temporal_validation"].update(supplied.get("temporal_validation", {}))
 
     calibration = config["calibration"]
-    calibration.update(supplied.get("calibration", {}))
+    calibration.update(
+        {
+            key: value
+            for key, value in supplied_calibration.items()
+            if key != "phosphoproteomic_preferred_tq_multiplier"
+        }
+    )
     calibration["enabled"] = bool(calibration["enabled"])
     calibration["regularization_strength"] = _number(
         calibration["regularization_strength"],
         "calibration regularization strength",
         0.0,
         100.0,
-    )
-    calibration["phosphoproteomic_preferred_tq_multiplier"] = _number(
-        calibration["phosphoproteomic_preferred_tq_multiplier"],
-        "phosphoproteomic preferred Tq multiplier",
-        CALIBRATION_PHOSPHO_TQ_BOUNDS[0],
-        CALIBRATION_PHOSPHO_TQ_BOUNDS[1],
     )
     calibration["multistart_count"] = int(
         _number(
@@ -719,8 +792,22 @@ def node_stream_values(
     if handler == "phosphoprotein_response":
         raw = pd.read_csv(project / PHOSPHOPROTEIN_RAW_RELATIVE, sep="\t")
         values = _aligned_series(raw, "gene_symbol", "max_absolute_lfc", genes)
-        thresholds = _aligned_series(raw, "gene_symbol", "matched_T_q", genes)
+        thresholds = _aligned_series(raw, "gene_symbol", "site_T_q", genes)
         observed = np.isfinite(values) & np.isfinite(thresholds) & (thresholds > 0)
+        result = np.ones(len(factors), dtype=float)
+        result[observed] = complement_minimum_likelihood(
+            values[observed], thresholds[observed] * multiplier
+        ) / NEUTRAL_LIKELIHOOD
+        return result
+    if handler == "site_level_phosphoprotein_response":
+        values = pd.to_numeric(
+            factors[definition["raw_value_column"]], errors="coerce"
+        ).to_numpy(float)
+        thresholds = pd.to_numeric(
+            factors[definition["tq_column"]], errors="coerce"
+        ).to_numpy(float)
+        observed = _boolean_mask(factors[definition["observed_column"]])
+        observed &= np.isfinite(values) & np.isfinite(thresholds) & (thresholds > 0)
         result = np.ones(len(factors), dtype=float)
         result[observed] = complement_minimum_likelihood(
             values[observed], thresholds[observed] * multiplier
@@ -1109,9 +1196,6 @@ def _calibration_parameter_specs(
     """Describe bounded primary-stream weights and scale multipliers."""
     definitions = {item["id"]: item for item in registry[group]}
     specs: list[dict[str, Any]] = []
-    phospho_preference = float(
-        config["calibration"]["phosphoproteomic_preferred_tq_multiplier"]
-    )
     for stream_id, state in config[group].items():
         definition = definitions[stream_id]
         if not state["enabled"] or definition.get("derived"):
@@ -1129,19 +1213,14 @@ def _calibration_parameter_specs(
             }
         )
         if definition.get("normalization", {}).get("user_control", True):
-            phosphoproteomic = stream_id in PHOSPHOPROTEOMIC_CALIBRATION_STREAMS
             specs.append(
                 {
                     "key": f"{stream_id}:tq_multiplier",
                     "stream_id": stream_id,
                     "parameter": "tq_multiplier",
                     "current": _stream_multiplier(state),
-                    "preferred": phospho_preference if phosphoproteomic else 1.0,
-                    "bounds": (
-                        CALIBRATION_PHOSPHO_TQ_BOUNDS
-                        if phosphoproteomic
-                        else CALIBRATION_TQ_BOUNDS
-                    ),
+                    "preferred": float(state["preferred_tq_multiplier"]),
+                    "bounds": _calibration_tq_bounds(definition),
                     "scale": math.log(2.0),
                     "transform": "log",
                 }
@@ -1186,7 +1265,14 @@ def _prepare_node_calibration_context(
     elif handler == "phosphoprotein_response":
         raw = pd.read_csv(project / PHOSPHOPROTEIN_RAW_RELATIVE, sep="\t")
         values = _aligned_series(raw, "gene_symbol", "max_absolute_lfc", genes)
-        thresholds = _aligned_series(raw, "gene_symbol", "matched_T_q", genes)
+        thresholds = _aligned_series(raw, "gene_symbol", "site_T_q", genes)
+    elif handler == "site_level_phosphoprotein_response":
+        values = pd.to_numeric(
+            factors[definition["raw_value_column"]], errors="coerce"
+        ).to_numpy(float)
+        thresholds = pd.to_numeric(
+            factors[definition["tq_column"]], errors="coerce"
+        ).to_numpy(float)
     elif handler == "collecting_duct_abundance":
         values = pd.to_numeric(
             factors[definition["raw_value_column"]], errors="coerce"

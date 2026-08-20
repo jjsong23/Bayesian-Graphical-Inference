@@ -423,48 +423,78 @@ The background consisted of the absolute raw LFC values for all 7,174 usable
 single phosphosites in the PKA-knockout experiment. The background was not
 restricted to signaling-universe genes.
 
-For each signaling protein with detected sites:
-
-1. The site with the maximum absolute raw LFC was selected.
-2. The signed LFC, UniProt accession, site coordinate, and site-level
-   \(P\)-value were retained for auditing.
-3. The number of detected sites \(n\) was recorded.
-4. A site-count-matched threshold was calculated.
-
-Because proteins with more measured sites have more opportunities to produce
-an extreme maximum, the threshold was adjusted analytically:
+Every observed site was scored independently against the same unadjusted
+site-level threshold:
 
 $$
-q_n=0.75^{1/n}
+T_{0.75}=Q_{0.75}
+\left(\{|\mathrm{LFC}_{\mathrm{site}}|\}_{7174}\right)=0.73.
 $$
 
-$$
-T(n)=Q_{q_n}
-\left(
-\{|\mathrm{LFC}_{\mathrm{site}}|\}_{7174}
-\right)
-$$
-
-The protein’s maximum absolute LFC was then scored against \(T(n)\) using the
-same complement-of-minimum kernel.
-
-This is a maximum-of-\(n\) background correction: under an independent-site
-approximation, the probability that all \(n\) site values fall below \(T(n)\)
-is 0.75.
+For each signaling protein, the site with the maximum site-level Bayes factor
+was retained. Because the transformation is monotonic in absolute LFC, this is
+also the site with the maximum absolute raw LFC. A protein was a positive hit
+when at least one site had BF greater than 1. Additional sites did not raise
+the threshold and their factors were not multiplied. Site count, signed LFC,
+UniProt accession, coordinate, and site-level \(P\)-value were retained only
+for auditing.
 
 Results were:
 
 - 1,157 signaling proteins with at least one detected phosphosite
 - 8,013 signaling proteins without detected sites
-- 250 observed proteins above the neutral floor
-- 907 observed proteins at the neutral floor
+- 465 observed proteins above the neutral floor
+- 692 observed proteins at the neutral floor
 
 Proteins without detectable phosphosites received multiplier 1 and therefore
 no direct phosphoprotein evidence.
 
 Site-level \(P\)-values were retained for descriptive auditing but were not used
 to calculate the node evidence factor. Fifteen site-level \(P\)-values were
-invalid or unavailable.
+invalid or unavailable. This site-centric rule replaced the earlier
+`q^(1/n)` maximum-of-sites adjustment on 2026-08-20.
+
+## 6A. Selective PKA-Cα- and PKA-Cβ-knockout extension
+
+To recover signals that could be masked when both PKA catalytic subunits are
+deleted together, a later mpkCCD phosphopeptide workbook was added as two
+separately selectable node streams: PKA-Cα null versus matched intact and
+PKA-Cβ null versus matched intact. The generic default leaves both streams off.
+
+The source contained 4,635 phosphopeptide rows. Rows sharing a UniProt
+accession and normalized `Site(s)` pattern were collapsed by the median signed
+LFC independently for each comparison, producing 3,805 unique site-pattern
+records. The median modified P value was retained for audit but was not used to
+filter observations or calculate the evidence factor. Candidate mapping used
+the signaling catalog's mouse UniProt accession first and exact supplied symbol
+fallback second. This mapped 1,680 unique site patterns to 776 signaling
+candidates.
+
+For each comparison, the quantitative background contained the absolute LFCs
+of all 3,805 duplicate-collapsed source site patterns before signaling-universe
+filtering. The ordinary background q75 values were 0.22603867 for PKA-Cα KO and
+0.18371188 for PKA-Cβ KO. Every site pattern was scored against its comparison's
+single q75. Each mapped protein inherited the largest site-level factor, so one
+positively scoring site pattern was sufficient and additional sites neither
+raised its threshold nor accumulated extra evidence. Missing
+proteins received neutral BF 1 unless the optional GUI nondetection penalty was
+enabled.
+
+At unit weight and `Tq × = 1`, the PKA-Cα comparison gave BF > 1 to 267
+signaling candidates and the PKA-Cβ comparison gave BF > 1 to 261; 131 were
+shared. With both new streams enabled alongside the four historical defaults,
+1,232 proteins were selected and the 20 curated messengers produced 1,252
+total nodes.
+
+Absolute LFC was used because node selection asks whether a protein
+participates, not whether it is activated or inhibited. Oppositely signed
+alpha- and beta-specific responses therefore do not cancel. Their signed
+values remain in the audit. The two streams share the dependence group
+`pka_subunit_ko_phosphoproteomics` because they come from one TMT experiment;
+their multiplied BFs must not be described as fully independent evidence.
+These streams describe protein-level differential phosphorylation and do not
+silently add new KinasePredictor-derived kinase-activity scores. Full details
+and reproducibility paths are in `docs/pka_subunit_ko_node_evidence.md`.
 
 ## 7. Combination of kinase and phosphoprotein evidence
 
@@ -498,7 +528,9 @@ floor:
 - kinase multiplier > 1
 - phosphoprotein multiplier > 1
 
-This produced 871 selected proteins.
+Under the current site-centric phosphoprotein rule, this produced 1,051
+selected proteins. The validated pre-revision result contained 871 proteins
+and remains the immutable seed for the precomputed edge catalog.
 
 The stream-specific counts were:
 
@@ -507,9 +539,9 @@ The stream-specific counts were:
 | mpkCCD protein abundance | 467 |
 | Principal-cell transcript abundance | 319 |
 | Kinase activity | 32 |
-| Differential phosphoprotein evidence | 250 |
+| Differential phosphoprotein evidence | 465 |
 | Kinase and phosphoprotein overlap | 3 |
-| Any of the four streams | **871** |
+| Any of the four streams | **1,051** |
 
 The kinase and phosphoprotein streams were derived from the same PKA-knockout
 phosphoproteomic experiment. Their product therefore assumes more independence
@@ -536,21 +568,24 @@ These molecules:
 - were not assigned a node-selection posterior,
 - were retained to make the signaling graph biologically more complete.
 
-The final current node universe therefore contains:
+The current generic node-selection result therefore contains:
 
-- 871 proteins
+- 1,051 proteins
 - 20 second-messenger molecules
-- **891 total nodes**
+- **1,071 total nodes**
 
-The 871 proteins have overlapping functional labels. For example, 457 are
-labeled `signaling_process`, 227 `kinase_phosphatase_binding`, 195
-`adaptor_scaffold`, and 127 `kinase`. Class-composition plots counted a
+The 1,051 proteins have overlapping functional labels. For example, 563 are
+labeled `signaling_process`, 279 `kinase_phosphatase_binding`, 247
+`adaptor_scaffold`, and 155 `kinase`. Class-composition plots counted a
 multi-class protein in every class assigned to it; the class counts are
 therefore not mutually exclusive.
 
 ## 8A. Collecting-duct extension for the Aqp2-focused analysis
 
-The generic 891-node result above remains the reproducible baseline. A separate
+The validated 891-node edge catalog remains the immutable seed. Under the
+current site-centric phosphoprotein rule, the generic node defaults select
+1,051 proteins and dynamically extend the graph to 1,071 total nodes after the
+20 curated second messengers are added. A separate
 lab-specific node-selection profile was created to represent Aqp2 signaling
 throughout the collecting duct rather than only the cortical collecting duct.
 Six additional evidence streams were defined by crossing two assays with three
@@ -637,17 +672,17 @@ selection was:
 
 | Stage | Selected proteins | New proteins at stage |
 |---|---:|---:|
-| Existing four streams | 871 | -- |
-| + proteome CCD | 1,062 | 191 |
-| + proteome OMCD | 1,069 | 7 |
-| + proteome IMCD | 1,119 | 50 |
-| + RNA CCD | 2,314 | 1,195 |
-| + RNA OMCD | 3,227 | 913 |
-| + RNA IMCD | **3,296** | 69 |
+| Existing four streams | 1,051 | -- |
+| + proteome CCD | 1,231 | 180 |
+| + proteome OMCD | 1,238 | 7 |
+| + proteome IMCD | 1,280 | 42 |
+| + RNA CCD | 2,412 | 1,132 |
+| + RNA OMCD | 3,261 | 849 |
+| + RNA IMCD | **3,330** | 69 |
 
 Adding the 20 curated second messengers produced a lab-specific collecting-duct
-universe of 3,316 total nodes. This result is stored separately from the
-generic 891-node baseline; the additional six streams are selectable but off
+universe of 3,350 total nodes. This result is stored separately from the
+generic profile; the additional six streams are selectable but off
 in the generic GUI default configuration. The preprocessing and execution
 entry points are `code/node_selection/build_collecting_duct_evidence.py` and
 `code/node_selection/run_collecting_duct_node_selection.py`, respectively.

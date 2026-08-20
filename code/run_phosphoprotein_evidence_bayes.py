@@ -33,9 +33,20 @@ def main() -> None:
     universe_info = universe_info.drop_duplicates("symbol").set_index("symbol")
     universe = set(base["gene_symbol"])
     sites["in_signaling_universe"] = sites["gene_symbol"].isin(universe)
+    background = sites["absolute_log2_change"].astype(float)
+    site_t_q = float(background.quantile(Q))
+    sites["site_T_q"] = site_t_q
+    sites["site_evidence_likelihood"] = complement_minimum_factors(
+        sites["absolute_log2_change"],
+        site_t_q,
+        minimum_factor=MINIMUM_FACTOR,
+    )
+    sites["site_bayes_factor"] = (
+        sites["site_evidence_likelihood"] / MINIMUM_FACTOR
+    )
+    sites["site_positive_hit"] = sites["site_bayes_factor"] > 1.0 + 1e-12
     observed_sites = sites.loc[sites["in_signaling_universe"]].copy()
 
-    background = sites["absolute_log2_change"].astype(float)
     grouped = observed_sites.groupby("gene_symbol", sort=False)
     protein_rows = []
     for gene, group in grouped:
@@ -47,8 +58,6 @@ def main() -> None:
         )
         selected = group.iloc[0]
         n_sites = len(group)
-        effective_site_quantile = Q ** (1.0 / n_sites)
-        t_q = float(background.quantile(effective_site_quantile))
         protein_rows.append({
             "gene_symbol": gene,
             "node_name": universe_info["name"].get(gene),
@@ -65,17 +74,21 @@ def main() -> None:
             "median_absolute_lfc": float(group["absolute_log2_change"].median()),
             "valid_site_p_values": int(group["site_p_value_valid"].notna().sum()),
             "sites_with_p_lt_0_05": int((group["site_p_value_valid"] < 0.05).sum()),
+            "sites_with_positive_evidence": int(group["site_positive_hit"].sum()),
             "percent_valid_sites_with_p_lt_0_05": float(
                 (group["site_p_value_valid"] < 0.05).sum()
                 / group["site_p_value_valid"].notna().sum()
             ) if group["site_p_value_valid"].notna().any() else np.nan,
-            "effective_site_quantile": effective_site_quantile,
-            "matched_T_q": t_q,
+            "site_T_q": site_t_q,
+            "selected_site_evidence_likelihood": float(
+                selected["site_evidence_likelihood"]
+            ),
+            "selected_site_bayes_factor": float(selected["site_bayes_factor"]),
         })
 
     protein = pd.DataFrame(protein_rows).set_index("gene_symbol")
     factor_values = protein["max_absolute_lfc"]
-    factor_thresholds = protein["matched_T_q"]
+    factor_thresholds = protein["site_T_q"]
     factors = complement_minimum_factors(
         factor_values,
         factor_thresholds,
@@ -99,8 +112,9 @@ def main() -> None:
         "selected_site_key", "selected_uniprot", "selected_site",
         "selected_site_p_value_raw", "selected_site_p_value_valid",
         "mean_absolute_lfc", "median_absolute_lfc", "valid_site_p_values",
-        "sites_with_p_lt_0_05", "percent_valid_sites_with_p_lt_0_05",
-        "effective_site_quantile", "matched_T_q",
+        "sites_with_p_lt_0_05", "sites_with_positive_evidence",
+        "percent_valid_sites_with_p_lt_0_05", "site_T_q",
+        "selected_site_evidence_likelihood", "selected_site_bayes_factor",
         "raw_evidence_factor", "relative_multiplier", "at_neutral_floor",
     ]:
         integrated[column] = protein[column].reindex(integrated.index)
@@ -121,17 +135,15 @@ def main() -> None:
     protein_output = integrated.loc[integrated["phosphosite_evidence_observed"]].copy()
     selected_site_keys = set(protein["selected_site_key"])
     sites["selected_for_protein_statistic"] = sites["site_key"].isin(selected_site_keys)
-    threshold_rows = []
-    site_count_counts = protein["detected_phosphosites"].value_counts()
-    for n_sites in sorted(protein["detected_phosphosites"].unique()):
-        effective_q = Q ** (1.0 / int(n_sites))
-        threshold_rows.append({
-            "detected_phosphosites": int(n_sites),
-            "proteins_with_site_count": int(site_count_counts[n_sites]),
-            "effective_site_quantile": effective_q,
-            "matched_T_q": float(background.quantile(effective_q)),
-        })
-    thresholds = pd.DataFrame(threshold_rows)
+    threshold = pd.DataFrame(
+        [{
+            "background_phosphosites": int(len(background)),
+            "q": Q,
+            "site_T_q": site_t_q,
+            "site_count_adjustment": "none",
+            "protein_rule": "maximum site Bayes factor; at least one positive site is a hit",
+        }]
+    )
 
     summary = {
         "signaling_nodes": len(integrated),
@@ -149,7 +161,8 @@ def main() -> None:
         "minimum_factor": MINIMUM_FACTOR,
         "non_detected_multiplier": 1.0,
         "protein_statistic": "maximum absolute raw phosphosite LFC per mouse gene",
-        "matched_threshold_method": "T_q(n) is the empirical absolute-site-LFC quantile at q^(1/n), the analytical maximum-of-n background adjustment",
+        "site_threshold_method": "one empirical absolute-site-LFC q75 shared by every site; no adjustment for the number of sites on a protein",
+        "protein_evidence_rule": "maximum site-level Bayes factor; at least one site with BF > 1 makes the protein a positive hit",
         "posterior_probabilities_are_independent": True,
         "posterior_minimum": float(updated.min()),
         "posterior_mean": float(updated.mean()),
@@ -161,11 +174,12 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     integrated.to_csv(OUTPUT_DIR / "node_selection_protein_pc_phosphosite_posterior.tsv", sep="\t", index=False)
     protein_output.to_csv(OUTPUT_DIR / "phosphoprotein_evidence_nodes.tsv", sep="\t", index=False)
-    thresholds.to_csv(OUTPUT_DIR / "site_count_matched_thresholds.tsv", sep="\t", index=False)
+    threshold.to_csv(OUTPUT_DIR / "site_level_threshold.tsv", sep="\t", index=False)
+    (OUTPUT_DIR / "site_count_matched_thresholds.tsv").unlink(missing_ok=True)
     sites.to_csv(OUTPUT_DIR / "phosphosite_audit.tsv", sep="\t", index=False)
     (OUTPUT_DIR / "integrated_posterior.json").write_text(integrated.to_json(orient="records", double_precision=15), encoding="utf-8")
     (OUTPUT_DIR / "protein_nodes.json").write_text(protein_output.to_json(orient="records", double_precision=15), encoding="utf-8")
-    (OUTPUT_DIR / "thresholds.json").write_text(thresholds.to_json(orient="records", double_precision=15), encoding="utf-8")
+    (OUTPUT_DIR / "thresholds.json").write_text(threshold.to_json(orient="records", double_precision=15), encoding="utf-8")
     (OUTPUT_DIR / "site_audit.json").write_text(sites.to_json(orient="records", double_precision=15), encoding="utf-8")
     (OUTPUT_DIR / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -173,7 +187,7 @@ def main() -> None:
     print("Top 15 integrated nodes:")
     print(integrated[["gene_symbol", "phosphosite_evidence_observed", "relative_multiplier", "posterior_after_phosphosite", "rank_change"]].head(15).to_string(index=False))
     print("Top 15 phosphoprotein evidence multipliers:")
-    print(protein_output[["gene_symbol", "detected_phosphosites", "max_absolute_lfc", "matched_T_q", "relative_multiplier", "selected_site_key"]].sort_values("relative_multiplier", ascending=False).head(15).to_string(index=False))
+    print(protein_output[["gene_symbol", "detected_phosphosites", "sites_with_positive_evidence", "max_absolute_lfc", "site_T_q", "relative_multiplier", "selected_site_key"]].sort_values("relative_multiplier", ascending=False).head(15).to_string(index=False))
 
 
 if __name__ == "__main__":
