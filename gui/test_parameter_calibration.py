@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import importlib.util
 import unittest
 
 import numpy as np
@@ -11,6 +12,10 @@ from parameter_calibration import bounded_powell_positive_calibration
 
 
 class ParameterCalibrationTests(unittest.TestCase):
+    @unittest.skipUnless(
+        importlib.util.find_spec("scipy") is not None,
+        "SciPy is an optional runtime dependency required for calibration",
+    )
     def test_regularized_powell_fit_is_deterministic_and_improves_controls(self) -> None:
         specs = [
             {

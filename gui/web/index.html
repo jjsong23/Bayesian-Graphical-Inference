@@ -76,6 +76,10 @@
               <input id="unobserved-bf" type="number" min="0.000001" max="1" step="any" inputmode="decimal" />
             </label>
             <label>
+              <span>Continuous-mode BF floor</span>
+              <input id="continuous-node-bf-floor" type="number" min="0.000000000001" max="1" step="any" inputmode="decimal" />
+            </label>
+            <label>
               <span>Node prior</span>
               <input id="node-prior" type="number" min="0.000001" max="0.999999" step="any" inputmode="decimal" />
             </label>
@@ -84,7 +88,7 @@
               <input id="node-cutoff" type="number" min="0" max="1" step="0.01" />
             </label>
           </div>
-          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. The optional nondetection rule assigns one configurable BF below 1 whenever an enabled dataset could assess a protein but did not observe it. Repeated nondetections multiply the odds downward; out-of-scope nodes remain neutral (for example, non-kinases in the kinase-activity stream). A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source. The CCD/OMCD/IMCD streams are separately selectable, but the three streams within each assay share one experimental source; they are off in the generic default profile.</p>
+          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. Two negative-evidence mechanisms are available. The stage-wide fixed rule assigns one configured BF below 1 to each eligible nondetection. Alternatively, “Allow continuous negative evidence” can be enabled on individual datasets: it supersedes the fixed rule for that dataset, removes the historical 0.5 likelihood floor, scores weak observed values below BF=1, and represents eligible nondetections as x=0 (limited by the continuous-mode BF floor). Tq stays the positive empirical scale; zeros are evaluated against it rather than used to create a potentially zero Tq. Out-of-scope nodes remain neutral—for example, non-kinases in the kinase-activity stream. A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source. The CCD/OMCD/IMCD streams are separately selectable, but the three streams within each assay share one experimental source; they are off in the generic default profile.</p>
         </section>
 
         <section class="stage" aria-labelledby="edge-title">
@@ -106,6 +110,10 @@
               <input id="unsupported-edge-bf" type="number" min="0.000001" max="1" step="any" inputmode="decimal" />
             </label>
             <label>
+              <span>Continuous-mode BF floor</span>
+              <input id="continuous-edge-bf-floor" type="number" min="0.000000000001" max="1" step="any" inputmode="decimal" />
+            </label>
+            <label>
               <span>Edge prior</span>
               <input id="edge-prior" type="number" min="0.000001" max="0.999999" step="any" inputmode="decimal" />
             </label>
@@ -114,7 +122,7 @@
               <input id="edge-cutoff" type="number" min="0" max="1" step="0.01" />
             </label>
           </div>
-          <p class="scientific-note">Localization and motif streams scale their node- or site-specific Tq values. STRING and STITCH use Ref × because their normalizations use reference odds. The optional negative-evidence rule applies the selected BF below 1 only when a source could assess both endpoints but has no non-neutral relationship: missing assay coverage stays neutral. Each eligible absence is a separate update, so repeated unsupported observations can push an edge toward zero. Scaffold closure remains positive-only because failure to share a strong scaffold is not an independent nondetection. Cached raw evidence is rescored when controls change.</p>
+          <p class="scientific-note">Localization and motif streams scale their node- or site-specific Tq values. STRING and STITCH use Ref × because their normalizations use reference odds. The stage-wide fixed negative-evidence rule applies one selected BF below 1 when a source could assess both endpoints but has no relationship. The per-dataset continuous alternative supersedes that rule for its dataset, retains low measured similarities, motif scores, curation effort, STRING scores, and STITCH scores as BF&lt;1, and treats eligible no-record pairs as x=0 at the numerical floor. Missing assay coverage stays neutral. Scaffold closure remains positive-only because failure to share a strong scaffold is not an independent quantitative observation. Cached raw evidence is rescored when controls change.</p>
         </section>
 
         <section class="stage" aria-labelledby="path-title">

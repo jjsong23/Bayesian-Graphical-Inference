@@ -190,6 +190,14 @@ BF, and the weighted log BF in its configuration, summary, and node audit
 table. Nondetection is not proof of biological absence; users should enable the
 rule only when they accept the assay-coverage assumption.
 
+The GUI also provides a per-stream continuous alternative. For an enabled
+stream, it removes the 0.5 likelihood floor, evaluates eligible nondetections as
+`x=0`, and allows low measured values to produce BF below 1. It supersedes the
+fixed nondetection factor only for that stream. The positive measured Tq is
+retained because zero-padding sparse candidate universes can make q75 equal to
+zero. The exact equation, stream coverage, floor, and audit fields are specified
+in `docs/continuous_negative_evidence.md`.
+
 ## 3. mpkCCD protein-abundance evidence
 
 Protein abundance was obtained from the mpkCCD protein-abundance workbook:
@@ -897,6 +905,14 @@ all stream weights equal to one, prior 0.5, and (B^-_E=0.5), 332,215 of
 penalty applications because one pair can be eligible and unsupported in more
 than one source. These counts describe a sensitivity run, not a recommended
 biological cutoff.
+
+The GUI additionally exposes continuous negative evidence independently on
+each primary edge stream. It removes positive-only factor floors, preserves
+reported low quantitative scores as BF below 1, and represents an eligible
+no-record pair as `x=0` at a small positive BF floor. It supersedes the fixed
+unsupported-pair factor only for the selected stream; all source eligibility
+rules above still apply. See `docs/continuous_negative_evidence.md` for the
+equations and source-specific behavior.
 
 ### 11.2 Optional scaffold-mediated triadic closure
 

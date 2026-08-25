@@ -85,6 +85,12 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(
             config["edge_integration"]["unsupported_bayes_factor"], 0.5
         )
+        self.assertFalse(
+            config["edge_integration"]["continuous_negative_evidence"]
+        )
+        self.assertEqual(
+            config["edge_integration"]["continuous_bayes_factor_floor"], 1e-6
+        )
         self.assertTrue(config["path"]["ontology_directionality_enabled"])
         self.assertNotIn(
             "adaptor_scaffold", config["path"]["allowed_intermediate_classes"]
@@ -118,6 +124,12 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertFalse(config["node_integration"]["penalize_unobserved"])
         self.assertEqual(
             config["node_integration"]["unobserved_bayes_factor"], 0.5
+        )
+        self.assertFalse(
+            config["node_integration"]["continuous_negative_evidence"]
+        )
+        self.assertEqual(
+            config["node_integration"]["continuous_bayes_factor_floor"], 1e-6
         )
 
     def test_exact_half_priors_are_valid_html_values(self) -> None:
@@ -464,6 +476,46 @@ class WorkflowEngineTests(unittest.TestCase):
             int((eligible & ~observed).sum()),
         )
 
+    def test_continuous_node_evidence_scores_weak_values_and_zero_nondetections(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["node_streams"].values():
+            state["enabled"] = False
+        supplied["node_streams"]["pc_transcript"]["enabled"] = True
+        supplied["node_streams"]["pc_transcript"][
+            "continuous_negative_evidence"
+        ] = True
+        supplied["node_integration"]["continuous_bayes_factor_floor"] = 1e-5
+        supplied["node_integration"]["penalize_unobserved"] = True
+        config = normalize_configuration(supplied, self.registry)
+        self.assertTrue(config["node_integration"]["penalize_unobserved"])
+
+        factors, _, summary = select_nodes(PROJECT_ROOT, self.registry, config)
+        observed = factors["gui_pc_transcript_observed"]
+        bayes_factors = factors["gui_pc_transcript_bayes_factor"]
+        eligible = factors["gui_pc_transcript_negative_evidence_eligible"]
+
+        self.assertTrue((bayes_factors[eligible & ~observed] == 1e-5).all())
+        self.assertTrue((bayes_factors[observed] < 1.0).any())
+        self.assertTrue((bayes_factors[observed] > 1.0).any())
+        self.assertGreater(summary["total_continuous_negative_applications"], 0)
+        self.assertGreater(summary["candidates_below_prior"], 0)
+
+    def test_continuous_kinase_evidence_leaves_nonkinases_neutral(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["node_streams"].values():
+            state["enabled"] = False
+        supplied["node_streams"]["kinase_activity"]["enabled"] = True
+        supplied["node_streams"]["kinase_activity"][
+            "continuous_negative_evidence"
+        ] = True
+        config = normalize_configuration(supplied, self.registry)
+
+        factors, _, _ = select_nodes(PROJECT_ROOT, self.registry, config)
+        eligible = factors["gui_kinase_activity_negative_evidence_eligible"]
+        bayes_factors = factors["gui_kinase_activity_bayes_factor"]
+        self.assertTrue((bayes_factors[~eligible] == 1.0).all())
+        self.assertTrue((bayes_factors[eligible] < 1.0).any())
+
     def test_nondetection_bayes_factor_must_be_positive_and_at_most_one(self) -> None:
         for invalid in (0.0, 1.000001):
             supplied = default_configuration(self.registry)
@@ -526,6 +578,38 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertGreater(matrix.loc["Prkar2a", "SM_CAMP"], 0.5)
         self.assertLess(matrix.loc["Actn1", "SM_CAMP"], 0.5)
         self.assertEqual(summary["pairs_below_prior"], 1)
+        self.assertEqual(summary["negative_penalty_applications"], 1)
+
+    def test_continuous_edge_evidence_scores_low_and_zero_support(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["edge_streams"].values():
+            state["enabled"] = False
+        supplied["edge_streams"]["stitch_secondary_messenger"]["enabled"] = True
+        supplied["edge_streams"]["stitch_secondary_messenger"][
+            "continuous_negative_evidence"
+        ] = True
+        supplied["edge_integration"]["continuous_bayes_factor_floor"] = 1e-5
+        supplied["edge_integration"]["penalize_unsupported"] = True
+        config = normalize_configuration(supplied, self.registry)
+        self.assertTrue(config["edge_integration"]["penalize_unsupported"])
+
+        symbols = ["Prkar2a", "Actn1", "SM_CAMP"]
+        matrix, summary = combine_edge_factors(
+            PROJECT_ROOT,
+            self.registry,
+            config,
+            symbols,
+        )
+        self.assertEqual(matrix.loc["Prkar2a", "Actn1"], 0.5)
+        self.assertGreater(matrix.loc["Prkar2a", "SM_CAMP"], 0.5)
+        self.assertAlmostEqual(
+            matrix.loc["Actn1", "SM_CAMP"],
+            1e-5 / (1.0 + 1e-5),
+        )
+        self.assertEqual(
+            summary["continuous_negative_streams"],
+            ["stitch_secondary_messenger"],
+        )
         self.assertEqual(summary["negative_penalty_applications"], 1)
 
     def test_unsupported_edge_bayes_factor_is_validated(self) -> None:
@@ -889,8 +973,11 @@ class WorkflowEngineTests(unittest.TestCase):
         supplied["node_streams"]["protein_abundance"]["tq_multiplier"] = 0.95
         config = normalize_configuration(supplied, self.registry)
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
-        self.assertEqual(len(selected), 899)
-        self.assertEqual(summary["incrementally_added_protein_count"], 8)
+        # With the current objective 0.5 prior and strict posterior > 0.5
+        # selection rule, any net-positive BF support is sufficient.  Lowering
+        # this Tq therefore adds 188 proteins beyond the immutable 891-node seed.
+        self.assertEqual(len(selected), 1079)
+        self.assertEqual(summary["incrementally_added_protein_count"], 188)
         self.assertTrue(
             factors.loc[
                 factors["gene_symbol"].isin(selected["symbol"]),
@@ -910,9 +997,13 @@ class WorkflowEngineTests(unittest.TestCase):
         )["symbol"].tolist()
         ensure_incremental_pairs(PROJECT_ROOT, selected, seed)
         update = ensure_incremental_pairs(PROJECT_ROOT, selected, seed)
-        self.assertEqual(update.requested_incremental_pairs, 7156)
+        expected_incremental_pairs = (
+            len(selected) * (len(selected) - 1) // 2
+            - len(seed) * (len(seed) - 1) // 2
+        )
+        self.assertEqual(update.requested_incremental_pairs, expected_incremental_pairs)
         self.assertEqual(update.newly_characterized_pairs, 0)
-        self.assertEqual(update.cached_pairs_reused, 7156)
+        self.assertEqual(update.cached_pairs_reused, expected_incremental_pairs)
         matrix, summary = combine_edge_factors(
             PROJECT_ROOT,
             self.registry,
@@ -920,9 +1011,12 @@ class WorkflowEngineTests(unittest.TestCase):
             selected["symbol"].tolist(),
         )
         values = matrix.to_numpy(float)
-        self.assertEqual(matrix.shape, (899, 899))
+        self.assertEqual(matrix.shape, (len(selected), len(selected)))
         self.assertTrue(np.array_equal(values, values.T))
-        self.assertEqual(summary["unique_pair_count"], 403651)
+        self.assertEqual(
+            summary["unique_pair_count"],
+            len(selected) * (len(selected) - 1) // 2,
+        )
 
 
 if __name__ == "__main__":

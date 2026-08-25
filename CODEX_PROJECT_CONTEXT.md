@@ -37,7 +37,7 @@ phosphoprotein revision and therefore extend beyond that seed dynamically.
 ## Bayesian conventions
 
 - Node and edge evidence are represented as positive Bayes factors (BFs).
-- Missing node and edge evidence is neutral by default. The GUI exposes separate optional scope-aware negative-evidence rules. An eligible but unobserved node, or an eligible but unsupported edge pair, receives one configurable `BF < 1` per enabled stream (default penalty BF 0.5); hypotheses outside the source's scope remain at `BF = 1`.
+- Missing node and edge evidence is neutral by default. The GUI exposes a stage-wide fixed-absence rule and a per-dataset continuous alternative. The fixed rule gives an eligible nondetection one configurable `BF < 1` (default 0.5). The continuous rule removes the 0.5 likelihood floor, scores weak measurements below BF 1, and evaluates eligible nondetections as `x=0` at a small positive BF floor. Hypotheses outside the source's scope remain at `BF = 1`.
 - For a probability prior `p`, integration is performed in odds space: `posterior_odds = prior_odds * product(BF_i ** weight_i)`, then converted back to probability.
 - The common continuous-evidence transformation uses a source-specific threshold `T_q`. The GUI permits independent normalization multipliers for each applicable dataset.
 - STRING and STITCH instead use score odds relative to configurable reference scores, not the Gaussian-complement threshold kernel.
@@ -68,6 +68,8 @@ posterior is strictly greater than the configured node cutoff, which defaults
 to 0.5. There is no across-protein sum-to-one normalization.
 
 The optional `penalize_unobserved` node policy is disabled in the reproducibility default. When enabled, the engine replaces the neutral BF for each eligible nondetection with `unobserved_bayes_factor` (default 0.5) before applying the stream weight. Repeated nondetection BFs multiply the node's odds downward. Eligibility is stream-specific: non-kinases always remain neutral under kinase-activity evidence, whereas protein, RNA, phosphoprotein-response, and collecting-duct abundance streams treat all protein candidates as eligible. The engine writes eligible, observed, penalty-applied, source-BF, effective-BF, and weighted-log-BF audit columns for every active node stream. A strictly positive BF is required; posteriors can approach zero but are not made irreversibly equal to zero.
+
+Every node dataset also has an independent `continuous_negative_evidence` switch. When enabled, `BF=max(epsilon,(1-exp(-0.5*(x/Tq)^2))/0.5)` and eligible nondetections use `x=0`; the fixed penalty is skipped for that stream. The positive stored Tq is retained because zero-padding sparse 9,170-candidate backgrounds can make q75 equal zero. See `docs/continuous_negative_evidence.md`.
 
 With the option disabled, proteins with no detected phosphosite remain neutral under phosphoprotein evidence. Curated secondary messengers are inserted separately because they are not gene products measured by the protein/RNA screens and are never subjected to protein nondetection penalties.
 
@@ -110,6 +112,8 @@ Selectable streams include:
 - optional scaffold-mediated binary closure.
 
 The optional `penalize_unsupported` edge policy is disabled in the reproducibility default. When enabled, a pair that is eligible for an active source but lacks a non-neutral source record receives `unsupported_bayes_factor` (default 0.5) before the stream weight is applied. Scope is source-specific: both proteins must have the relevant localization profiles for mpkCCD/HPA; KinasePredictor requires a kinase and a protein with an observed scorable phosphosite; STRING requires two mapped proteins; OmniPath considers protein–protein pairs; and STITCH considers curated-messenger-to-mapped-protein pairs. Scaffold closure has no negative-absence rule. The update remains symmetric and is also applied to eligible external-target edges. Database absence is an optional modeling assumption, not proof that a biological interaction is impossible.
+
+Every primary edge dataset also has an independent continuous-negative switch. It retains measured low factors below 1 and fills eligible no-record pairs with the numerical floor; out-of-scope pairs stay neutral. It is implemented for internal, incrementally cached, calibration, and external-target edges. Scaffold closure remains positive-only.
 
 Localization compatibility/adjacency matrices for mpkCCD, HPA, and COMPARTMENTS are stored with the archived data so a scientist can validate every assumed compartment relationship. COMPARTMENTS is used in the dedicated colocalization/AlphaFold candidate-filtering workflow. Experimental PPI tiers assembled from STRING, BioGRID, and IntAct support the prior-knowledge filter used before structural prediction.
 
@@ -181,6 +185,24 @@ The full data/results tree is not stored in GitHub. Restore it from the dated co
 4. Run the unit tests listed in `README.md` before and after logic changes.
 5. For a scientific claim, trace the exact factor column and source metadata through `gui/evidence_registry.json`, the preprocessing script, and the immutable run configuration.
 6. Record substantive method changes in both the relevant detailed methods document and a dated lab-notebook entry.
+
+## 2026-08-25 sensitivity and shareable release handoff
+
+The complete current overview is `docs/PROJECT_COMPLETE_SUMMARY_2026-08-25.md`.
+The new score-distribution renderer,
+`code/sensitivity_analysis/render_evidence_score_distributions.py`, saves one
+PNG for every node/edge evidence stream plus consolidated figures and a TSV
+summary under the dated sensitivity-analysis result directory. Eligible
+nondetections are shown at zero, item-specific Tq populations are shown as a
+median plus 10th-90th percentile band, and non-Tq references are labeled
+explicitly.
+
+`code/release/build_shareable_packages.py` creates a complete PNG archive and a
+runnable lab-sharing application archive under ignored `deliverables/`. The app
+archive intentionally omits the 3.35 GB disposable SQLite cache and old outputs,
+but includes every source required for the 891-node seed workflow and for
+incremental characterization of newly added nodes. Read
+`docs/SHAREABLE_RELEASE_2026-08-25.md` before changing the package scope.
 
 ## Scientific cautions
 

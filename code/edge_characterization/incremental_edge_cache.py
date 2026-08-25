@@ -1012,11 +1012,20 @@ def ensure_incremental_pairs(
         connection.close()
 
 
-def _complement(value: float, threshold: float) -> float:
+def _complement(
+    value: float,
+    threshold: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
+) -> float:
     if not (math.isfinite(value) and math.isfinite(threshold) and threshold > 0):
         return NEUTRAL
     z = max(value, 0.0) / threshold
-    return max(NEUTRAL, 1.0 - math.exp(-0.5 * z * z))
+    raw = 1.0 - math.exp(-0.5 * z * z)
+    if continuous_negative:
+        return max(NEUTRAL * minimum_bayes_factor, raw)
+    return max(NEUTRAL, raw)
 
 
 def _odds_factor(score: float, reference: float, *, floor: bool = False) -> float:
@@ -1031,6 +1040,9 @@ def incremental_factor_table(
     handler: str,
     multiplier: float,
     graph_symbols: list[str],
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     """Rescore cached incremental pairs for one evidence stream."""
     signature, _ = evidence_signature(project)
@@ -1055,32 +1067,36 @@ def incremental_factor_table(
             factor = 1.0
             if handler == "mpkccd_localization" and row[2] is not None and row[3] is not None and row[4] is not None:
                 factor = (
-                    _complement(float(row[2]), float(row[3]) * multiplier)
-                    + _complement(float(row[2]), float(row[4]) * multiplier)
+                    _complement(float(row[2]), float(row[3]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
+                    + _complement(float(row[2]), float(row[4]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                 ) / (2.0 * NEUTRAL)
             elif handler == "kinase_predictor":
                 log_factor = 0.0
                 for hit in json.loads(row[5] or "[]"):
-                    likelihood = _complement(float(hit["raw_score"]), float(hit["site_tq"]) * multiplier)
+                    likelihood = _complement(float(hit["raw_score"]), float(hit["site_tq"]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                     log_factor += math.log(likelihood / NEUTRAL)
-                factor = math.exp(min(log_factor, 700.0))
+                factor = max(minimum_bayes_factor, math.exp(min(log_factor, 700.0))) if continuous_negative else math.exp(min(log_factor, 700.0))
             elif handler == "string_v12" and row[6] is not None:
                 factor = _odds_factor(float(row[6]), STRING_REFERENCE * multiplier)
+                if continuous_negative:
+                    factor = max(minimum_bayes_factor, factor)
             elif handler == "hpa_primary" and row[7] is not None and row[8] is not None and row[9] is not None:
                 factor = (
-                    _complement(float(row[7]), float(row[8]) * multiplier)
-                    + _complement(float(row[7]), float(row[9]) * multiplier)
+                    _complement(float(row[7]), float(row[8]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
+                    + _complement(float(row[7]), float(row[9]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                 ) / (2.0 * NEUTRAL)
             elif handler == "hpa_high_confidence" and row[10] is not None and row[11] is not None and row[12] is not None:
                 factor = (
-                    _complement(float(row[10]), float(row[11]) * multiplier)
-                    + _complement(float(row[10]), float(row[12]) * multiplier)
+                    _complement(float(row[10]), float(row[11]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
+                    + _complement(float(row[10]), float(row[12]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                 ) / (2.0 * NEUTRAL)
             elif handler == "omnipath_core" and row[13] is not None:
                 support = 1.0 - math.exp(-0.5 * (float(row[13]) / (6.0 * multiplier)) ** 2)
-                factor = (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
+                factor = max(minimum_bayes_factor, support / NEUTRAL) if continuous_negative else (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
             elif handler == "stitch_secondary_messenger" and row[14] is not None:
-                factor = _odds_factor(float(row[14]), STITCH_REFERENCE * multiplier, floor=True)
+                factor = _odds_factor(float(row[14]), STITCH_REFERENCE * multiplier, floor=not continuous_negative)
+                if continuous_negative:
+                    factor = max(minimum_bayes_factor, factor)
             if factor > 0 and math.isfinite(factor) and abs(factor - 1.0) > 1e-12:
                 output.append((row[0], row[1], factor))
         return pd.DataFrame.from_records(
@@ -1095,6 +1111,9 @@ def incremental_pair_factor_table(
     handler: str,
     multiplier: float,
     pairs: list[tuple[str, str]],
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     """Rescore only named cached pairs, avoiding a full incremental-cache scan."""
     signature, _ = evidence_signature(project)
@@ -1117,38 +1136,44 @@ def incremental_pair_factor_table(
             factor = 1.0
             if handler == "mpkccd_localization" and row[2] is not None and row[3] is not None and row[4] is not None:
                 factor = (
-                    _complement(float(row[2]), float(row[3]) * multiplier)
-                    + _complement(float(row[2]), float(row[4]) * multiplier)
+                    _complement(float(row[2]), float(row[3]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
+                    + _complement(float(row[2]), float(row[4]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                 ) / (2.0 * NEUTRAL)
             elif handler == "kinase_predictor":
                 log_factor = 0.0
                 for hit in json.loads(row[5] or "[]"):
                     likelihood = _complement(
-                        float(hit["raw_score"]), float(hit["site_tq"]) * multiplier
+                        float(hit["raw_score"]), float(hit["site_tq"]) * multiplier,
+                        continuous_negative=continuous_negative,
+                        minimum_bayes_factor=minimum_bayes_factor,
                     )
                     log_factor += math.log(likelihood / NEUTRAL)
-                factor = math.exp(min(log_factor, 700.0))
+                factor = max(minimum_bayes_factor, math.exp(min(log_factor, 700.0))) if continuous_negative else math.exp(min(log_factor, 700.0))
             elif handler == "string_v12" and row[6] is not None:
                 factor = _odds_factor(float(row[6]), STRING_REFERENCE * multiplier)
+                if continuous_negative:
+                    factor = max(minimum_bayes_factor, factor)
             elif handler == "hpa_primary" and row[7] is not None and row[8] is not None and row[9] is not None:
                 factor = (
-                    _complement(float(row[7]), float(row[8]) * multiplier)
-                    + _complement(float(row[7]), float(row[9]) * multiplier)
+                    _complement(float(row[7]), float(row[8]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
+                    + _complement(float(row[7]), float(row[9]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                 ) / (2.0 * NEUTRAL)
             elif handler == "hpa_high_confidence" and row[10] is not None and row[11] is not None and row[12] is not None:
                 factor = (
-                    _complement(float(row[10]), float(row[11]) * multiplier)
-                    + _complement(float(row[10]), float(row[12]) * multiplier)
+                    _complement(float(row[10]), float(row[11]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
+                    + _complement(float(row[10]), float(row[12]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
                 ) / (2.0 * NEUTRAL)
             elif handler == "omnipath_core" and row[13] is not None:
                 support = 1.0 - math.exp(
                     -0.5 * (float(row[13]) / (6.0 * multiplier)) ** 2
                 )
-                factor = (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
+                factor = max(minimum_bayes_factor, support / NEUTRAL) if continuous_negative else (NEUTRAL + (1.0 - NEUTRAL) * support) / NEUTRAL
             elif handler == "stitch_secondary_messenger" and row[14] is not None:
                 factor = _odds_factor(
-                    float(row[14]), STITCH_REFERENCE * multiplier, floor=True
+                    float(row[14]), STITCH_REFERENCE * multiplier, floor=not continuous_negative
                 )
+                if continuous_negative:
+                    factor = max(minimum_bayes_factor, factor)
             if factor > 0 and math.isfinite(factor) and abs(factor - 1.0) > 1e-12:
                 output.append((row[0], row[1], factor))
         return pd.DataFrame.from_records(

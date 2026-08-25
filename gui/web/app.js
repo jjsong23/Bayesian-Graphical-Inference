@@ -144,6 +144,13 @@ function streamCard(stream, group, current) {
     field.innerHTML = `<span>${parameter.label}</span><input class="stream-parameter stream-setting" data-parameter="${parameter.id}" type="number" min="${parameter.minimum}" max="${parameter.maximum}" step="${parameter.step}" value="${current.parameters[parameter.id]}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} ${parameter.label}" />`;
     card.appendChild(field);
   });
+  if (group === "node" || !stream.derived) {
+    const negative = document.createElement("label");
+    negative.className = "continuous-negative-field";
+    negative.title = "Remove the positive-only floor for this source. Eligible nondetections are x=0; weak observations may produce BF below 1.";
+    negative.innerHTML = `<input class="stream-continuous-negative stream-setting" type="checkbox" ${current.continuous_negative_evidence ? "checked" : ""} ${current.enabled ? "" : "disabled"} /><span>Allow continuous negative evidence (weak values + x=0 nondetections)</span>`;
+    card.appendChild(negative);
+  }
   toggle.addEventListener("change", () => {
     if (toggle.checked && stream.exclusive_group) {
       document.querySelectorAll(`[data-group="${group}"]`).forEach((other) => {
@@ -206,12 +213,14 @@ function populateControls() {
   $("penalize-unobserved").checked = node.penalize_unobserved;
   $("unobserved-bf").value = node.unobserved_bayes_factor;
   $("unobserved-bf").disabled = !node.penalize_unobserved;
+  $("continuous-node-bf-floor").value = node.continuous_bayes_factor_floor;
   $("node-prior").value = node.prior_probability;
   $("node-cutoff").value = node.output_probability_cutoff;
   const edge = state.defaults.edge_integration;
   $("penalize-unsupported-edges").checked = edge.penalize_unsupported;
   $("unsupported-edge-bf").value = edge.unsupported_bayes_factor;
   $("unsupported-edge-bf").disabled = !edge.penalize_unsupported;
+  $("continuous-edge-bf-floor").value = edge.continuous_bayes_factor_floor;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
   const path = state.defaults.path;
@@ -250,6 +259,8 @@ function collectStreams(group) {
       tq_multiplier: Number(card.querySelector(".stream-tq")?.value ?? 1),
       parameters,
     };
+    const continuousNegative = card.querySelector(".stream-continuous-negative");
+    if (continuousNegative) streamState.continuous_negative_evidence = continuousNegative.checked;
     const preferred = card.querySelector(".stream-preferred-tq");
     if (preferred) streamState.preferred_tq_multiplier = Number(preferred.value);
     result[card.dataset.stream] = streamState;
@@ -271,6 +282,8 @@ function collectConfiguration() {
       include_second_messengers: $("include-messengers").checked,
       penalize_unobserved: $("penalize-unobserved").checked,
       unobserved_bayes_factor: Number($("unobserved-bf").value),
+      continuous_negative_evidence: false,
+      continuous_bayes_factor_floor: Number($("continuous-node-bf-floor").value),
       prior_probability: Number($("node-prior").value),
       output_probability_cutoff: Number($("node-cutoff").value),
     },
@@ -278,6 +291,8 @@ function collectConfiguration() {
     edge_integration: {
       penalize_unsupported: $("penalize-unsupported-edges").checked,
       unsupported_bayes_factor: Number($("unsupported-edge-bf").value),
+      continuous_negative_evidence: false,
+      continuous_bayes_factor_floor: Number($("continuous-edge-bf-floor").value),
       prior_probability: Number($("edge-prior").value),
       output_probability_cutoff: Number($("edge-cutoff").value),
     },

@@ -60,6 +60,67 @@ def complement_minimum_factors(
     return pd.Series(factors, index=numeric.index, name="bayes_factor")
 
 
+def continuous_complement_bayes_factors(
+    values: pd.Series,
+    thresholds: float | pd.Series,
+    *,
+    neutral_likelihood: float = 0.5,
+    minimum_bayes_factor: float = 1e-6,
+) -> pd.Series:
+    """Return two-sided Bayes evidence from the unfloored complement kernel.
+
+    Unlike :func:`complement_minimum_factors`, this function does not force the
+    likelihood to be at least 0.5. It evaluates::
+
+        BF = max(minimum_bayes_factor,
+                 (1 - exp(-0.5 * (value / threshold) ** 2))
+                 / neutral_likelihood)
+
+    Consequently, weak values have BF below 1 and strong values have BF above
+    1. Callers may represent an eligible nondetection as ``value=0``. The small
+    positive BF floor replaces the mathematical zero so downstream log-odds
+    updates remain finite. Out-of-scope rows should not be passed as zeros;
+    they should remain neutral at BF=1 in the calling integration layer.
+    """
+    if not isinstance(values, pd.Series):
+        raise TypeError("values must be a pandas Series")
+    if values.index.has_duplicates:
+        raise ValueError("values index must be unique")
+    if not 0.0 < neutral_likelihood < 1.0:
+        raise ValueError("neutral_likelihood must be strictly between 0 and 1")
+    if not 0.0 < minimum_bayes_factor <= 1.0:
+        raise ValueError("minimum_bayes_factor must be in (0, 1]")
+
+    numeric = pd.to_numeric(values, errors="coerce").astype(float)
+    if isinstance(thresholds, pd.Series):
+        if thresholds.index.has_duplicates:
+            raise ValueError("thresholds index must be unique")
+        threshold_values = (
+            pd.to_numeric(thresholds, errors="coerce")
+            .reindex(numeric.index)
+            .astype(float)
+        )
+    else:
+        threshold_values = pd.Series(float(thresholds), index=numeric.index)
+
+    value_array = numeric.to_numpy(float)
+    threshold_array = threshold_values.to_numpy(float)
+    valid = (
+        np.isfinite(value_array)
+        & np.isfinite(threshold_array)
+        & (threshold_array > 0)
+    )
+    result = np.full(len(numeric), minimum_bayes_factor, dtype=float)
+    if np.any(valid):
+        z = np.maximum(value_array[valid], 0.0) / threshold_array[valid]
+        likelihood = 1.0 - np.exp(-0.5 * np.square(z))
+        result[valid] = np.maximum(
+            minimum_bayes_factor,
+            likelihood / neutral_likelihood,
+        )
+    return pd.Series(result, index=numeric.index, name="bayes_factor")
+
+
 def signaling_bayes_factors(
     values: pd.Series,
     signaling_universe: Collection[str],

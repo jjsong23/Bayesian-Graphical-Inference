@@ -258,6 +258,7 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             stream["id"]: {
                 "enabled": bool(stream["default_enabled"]),
                 "weight": float(stream["default_weight"]),
+                "continuous_negative_evidence": False,
                 **(
                     {
                         "tq_multiplier": float(
@@ -284,11 +285,22 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "unobserved_bayes_factor": float(
                 defaults["unobserved_node_bayes_factor"]
             ),
+            "continuous_negative_evidence": bool(
+                defaults["continuous_negative_node_evidence"]
+            ),
+            "continuous_bayes_factor_floor": float(
+                defaults["continuous_node_bayes_factor_floor"]
+            ),
         },
         "edge_streams": {
             stream["id"]: {
                 "enabled": bool(stream["default_enabled"]),
                 "weight": float(stream["default_weight"]),
+                **(
+                    {"continuous_negative_evidence": False}
+                    if not stream.get("derived")
+                    else {}
+                ),
                 **(
                     {
                         "tq_multiplier": float(
@@ -316,6 +328,12 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "penalize_unsupported": bool(defaults["penalize_unsupported_edges"]),
             "unsupported_bayes_factor": float(
                 defaults["unsupported_edge_bayes_factor"]
+            ),
+            "continuous_negative_evidence": bool(
+                defaults["continuous_negative_edge_evidence"]
+            ),
+            "continuous_bayes_factor_floor": float(
+                defaults["continuous_edge_bayes_factor_floor"]
             ),
         },
         "path": {
@@ -394,6 +412,13 @@ def normalize_configuration(
                     0.0,
                     10.0,
                 )
+                if "continuous_negative_evidence" in state:
+                    state["continuous_negative_evidence"] = bool(
+                        incoming[stream_id].get(
+                            "continuous_negative_evidence",
+                            state["continuous_negative_evidence"],
+                        )
+                    )
                 if definition.get("normalization", {}).get("user_control", True):
                     state["tq_multiplier"] = _number(
                         incoming[stream_id].get(
@@ -516,10 +541,22 @@ def normalize_configuration(
     node_integration["penalize_unobserved"] = bool(
         node_integration["penalize_unobserved"]
     )
+    node_integration["continuous_negative_evidence"] = bool(
+        node_integration["continuous_negative_evidence"]
+    )
+    if node_integration["continuous_negative_evidence"]:
+        # The continuous mode supersedes the older fixed nondetection rule.
+        node_integration["penalize_unobserved"] = False
     node_integration["unobserved_bayes_factor"] = _number(
         node_integration["unobserved_bayes_factor"],
         "unobserved node Bayes factor",
         1e-6,
+        1.0,
+    )
+    node_integration["continuous_bayes_factor_floor"] = _number(
+        node_integration["continuous_bayes_factor_floor"],
+        "continuous node Bayes-factor floor",
+        1e-12,
         1.0,
     )
     node_integration["non_neutral_tolerance"] = _number(
@@ -544,10 +581,21 @@ def normalize_configuration(
     edge_integration["penalize_unsupported"] = bool(
         edge_integration["penalize_unsupported"]
     )
+    edge_integration["continuous_negative_evidence"] = bool(
+        edge_integration["continuous_negative_evidence"]
+    )
+    if edge_integration["continuous_negative_evidence"]:
+        edge_integration["penalize_unsupported"] = False
     edge_integration["unsupported_bayes_factor"] = _number(
         edge_integration["unsupported_bayes_factor"],
         "unsupported edge Bayes factor",
         1e-6,
+        1.0,
+    )
+    edge_integration["continuous_bayes_factor_floor"] = _number(
+        edge_integration["continuous_bayes_factor_floor"],
+        "continuous edge Bayes-factor floor",
+        1e-12,
         1.0,
     )
     edge_integration["prior_probability"] = _number(
@@ -733,6 +781,37 @@ def complement_minimum_likelihood(
     return result
 
 
+def continuous_complement_bayes_factor(
+    values: np.ndarray | pd.Series,
+    thresholds: np.ndarray | pd.Series | float,
+    *,
+    minimum_bayes_factor: float,
+) -> np.ndarray:
+    """Score quantitative evidence without the historical 0.5 likelihood floor.
+
+    The raw likelihood is ``1 - exp(-0.5 * (x / Tq)^2)`` and its neutral
+    reference is 0.5, so the returned Bayes factor is raw likelihood / 0.5.
+    A true zero would make log-odds updates singular; it is therefore replaced
+    by the configured small positive BF floor. Missing values must be converted
+    to zero by the caller only inside the source's explicit eligibility scope.
+    """
+    if not math.isfinite(minimum_bayes_factor) or not 0 < minimum_bayes_factor <= 1:
+        raise ValueError("minimum continuous Bayes factor must be in (0, 1]")
+    x = np.asarray(values, dtype=float)
+    tq = np.asarray(thresholds, dtype=float)
+    x_broadcast, tq_broadcast = np.broadcast_arrays(x, tq)
+    factors = np.full(x_broadcast.shape, minimum_bayes_factor, dtype=float)
+    valid = np.isfinite(x_broadcast) & np.isfinite(tq_broadcast) & (tq_broadcast > 0)
+    if np.any(valid):
+        z = np.maximum(x_broadcast[valid], 0.0) / tq_broadcast[valid]
+        likelihood = 1.0 - np.exp(-0.5 * np.square(z))
+        factors[valid] = np.maximum(
+            minimum_bayes_factor,
+            likelihood / NEUTRAL_LIKELIHOOD,
+        )
+    return factors
+
+
 def _stream_multiplier(state: dict[str, Any]) -> float:
     return float(state.get("tq_multiplier", 1.0))
 
@@ -747,14 +826,93 @@ def _aligned_series(
     return pd.to_numeric(keys.map(lookup), errors="coerce").to_numpy(float)
 
 
+def _node_stream_raw_values_and_thresholds(
+    project: Path,
+    factors: pd.DataFrame,
+    definition: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the quantitative x and positive Tq arrays for one node stream."""
+    genes = factors["gene_symbol"].astype(str)
+    handler = definition["normalization"]["handler"]
+    if handler == "protein_abundance":
+        raw = pd.read_csv(project / PROTEIN_RAW_RELATIVE, sep="\t")
+        values = _aligned_series(
+            raw, "gene_symbol", "linear_relative_abundance", genes
+        )
+        threshold = float(pd.to_numeric(raw["T_q"], errors="coerce").dropna().iloc[0])
+        return values, np.full(len(factors), threshold, dtype=float)
+    if handler == "pc_transcript":
+        raw = pd.read_csv(project / PC_RAW_RELATIVE, sep="\t")
+        values = _aligned_series(raw, "gene_symbol", "pc_median_tpm", genes)
+        threshold = float(pd.to_numeric(raw["T_q"], errors="coerce").dropna().iloc[0])
+        return values, np.full(len(factors), threshold, dtype=float)
+    if handler == "kinase_activity":
+        values = pd.to_numeric(
+            factors["kinase_absolute_lfc"], errors="coerce"
+        ).to_numpy(float)
+        return values, np.full(len(factors), 0.17, dtype=float)
+    if handler == "phosphoprotein_response":
+        raw = pd.read_csv(project / PHOSPHOPROTEIN_RAW_RELATIVE, sep="\t")
+        values = _aligned_series(raw, "gene_symbol", "max_absolute_lfc", genes)
+        thresholds = _aligned_series(raw, "gene_symbol", "site_T_q", genes)
+    elif handler == "site_level_phosphoprotein_response":
+        values = pd.to_numeric(
+            factors[definition["raw_value_column"]], errors="coerce"
+        ).to_numpy(float)
+        thresholds = pd.to_numeric(
+            factors[definition["tq_column"]], errors="coerce"
+        ).to_numpy(float)
+    elif handler == "collecting_duct_abundance":
+        values = pd.to_numeric(
+            factors[definition["raw_value_column"]], errors="coerce"
+        ).to_numpy(float)
+        thresholds = pd.to_numeric(
+            factors[definition["tq_column"]], errors="coerce"
+        ).to_numpy(float)
+    else:
+        raise ValueError(f"unsupported node normalization handler: {handler}")
+
+    positive_thresholds = thresholds[np.isfinite(thresholds) & (thresholds > 0)]
+    if not len(positive_thresholds):
+        raise ValueError(f"node stream {definition['id']} has no stored positive Tq")
+    # Current phosphoproteomic and segment streams use a single source-wide Tq.
+    # Filling missing candidate rows with that positive reference lets x=0 be
+    # scored without pretending the missing row supplied its own threshold.
+    threshold_reference = float(np.median(positive_thresholds))
+    thresholds = np.where(
+        np.isfinite(thresholds) & (thresholds > 0),
+        thresholds,
+        threshold_reference,
+    )
+    return values, thresholds
+
+
 def node_stream_values(
     project: Path,
     factors: pd.DataFrame,
     definition: dict[str, Any],
     state: dict[str, Any],
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> np.ndarray:
     """Return one node stream after applying its independent Tq setting."""
     multiplier = _stream_multiplier(state)
+    if continuous_negative:
+        values, thresholds = _node_stream_raw_values_and_thresholds(
+            project, factors, definition
+        )
+        eligible, _ = node_stream_observation_masks(factors, definition)
+        source_neutral = float(definition["neutral_value"])
+        result = np.full(len(factors), source_neutral, dtype=float)
+        calculable = eligible & np.isfinite(thresholds) & (thresholds > 0)
+        zero_inclusive_values = np.where(np.isfinite(values), values, 0.0)
+        result[calculable] = source_neutral * continuous_complement_bayes_factor(
+            zero_inclusive_values[calculable],
+            thresholds[calculable] * multiplier,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+        return result
     if math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15):
         return pd.to_numeric(
             factors[definition["column"]], errors="coerce"
@@ -977,6 +1135,12 @@ def select_nodes(
     unobserved_bayes_factor = float(
         config["node_integration"]["unobserved_bayes_factor"]
     )
+    global_continuous_negative = bool(
+        config["node_integration"]["continuous_negative_evidence"]
+    )
+    continuous_bf_floor = float(
+        config["node_integration"]["continuous_bayes_factor_floor"]
+    )
     prior_log_odds = math.log(prior_probability / (1.0 - prior_probability))
     log_odds = np.full(len(factors), prior_log_odds, dtype=float)
     if "initial_prior" in factors.columns:
@@ -990,7 +1154,18 @@ def select_nodes(
         if not state["enabled"] or state["weight"] <= 0:
             continue
         definition = stream_defs[stream_id]
-        values = node_stream_values(project, factors, definition, state)
+        stream_continuous_negative = (
+            global_continuous_negative
+            or bool(state.get("continuous_negative_evidence", False))
+        )
+        values = node_stream_values(
+            project,
+            factors,
+            definition,
+            state,
+            continuous_negative=stream_continuous_negative,
+            minimum_bayes_factor=continuous_bf_floor,
+        )
         if (values <= 0).any():
             raise ValueError(f"node stream {stream_id} contains a non-positive factor")
         neutral_value = float(definition["neutral_value"])
@@ -1000,8 +1175,16 @@ def select_nodes(
         bayes_factors = source_bayes_factors.copy()
         eligible, observed = node_stream_observation_masks(factors, definition)
         unobserved_eligible = eligible & ~observed
-        penalty_applied = penalize_unobserved & unobserved_eligible
+        penalty_applied = (
+            (penalize_unobserved and not stream_continuous_negative)
+            & unobserved_eligible
+        )
         bayes_factors[penalty_applied] = unobserved_bayes_factor
+        continuous_negative_applied = (
+            stream_continuous_negative
+            & eligible
+            & (bayes_factors < 1.0 - tolerance)
+        )
         weight = float(state["weight"])
         weighted_log_bf = weight * np.log(bayes_factors)
         log_odds += weighted_log_bf
@@ -1019,6 +1202,9 @@ def select_nodes(
                 f"gui_{stream_id}_negative_evidence_eligible": eligible,
                 f"gui_{stream_id}_observed": observed,
                 f"gui_{stream_id}_unobserved_penalty_applied": penalty_applied,
+                f"gui_{stream_id}_continuous_negative_evidence_applied": (
+                    continuous_negative_applied
+                ),
             }
         )
         active_streams.append(
@@ -1035,6 +1221,10 @@ def select_nodes(
                 "observed_eligible_candidates": int(observed.sum()),
                 "unobserved_eligible_candidates": int(unobserved_eligible.sum()),
                 "unobserved_penalties_applied": int(penalty_applied.sum()),
+                "continuous_negative_candidates": int(
+                    continuous_negative_applied.sum()
+                ),
+                "continuous_negative_evidence": stream_continuous_negative,
                 "unobserved_bayes_factor": (
                     unobserved_bayes_factor if penalize_unobserved else None
                 ),
@@ -1153,8 +1343,18 @@ def select_nodes(
         "node_output_probability_cutoff": output_cutoff,
         "penalize_unobserved": penalize_unobserved,
         "unobserved_bayes_factor": unobserved_bayes_factor,
+        "continuous_negative_evidence": global_continuous_negative,
+        "continuous_negative_streams": [
+            stream["id"]
+            for stream in active_streams
+            if stream["continuous_negative_evidence"]
+        ],
+        "continuous_bayes_factor_floor": continuous_bf_floor,
         "total_unobserved_penalties_applied": int(
             sum(stream["unobserved_penalties_applied"] for stream in active_streams)
+        ),
+        "total_continuous_negative_applications": int(
+            sum(stream["continuous_negative_candidates"] for stream in active_streams)
         ),
         "candidates_below_prior": int((posterior < prior_probability).sum()),
         "posterior_minimum": float(posterior.min()),
@@ -1173,9 +1373,11 @@ def select_nodes(
             "Each protein is an independent present-versus-absent hypothesis. Every "
             "protein begins at the configured Bernoulli prior (default 0.5). Source "
             "scores are divided by their neutral values to obtain BF=1 at neutrality; "
-            "weighted Bayes factors multiply prior odds. When the optional missing-data "
-            "penalty is enabled, each eligible nondetection receives the configured "
-            "BF<1; out-of-scope nodes remain at BF=1. A protein is selected when "
+            "weighted Bayes factors multiply prior odds. The fixed-absence mode gives "
+            "each eligible nondetection one configured BF<1. Alternatively, continuous "
+            "negative evidence removes the 0.5 likelihood floor and scores both weak "
+            "detections and x=0 nondetections with the same Tq kernel, bounded only by "
+            "the numerical BF floor. Out-of-scope nodes remain at BF=1. A protein is selected when "
             "its posterior is strictly above the configured node cutoff (default 0.5). "
             "Posteriors are not normalized across proteins."
         ),
@@ -1245,46 +1447,9 @@ def _prepare_node_calibration_context(
     definition: dict[str, Any],
     target_indices: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    genes = factors["gene_symbol"].astype(str)
-    handler = definition["normalization"]["handler"]
-    values: np.ndarray
-    thresholds: np.ndarray
-    if handler == "protein_abundance":
-        raw = pd.read_csv(project / PROTEIN_RAW_RELATIVE, sep="\t")
-        values = _aligned_series(raw, "gene_symbol", "linear_relative_abundance", genes)
-        threshold = float(pd.to_numeric(raw["T_q"], errors="coerce").dropna().iloc[0])
-        thresholds = np.full(len(factors), threshold, dtype=float)
-    elif handler == "pc_transcript":
-        raw = pd.read_csv(project / PC_RAW_RELATIVE, sep="\t")
-        values = _aligned_series(raw, "gene_symbol", "pc_median_tpm", genes)
-        threshold = float(pd.to_numeric(raw["T_q"], errors="coerce").dropna().iloc[0])
-        thresholds = np.full(len(factors), threshold, dtype=float)
-    elif handler == "kinase_activity":
-        values = pd.to_numeric(factors["kinase_absolute_lfc"], errors="coerce").to_numpy(float)
-        thresholds = np.full(len(factors), 0.17, dtype=float)
-    elif handler == "phosphoprotein_response":
-        raw = pd.read_csv(project / PHOSPHOPROTEIN_RAW_RELATIVE, sep="\t")
-        values = _aligned_series(raw, "gene_symbol", "max_absolute_lfc", genes)
-        thresholds = _aligned_series(raw, "gene_symbol", "site_T_q", genes)
-    elif handler == "site_level_phosphoprotein_response":
-        values = pd.to_numeric(
-            factors[definition["raw_value_column"]], errors="coerce"
-        ).to_numpy(float)
-        thresholds = pd.to_numeric(
-            factors[definition["tq_column"]], errors="coerce"
-        ).to_numpy(float)
-    elif handler == "collecting_duct_abundance":
-        values = pd.to_numeric(
-            factors[definition["raw_value_column"]], errors="coerce"
-        ).to_numpy(float)
-        tq_values = pd.to_numeric(
-            factors[definition["tq_column"]], errors="coerce"
-        ).dropna()
-        if tq_values.empty:
-            raise ValueError(f"node stream {definition['id']} has no stored Tq")
-        thresholds = np.full(len(factors), float(tq_values.iloc[0]), dtype=float)
-    else:
-        raise ValueError(f"unsupported node calibration handler: {handler}")
+    values, thresholds = _node_stream_raw_values_and_thresholds(
+        project, factors, definition
+    )
     eligible, observed = node_stream_observation_masks(factors, definition)
     return {
         "values": values[target_indices],
@@ -1332,25 +1497,54 @@ def calibrate_node_parameters(
     prior_log_odds = math.log(prior / (1.0 - prior))
     penalize = bool(config["node_integration"]["penalize_unobserved"])
     missing_factor = float(config["node_integration"]["unobserved_bayes_factor"])
+    global_continuous_negative = bool(
+        config["node_integration"]["continuous_negative_evidence"]
+    )
+    continuous_floor = float(
+        config["node_integration"]["continuous_bayes_factor_floor"]
+    )
 
     def probabilities(settings: dict[str, float]) -> np.ndarray:
         log_odds = np.full(len(target_indices), prior_log_odds, dtype=float)
         for stream_id, context in contexts.items():
             multiplier = settings[f"{stream_id}:tq_multiplier"]
             weight = settings[f"{stream_id}:weight"]
+            stream_continuous_negative = (
+                global_continuous_negative
+                or bool(
+                    config["node_streams"][stream_id].get(
+                        "continuous_negative_evidence", False
+                    )
+                )
+            )
             bayes_factors = np.ones(len(target_indices), dtype=float)
             observed = context["observed"].astype(bool)
-            calculable = (
-                observed
-                & np.isfinite(context["values"])
-                & np.isfinite(context["thresholds"])
-                & (context["thresholds"] > 0)
-            )
-            bayes_factors[calculable] = complement_minimum_likelihood(
-                context["values"][calculable],
-                context["thresholds"][calculable] * multiplier,
-            ) / NEUTRAL_LIKELIHOOD
-            if penalize:
+            if stream_continuous_negative:
+                calculable = (
+                    context["eligible"].astype(bool)
+                    & np.isfinite(context["thresholds"])
+                    & (context["thresholds"] > 0)
+                )
+                zero_inclusive = np.where(
+                    np.isfinite(context["values"]), context["values"], 0.0
+                )
+                bayes_factors[calculable] = continuous_complement_bayes_factor(
+                    zero_inclusive[calculable],
+                    context["thresholds"][calculable] * multiplier,
+                    minimum_bayes_factor=continuous_floor,
+                )
+            else:
+                calculable = (
+                    observed
+                    & np.isfinite(context["values"])
+                    & np.isfinite(context["thresholds"])
+                    & (context["thresholds"] > 0)
+                )
+                bayes_factors[calculable] = complement_minimum_likelihood(
+                    context["values"][calculable],
+                    context["thresholds"][calculable] * multiplier,
+                ) / NEUTRAL_LIKELIHOOD
+            if penalize and not stream_continuous_negative:
                 bayes_factors[context["eligible"].astype(bool) & ~observed] = missing_factor
             log_odds += weight * np.log(bayes_factors)
         return stable_expit(log_odds)
@@ -1452,11 +1646,13 @@ def _read_aligned_matrix(
     path: Path,
     symbols: list[str],
 ) -> np.ndarray:
-    frame = pd.read_csv(path, sep="\t", index_col=0).reindex(
-        index=symbols, columns=symbols
-    )
-    if frame.isna().any().any():
-        raise ValueError(f"matrix does not align to requested graph nodes: {path}")
+    source = pd.read_csv(path, sep="\t", index_col=0)
+    if source.index.has_duplicates or source.columns.duplicated().any():
+        raise ValueError(f"matrix has duplicate labels: {path}")
+    # Protein-only source matrices legitimately omit curated small molecules and
+    # newly requested nodes. Their missing raw score is zero; source-specific
+    # eligibility still decides whether that zero is negative or out of scope.
+    frame = source.reindex(index=symbols, columns=symbols).fillna(0.0)
     return frame.to_numpy(float)
 
 
@@ -1465,12 +1661,14 @@ def _upper_factor_table(
     factors: np.ndarray,
     *,
     include: np.ndarray | None = None,
+    retain_included_neutral: bool = False,
 ) -> pd.DataFrame:
     left, right = np.triu_indices(len(symbols), 1)
     values = np.asarray(factors, dtype=float)[left, right]
     keep = np.abs(values - 1.0) > FACTOR_EPSILON
     if include is not None:
-        keep &= np.asarray(include, dtype=bool)[left, right]
+        included = np.asarray(include, dtype=bool)[left, right]
+        keep = included if retain_included_neutral else keep & included
     symbol_array = np.asarray(symbols)
     return pd.DataFrame(
         {
@@ -1485,6 +1683,9 @@ def _localization_edge_factors(
     project: Path,
     symbols: list[str],
     multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     profiles = pd.read_csv(project / MPKCCD_PROFILES_RELATIVE, sep="\t").set_index("symbol")
     profiles = profiles.reindex(symbols)
@@ -1498,10 +1699,30 @@ def _localization_edge_factors(
     if len(indices):
         dot = raw[indices] @ raw[indices].T
         tq = thresholds[indices] * multiplier
-        directed = complement_minimum_likelihood(dot, tq[np.newaxis, :])
-        symmetric = (directed + directed.T) / 2.0
+        if continuous_negative:
+            directed_bf = continuous_complement_bayes_factor(
+                dot,
+                tq[np.newaxis, :],
+                minimum_bayes_factor=minimum_bayes_factor,
+            )
+            symmetric = (directed_bf + directed_bf.T) / 2.0
+        else:
+            directed = complement_minimum_likelihood(dot, tq[np.newaxis, :])
+            symmetric = (directed + directed.T) / 2.0
         likelihood[np.ix_(indices, indices)] = symmetric
     np.fill_diagonal(likelihood, NEUTRAL_LIKELIHOOD)
+    if continuous_negative:
+        factors = np.ones_like(likelihood)
+        factors[np.ix_(indices, indices)] = likelihood[np.ix_(indices, indices)]
+        eligible = np.zeros_like(factors, dtype=bool)
+        eligible[np.ix_(indices, indices)] = True
+        np.fill_diagonal(eligible, False)
+        return _upper_factor_table(
+            symbols,
+            factors,
+            include=eligible,
+            retain_included_neutral=True,
+        )
     return _upper_factor_table(symbols, likelihood / NEUTRAL_LIKELIHOOD)
 
 
@@ -1509,6 +1730,9 @@ def _kinase_predictor_edge_factors(
     project: Path,
     symbols: list[str],
     multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     predictions = pd.read_csv(project / KINASE_PREDICTIONS_RELATIVE, sep="\t")
     used = predictions["used_for_undirected_edge"]
@@ -1522,9 +1746,16 @@ def _kinase_predictor_edge_factors(
     ]
     raw_score = pd.to_numeric(predictions["raw_score"], errors="raise").to_numpy(float)
     tq = pd.to_numeric(predictions["site_Tq_q75"], errors="raise").to_numpy(float)
-    site_bf = complement_minimum_likelihood(
-        np.maximum(raw_score, 0.0), tq * multiplier
-    ) / NEUTRAL_LIKELIHOOD
+    if continuous_negative:
+        site_bf = continuous_complement_bayes_factor(
+            np.maximum(raw_score, 0.0),
+            tq * multiplier,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+    else:
+        site_bf = complement_minimum_likelihood(
+            np.maximum(raw_score, 0.0), tq * multiplier
+        ) / NEUTRAL_LIKELIHOOD
     predictions["gui_log_bayes_factor"] = np.log(site_bf)
     grouped = predictions.groupby(
         ["undirected_node_a", "undirected_node_b"], sort=False
@@ -1532,6 +1763,10 @@ def _kinase_predictor_edge_factors(
     grouped["bayes_factor"] = np.exp(
         np.clip(grouped["gui_log_bayes_factor"].to_numpy(float), -700.0, 700.0)
     )
+    if continuous_negative:
+        grouped["bayes_factor"] = np.maximum(
+            grouped["bayes_factor"].to_numpy(float), minimum_bayes_factor
+        )
     grouped = grouped.loc[
         np.abs(grouped["bayes_factor"] - 1.0) > FACTOR_EPSILON
     ].rename(
@@ -1544,6 +1779,9 @@ def _string_edge_factors(
     project: Path,
     symbols: list[str],
     multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     score = _read_aligned_matrix(project / STRING_SCORE_MATRIX_RELATIVE, symbols)
     reference = STRING_REFERENCE_SCORE * multiplier
@@ -1555,7 +1793,14 @@ def _string_edge_factors(
     reference_odds = reference / (1.0 - reference)
     factors = np.ones_like(score)
     factors[observed] = score_odds[observed] / reference_odds
-    return _upper_factor_table(symbols, factors, include=observed)
+    if continuous_negative:
+        factors[observed] = np.maximum(factors[observed], minimum_bayes_factor)
+    return _upper_factor_table(
+        symbols,
+        factors,
+        include=observed,
+        retain_included_neutral=continuous_negative,
+    )
 
 
 def _hpa_binary_profiles(
@@ -1588,6 +1833,8 @@ def _hpa_edge_factors(
     multiplier: float,
     *,
     high_confidence: bool,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     profiles = pd.read_csv(project / HPA_PROFILES_RELATIVE, sep="\t").set_index("symbol").reindex(symbols)
     binary, observed, thresholds = _hpa_binary_profiles(profiles, high_confidence)
@@ -1598,14 +1845,36 @@ def _hpa_edge_factors(
         unit = selected / np.linalg.norm(selected, axis=1, keepdims=True)
         similarity = unit @ unit.T
         tq = thresholds[indices] * multiplier
-        directed = np.full_like(similarity, NEUTRAL_LIKELIHOOD)
+        directed = np.full_like(
+            similarity,
+            1.0 if continuous_negative else NEUTRAL_LIKELIHOOD,
+        )
         valid_tq = np.isfinite(tq) & (tq > 0)
         if np.any(valid_tq):
-            directed[valid_tq] = complement_minimum_likelihood(
-                similarity[valid_tq], tq[valid_tq, np.newaxis]
-            )
+            if continuous_negative:
+                directed[valid_tq] = continuous_complement_bayes_factor(
+                    similarity[valid_tq],
+                    tq[valid_tq, np.newaxis],
+                    minimum_bayes_factor=minimum_bayes_factor,
+                )
+            else:
+                directed[valid_tq] = complement_minimum_likelihood(
+                    similarity[valid_tq], tq[valid_tq, np.newaxis]
+                )
         likelihood[np.ix_(indices, indices)] = (directed + directed.T) / 2.0
     np.fill_diagonal(likelihood, NEUTRAL_LIKELIHOOD)
+    if continuous_negative:
+        factors = np.ones_like(likelihood)
+        factors[np.ix_(indices, indices)] = likelihood[np.ix_(indices, indices)]
+        eligible = np.zeros_like(factors, dtype=bool)
+        eligible[np.ix_(indices, indices)] = True
+        np.fill_diagonal(eligible, False)
+        return _upper_factor_table(
+            symbols,
+            factors,
+            include=eligible,
+            retain_included_neutral=True,
+        )
     return _upper_factor_table(symbols, likelihood / NEUTRAL_LIKELIHOOD)
 
 
@@ -1613,17 +1882,38 @@ def _omnipath_edge_factors(
     project: Path,
     symbols: list[str],
     multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     effort = _read_aligned_matrix(project / OMNIPATH_EFFORT_MATRIX_RELATIVE, symbols)
     observed = effort > 0
-    support = 1.0 - np.exp(-0.5 * np.square(effort / (6.0 * multiplier)))
-    likelihood = NEUTRAL_LIKELIHOOD + (1.0 - NEUTRAL_LIKELIHOOD) * support
     factors = np.ones_like(effort)
-    factors[observed] = likelihood[observed] / NEUTRAL_LIKELIHOOD
-    return _upper_factor_table(symbols, factors, include=observed)
+    if continuous_negative:
+        factors[observed] = continuous_complement_bayes_factor(
+            effort[observed],
+            6.0 * multiplier,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+    else:
+        support = 1.0 - np.exp(-0.5 * np.square(effort / (6.0 * multiplier)))
+        likelihood = NEUTRAL_LIKELIHOOD + (1.0 - NEUTRAL_LIKELIHOOD) * support
+        factors[observed] = likelihood[observed] / NEUTRAL_LIKELIHOOD
+    return _upper_factor_table(
+        symbols,
+        factors,
+        include=observed,
+        retain_included_neutral=continuous_negative,
+    )
 
 
-def _stitch_bayes_factors(scores: np.ndarray, reference: float) -> np.ndarray:
+def _stitch_bayes_factors(
+    scores: np.ndarray,
+    reference: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
+) -> np.ndarray:
     """Convert STITCH confidence scores to positive-only evidence factors."""
     if not 0 < reference < 1:
         raise ValueError("STITCH reference score after scaling must be between 0 and 1")
@@ -1632,13 +1922,19 @@ def _stitch_bayes_factors(scores: np.ndarray, reference: float) -> np.ndarray:
         raise ValueError("STITCH scores must be finite probabilities between 0 and 1")
     score_odds = scores / (1.0 - scores)
     reference_odds = reference / (1.0 - reference)
-    return np.maximum(1.0, score_odds / reference_odds)
+    factors = score_odds / reference_odds
+    if continuous_negative:
+        return np.maximum(minimum_bayes_factor, factors)
+    return np.maximum(1.0, factors)
 
 
 def _stitch_edge_factors(
     project: Path,
     symbols: list[str],
     multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     evidence = pd.read_csv(project / STITCH_UNIVERSE_EDGES_RELATIVE, sep="\t")
     symbol_set = set(symbols)
@@ -1649,10 +1945,13 @@ def _stitch_edge_factors(
     evidence["bayes_factor"] = _stitch_bayes_factors(
         pd.to_numeric(evidence["stitch_score"], errors="raise").to_numpy(float),
         reference,
+        continuous_negative=continuous_negative,
+        minimum_bayes_factor=minimum_bayes_factor,
     )
-    evidence = evidence.loc[
-        np.abs(evidence["bayes_factor"] - 1.0) > FACTOR_EPSILON
-    ]
+    if not continuous_negative:
+        evidence = evidence.loc[
+            np.abs(evidence["bayes_factor"] - 1.0) > FACTOR_EPSILON
+        ]
     return evidence[["node_a", "node_b", "bayes_factor"]]
 
 
@@ -1663,6 +1962,8 @@ def edge_stream_factor_table(
     symbols: list[str],
     *,
     include_negative: bool = False,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     """Load default BFs or recompute one stream with its requested scale."""
     if definition.get("derived"):
@@ -1672,10 +1973,13 @@ def edge_stream_factor_table(
         )
     multiplier = _stream_multiplier(state)
     handler = definition["normalization"]["handler"]
-    use_raw_negative_string = include_negative and handler == "string_v12"
+    use_raw_negative_string = (
+        (include_negative or continuous_negative) and handler == "string_v12"
+    )
     if (
         math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15)
         and not use_raw_negative_string
+        and not continuous_negative
     ):
         table = pd.read_csv(
             project / definition["factor_file"], sep="\t", compression="gzip"
@@ -1684,19 +1988,63 @@ def edge_stream_factor_table(
             columns={definition["factor_column"]: "bayes_factor"}
         )
     if handler == "mpkccd_localization":
-        return _localization_edge_factors(project, symbols, multiplier)
+        return _localization_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "kinase_predictor":
-        return _kinase_predictor_edge_factors(project, symbols, multiplier)
+        return _kinase_predictor_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "string_v12":
-        return _string_edge_factors(project, symbols, multiplier)
+        return _string_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "hpa_primary":
-        return _hpa_edge_factors(project, symbols, multiplier, high_confidence=False)
+        return _hpa_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            high_confidence=False,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "hpa_high_confidence":
-        return _hpa_edge_factors(project, symbols, multiplier, high_confidence=True)
+        return _hpa_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            high_confidence=True,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "omnipath_core":
-        return _omnipath_edge_factors(project, symbols, multiplier)
+        return _omnipath_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "stitch_secondary_messenger":
-        return _stitch_edge_factors(project, symbols, multiplier)
+        return _stitch_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     raise ValueError(f"unsupported edge normalization handler: {handler}")
 
 
@@ -1876,25 +2224,56 @@ def _raw_seed_edge_factor_table(
     definition: dict[str, Any],
     symbols: list[str],
     multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     """Rescore a small set of seed endpoints without loading full BF catalogs."""
     handler = definition["normalization"]["handler"]
     if len(symbols) < 2:
         return pd.DataFrame(columns=["node_a", "node_b", "bayes_factor"])
     if handler == "mpkccd_localization":
-        return _localization_edge_factors(project, symbols, multiplier)
+        return _localization_edge_factors(
+            project, symbols, multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "kinase_predictor":
-        return _kinase_predictor_edge_factors(project, symbols, multiplier)
+        return _kinase_predictor_edge_factors(
+            project, symbols, multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "string_v12":
-        return _string_edge_factors(project, symbols, multiplier)
+        return _string_edge_factors(
+            project, symbols, multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "hpa_primary":
-        return _hpa_edge_factors(project, symbols, multiplier, high_confidence=False)
+        return _hpa_edge_factors(
+            project, symbols, multiplier, high_confidence=False,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "hpa_high_confidence":
-        return _hpa_edge_factors(project, symbols, multiplier, high_confidence=True)
+        return _hpa_edge_factors(
+            project, symbols, multiplier, high_confidence=True,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "omnipath_core":
-        return _omnipath_edge_factors(project, symbols, multiplier)
+        return _omnipath_edge_factors(
+            project, symbols, multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler == "stitch_secondary_messenger":
-        return _stitch_edge_factors(project, symbols, multiplier)
+        return _stitch_edge_factors(
+            project, symbols, multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     raise ValueError(f"unsupported edge calibration handler: {handler}")
 
 
@@ -1955,6 +2334,12 @@ def calibrate_edge_parameters(
     unsupported_factor = float(
         config["edge_integration"]["unsupported_bayes_factor"]
     )
+    global_continuous_negative = bool(
+        config["edge_integration"]["continuous_negative_evidence"]
+    )
+    continuous_floor = float(
+        config["edge_integration"]["continuous_bayes_factor_floor"]
+    )
 
     def stream_factors(stream_id: str, multiplier: float) -> np.ndarray:
         cache_key = (stream_id, round(float(multiplier), 12))
@@ -1962,9 +2347,22 @@ def calibrate_edge_parameters(
         if cached is not None:
             return cached
         definition = active[stream_id]
+        stream_continuous_negative = (
+            global_continuous_negative
+            or bool(
+                config["edge_streams"][stream_id].get(
+                    "continuous_negative_evidence", False
+                )
+            )
+        )
         tables = [
             _raw_seed_edge_factor_table(
-                project, definition, seed_targets, multiplier
+                project,
+                definition,
+                seed_targets,
+                multiplier,
+                continuous_negative=stream_continuous_negative,
+                minimum_bayes_factor=continuous_floor,
             )
         ]
         if incremental_targets:
@@ -1974,6 +2372,8 @@ def calibrate_edge_parameters(
                     definition["normalization"]["handler"],
                     multiplier,
                     incremental_targets,
+                    continuous_negative=stream_continuous_negative,
+                    minimum_bayes_factor=continuous_floor,
                 )
             )
         lookup: dict[tuple[str, str], float] = {}
@@ -1988,7 +2388,9 @@ def calibrate_edge_parameters(
             if key in lookup:
                 factors[index] = lookup[key]
                 observed[index] = True
-        if penalize and definition.get("negative_evidence"):
+        if stream_continuous_negative and definition.get("negative_evidence"):
+            factors[eligibility[stream_id] & ~observed] = continuous_floor
+        elif penalize and definition.get("negative_evidence"):
             factors[eligibility[stream_id] & ~observed] = unsupported_factor
         if (~np.isfinite(factors) | (factors <= 0)).any():
             raise ValueError(
@@ -2188,6 +2590,12 @@ def combine_edge_factors(
     prior = config["edge_integration"]["prior_probability"]
     penalize_unsupported = config["edge_integration"]["penalize_unsupported"]
     unsupported_factor = config["edge_integration"]["unsupported_bayes_factor"]
+    global_continuous_negative = bool(
+        config["edge_integration"]["continuous_negative_evidence"]
+    )
+    continuous_floor = float(
+        config["edge_integration"]["continuous_bayes_factor_floor"]
+    )
     base_log_odds = math.log(prior / (1.0 - prior))
     log_odds = np.full((len(graph_symbols), len(graph_symbols)), base_log_odds, dtype=float)
     index = {symbol: position for position, symbol in enumerate(graph_symbols)}
@@ -2208,12 +2616,18 @@ def combine_edge_factors(
         if definition.get("derived"):
             derived_streams.append((stream_id, definition, state))
             continue
+        stream_continuous_negative = (
+            global_continuous_negative
+            or bool(state.get("continuous_negative_evidence", False))
+        )
         seed_table = edge_stream_factor_table(
             project,
             definition,
             state,
             seed_graph_symbols,
             include_negative=penalize_unsupported,
+            continuous_negative=stream_continuous_negative,
+            minimum_bayes_factor=continuous_floor,
         )
         tables = [seed_table]
         if has_incremental_nodes:
@@ -2223,6 +2637,8 @@ def combine_edge_factors(
                     definition["normalization"]["handler"],
                     _stream_multiplier(state),
                     graph_symbols,
+                    continuous_negative=stream_continuous_negative,
+                    minimum_bayes_factor=continuous_floor,
                 )
             )
         table = pd.concat(tables, ignore_index=True)
@@ -2252,8 +2668,13 @@ def combine_edge_factors(
         unsupported_upper = eligible_upper & ~observed_pairs
         unsupported_left, unsupported_right = np.where(unsupported_upper)
         penalties_applied = 0
-        if penalize_unsupported and definition.get("negative_evidence"):
-            penalty_log = float(state["weight"]) * math.log(unsupported_factor)
+        negative_fill_factor: float | None = None
+        if stream_continuous_negative and definition.get("negative_evidence"):
+            negative_fill_factor = continuous_floor
+        elif penalize_unsupported and definition.get("negative_evidence"):
+            negative_fill_factor = unsupported_factor
+        if negative_fill_factor is not None:
+            penalty_log = float(state["weight"]) * math.log(negative_fill_factor)
             np.add.at(
                 log_odds,
                 (unsupported_left, unsupported_right),
@@ -2277,9 +2698,13 @@ def combine_edge_factors(
                 "eligible_pairs_for_negative_evidence": int(eligible_upper.sum()),
                 "unsupported_eligible_pairs": int(unsupported_upper.sum()),
                 "negative_penalties_applied": penalties_applied,
+                "continuous_zero_imputations": (
+                    penalties_applied if stream_continuous_negative else 0
+                ),
+                "continuous_negative_evidence": stream_continuous_negative,
                 "explicit_source_factors_below_one": int((values < 1.0).sum()),
                 "unsupported_pair_bayes_factor": (
-                    unsupported_factor if penalties_applied else None
+                    negative_fill_factor if penalties_applied else None
                 ),
                 "negative_evidence_policy": definition.get("negative_evidence"),
             }
@@ -2347,6 +2772,13 @@ def combine_edge_factors(
         "edge_prior_probability": prior,
         "penalize_unsupported": penalize_unsupported,
         "unsupported_edge_bayes_factor": unsupported_factor,
+        "continuous_negative_evidence": global_continuous_negative,
+        "continuous_negative_streams": [
+            stream["id"]
+            for stream in active_streams
+            if stream.get("continuous_negative_evidence")
+        ],
+        "continuous_bayes_factor_floor": continuous_floor,
         "negative_penalty_applications": total_penalty_applications,
         "unique_pair_count": int(len(upper)),
         "pairs_above_output_cutoff": int((upper > cutoff).sum()),
@@ -2361,10 +2793,12 @@ def combine_edge_factors(
         "active_streams": active_streams,
         "integration_rule": (
             "Edge prior odds are multiplied by each selected Bayes factor raised "
-            "to its user-specified weight. When optional negative evidence is on, "
-            "a source-eligible pair with no non-neutral source record receives the "
-            "configured BF below 1; out-of-scope pairs remain at BF=1. When it is "
-            "off, all missing sparse-table entries receive BF=1. "
+            "to its user-specified weight. Fixed-absence mode gives a source-eligible "
+            "pair with no record one configured BF below 1. Alternatively, continuous "
+            "negative mode removes the 0.5 likelihood floor, retains quantitative "
+            "factors below 1, and scores eligible no-record pairs as x=0 using the "
+            "numerical BF floor. Out-of-scope pairs remain at BF=1. When both negative "
+            "modes are off, missing sparse-table entries receive BF=1. "
             "If enabled, scaffold closure is derived once from the pre-closure graph "
             "and appended without recursive feedback or absence penalties."
         ),
@@ -2404,6 +2838,9 @@ def external_target_stream_values(
     symbols: pd.Index,
     definition: dict[str, Any],
     state: dict[str, Any],
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
 ) -> np.ndarray | None:
     multiplier = _stream_multiplier(state)
     handler = definition["normalization"]["handler"]
@@ -2429,6 +2866,8 @@ def external_target_stream_values(
         evidence["bayes_factor"] = _stitch_bayes_factors(
             pd.to_numeric(evidence["stitch_score"], errors="raise").to_numpy(float),
             reference,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
         )
         by_messenger = evidence.groupby("messenger_node")["bayes_factor"].max()
         mapped = symbols.to_series().map(by_messenger)
@@ -2436,7 +2875,10 @@ def external_target_stream_values(
         result[found] = mapped[found].to_numpy(float)
         return result
     column = definition.get("target_factor_column")
-    if math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15):
+    if (
+        math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15)
+        and not continuous_negative
+    ):
         if not column:
             return None
         return pd.to_numeric(
@@ -2452,13 +2894,26 @@ def external_target_stream_values(
         node_tq = pd.to_numeric(aligned["mpkccd_node_Tq"], errors="coerce").to_numpy(float)
         valid = observed & np.isfinite(dot) & np.isfinite(target_tq) & np.isfinite(node_tq)
         if np.any(valid):
-            target_factor = complement_minimum_likelihood(
-                dot[valid], target_tq[valid] * multiplier
-            )
-            node_factor = complement_minimum_likelihood(
-                dot[valid], node_tq[valid] * multiplier
-            )
-            result[valid] = ((target_factor + node_factor) / 2.0) / NEUTRAL_LIKELIHOOD
+            if continuous_negative:
+                target_factor = continuous_complement_bayes_factor(
+                    dot[valid],
+                    target_tq[valid] * multiplier,
+                    minimum_bayes_factor=minimum_bayes_factor,
+                )
+                node_factor = continuous_complement_bayes_factor(
+                    dot[valid],
+                    node_tq[valid] * multiplier,
+                    minimum_bayes_factor=minimum_bayes_factor,
+                )
+                result[valid] = (target_factor + node_factor) / 2.0
+            else:
+                target_factor = complement_minimum_likelihood(
+                    dot[valid], target_tq[valid] * multiplier
+                )
+                node_factor = complement_minimum_likelihood(
+                    dot[valid], node_tq[valid] * multiplier
+                )
+                result[valid] = ((target_factor + node_factor) / 2.0) / NEUTRAL_LIKELIHOOD
         return result
     if handler == "kinase_predictor":
         prediction_path = (
@@ -2470,15 +2925,23 @@ def external_target_stream_values(
         predictions = pd.read_csv(prediction_path, sep="\t")
         raw_score = pd.to_numeric(predictions["raw_score"], errors="raise").to_numpy(float)
         tq = pd.to_numeric(predictions["site_Tq_q75"], errors="raise").to_numpy(float)
-        predictions["gui_log_bf"] = np.log(
-            complement_minimum_likelihood(
+        if continuous_negative:
+            site_bf = continuous_complement_bayes_factor(
+                np.maximum(raw_score, 0.0),
+                tq * multiplier,
+                minimum_bayes_factor=minimum_bayes_factor,
+            )
+        else:
+            site_bf = complement_minimum_likelihood(
                 np.maximum(raw_score, 0.0), tq * multiplier
             ) / NEUTRAL_LIKELIHOOD
-        )
+        predictions["gui_log_bf"] = np.log(site_bf)
         grouped = predictions.groupby("kinase_node")["gui_log_bf"].sum()
         mapped = aligned.index.to_series().map(grouped)
         found = mapped.notna().to_numpy()
         result[found] = np.exp(np.clip(mapped[found].to_numpy(float), -700.0, 700.0))
+        if continuous_negative:
+            result[found] = np.maximum(result[found], minimum_bayes_factor)
         return result
     if handler == "string_v12":
         score = pd.to_numeric(aligned["string_combined_score"], errors="coerce").to_numpy(float)
@@ -2489,6 +2952,10 @@ def external_target_stream_values(
         result[observed] = (
             score[observed] / (1.0 - score[observed])
         ) / (reference / (1.0 - reference))
+        if continuous_negative:
+            result[observed] = np.maximum(
+                result[observed], minimum_bayes_factor
+            )
         return result
     if handler == "hpa_primary":
         observed = _truth_array(aligned["hpa_profiles_observed_for_both"])
@@ -2497,22 +2964,42 @@ def external_target_stream_values(
         node_tq = pd.to_numeric(aligned["hpa_node_Tq"], errors="coerce").to_numpy(float)
         valid = observed & np.isfinite(similarity) & np.isfinite(target_tq) & np.isfinite(node_tq)
         if np.any(valid):
-            target_factor = complement_minimum_likelihood(
-                similarity[valid], target_tq[valid] * multiplier
-            )
-            node_factor = complement_minimum_likelihood(
-                similarity[valid], node_tq[valid] * multiplier
-            )
-            result[valid] = ((target_factor + node_factor) / 2.0) / NEUTRAL_LIKELIHOOD
+            if continuous_negative:
+                target_factor = continuous_complement_bayes_factor(
+                    similarity[valid],
+                    target_tq[valid] * multiplier,
+                    minimum_bayes_factor=minimum_bayes_factor,
+                )
+                node_factor = continuous_complement_bayes_factor(
+                    similarity[valid],
+                    node_tq[valid] * multiplier,
+                    minimum_bayes_factor=minimum_bayes_factor,
+                )
+                result[valid] = (target_factor + node_factor) / 2.0
+            else:
+                target_factor = complement_minimum_likelihood(
+                    similarity[valid], target_tq[valid] * multiplier
+                )
+                node_factor = complement_minimum_likelihood(
+                    similarity[valid], node_tq[valid] * multiplier
+                )
+                result[valid] = ((target_factor + node_factor) / 2.0) / NEUTRAL_LIKELIHOOD
         return result
     if handler == "hpa_high_confidence":
         return None
     if handler == "omnipath_core":
         effort = pd.to_numeric(aligned["omnipath_curation_effort"], errors="coerce").to_numpy(float)
         observed = np.isfinite(effort) & (effort > 0)
-        support = 1.0 - np.exp(-0.5 * np.square(effort[observed] / (6.0 * multiplier)))
-        likelihood = NEUTRAL_LIKELIHOOD + (1.0 - NEUTRAL_LIKELIHOOD) * support
-        result[observed] = likelihood / NEUTRAL_LIKELIHOOD
+        if continuous_negative:
+            result[observed] = continuous_complement_bayes_factor(
+                effort[observed],
+                6.0 * multiplier,
+                minimum_bayes_factor=minimum_bayes_factor,
+            )
+        else:
+            support = 1.0 - np.exp(-0.5 * np.square(effort[observed] / (6.0 * multiplier)))
+            likelihood = NEUTRAL_LIKELIHOOD + (1.0 - NEUTRAL_LIKELIHOOD) * support
+            result[observed] = likelihood / NEUTRAL_LIKELIHOOD
         return result
     raise ValueError(f"unsupported target normalization handler: {handler}")
 
@@ -2606,6 +3093,12 @@ def append_external_target(
     prior = config["edge_integration"]["prior_probability"]
     penalize_unsupported = config["edge_integration"]["penalize_unsupported"]
     unsupported_factor = config["edge_integration"]["unsupported_bayes_factor"]
+    global_continuous_negative = bool(
+        config["edge_integration"]["continuous_negative_evidence"]
+    )
+    continuous_floor = float(
+        config["edge_integration"]["continuous_bayes_factor_floor"]
+    )
     target_log_odds = np.full(len(matrix), math.log(prior / (1.0 - prior)), dtype=float)
     vector_by_symbol = target_vector.set_index("symbol")
     warnings: list[str] = []
@@ -2620,6 +3113,10 @@ def append_external_target(
                 "not reapplied to the external target."
             )
             continue
+        stream_continuous_negative = (
+            global_continuous_negative
+            or bool(state.get("continuous_negative_evidence", False))
+        )
         values = external_target_stream_values(
             project,
             target_symbol,
@@ -2627,6 +3124,8 @@ def append_external_target(
             matrix.index,
             definition,
             state,
+            continuous_negative=stream_continuous_negative,
+            minimum_bayes_factor=continuous_floor,
         )
         if values is None:
             warnings.append(
@@ -2636,7 +3135,10 @@ def append_external_target(
             continue
         if (values <= 0).any() or not np.isfinite(values).all():
             raise ValueError(f"external-target stream {stream_id} produced invalid factors")
-        if penalize_unsupported and definition.get("negative_evidence"):
+        if (
+            (stream_continuous_negative or penalize_unsupported)
+            and definition.get("negative_evidence")
+        ):
             eligible = external_target_stream_eligibility(
                 project,
                 target_symbol,
@@ -2648,11 +3150,17 @@ def append_external_target(
                 values, 1.0, atol=FACTOR_EPSILON, rtol=0.0
             )
             values = values.copy()
-            values[unsupported] = unsupported_factor
+            fill_factor = (
+                continuous_floor
+                if stream_continuous_negative
+                else unsupported_factor
+            )
+            values[unsupported] = fill_factor
             if np.any(unsupported):
                 warnings.append(
-                    f"{definition['label']} applied unsupported-pair BF "
-                    f"{unsupported_factor:g} to {int(unsupported.sum())} eligible "
+                    f"{definition['label']} applied "
+                    f"{'continuous x=0' if stream_continuous_negative else 'unsupported-pair'} "
+                    f"BF {fill_factor:g} to {int(unsupported.sum())} eligible "
                     "external-target edges."
                 )
         target_log_odds += float(state["weight"]) * np.log(values)
