@@ -203,6 +203,10 @@ archive intentionally omits the 3.35 GB disposable SQLite cache and old outputs,
 but includes every source required for the 891-node seed workflow and for
 incremental characterization of newly added nodes. Read
 `docs/SHAREABLE_RELEASE_2026-08-25.md` before changing the package scope.
+The portable root launcher is `launch.py`. Release archive names and internal
+paths are deliberately short so Windows Explorer can extract them from the
+project's deep `deliverables` directory without crossing the 260-character
+legacy path limit.
 
 ## Scientific cautions
 

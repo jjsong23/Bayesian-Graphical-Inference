@@ -3,9 +3,9 @@
 
 Typical use after installing ``requirements.txt``::
 
-    python script.py
+    python launch.py
 
-The default launch is detached and opens the local web interface.  Use
+The default launch is detached and opens the local web interface. Use
 ``--foreground`` for a server that remains attached to the terminal and stops
 with Ctrl+C, or ``--check`` to validate a newly extracted release without
 starting a server.

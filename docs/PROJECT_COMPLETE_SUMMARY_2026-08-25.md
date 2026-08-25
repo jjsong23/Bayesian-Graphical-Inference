@@ -2,7 +2,7 @@
 
 Date: 2026-08-25  
 Repository: `jjsong23/Bayesian-Graphical-Inference`  
-Primary application entry point: `python script.py`
+Primary application entry point: `python launch.py`
 
 ## 1. Project objective
 
@@ -702,7 +702,7 @@ local runtime bundle is different from a public data release.
 
 ## 16. Important files
 
-- `script.py`: portable application launcher and release validator.
+- `launch.py`: portable application launcher and release validator.
 - `gui/server.py`: local HTTP server and cancellation/job management.
 - `gui/workflow_engine.py`: canonical node, edge, target, path, and output logic.
 - `gui/evidence_registry.json`: declarative evidence-stream registry and
@@ -728,12 +728,12 @@ After extracting the application ZIP:
 
 ```text
 python -m pip install -r requirements.txt
-python script.py --check
-python script.py
+python launch.py --check
+python launch.py
 ```
 
 The default server binds only to `127.0.0.1` and opens
-`http://127.0.0.1:8765/`. Use `python script.py --foreground` to keep it attached
+`http://127.0.0.1:8765/`. Use `python launch.py --foreground` to keep it attached
 to the terminal and stop it with Ctrl+C. The application does not require an
 external web server or a JavaScript build step.
 
@@ -801,10 +801,10 @@ The reproducible renderer is
 Two local release archives are generated under `deliverables/`, which is
 intentionally ignored by Git:
 
-- `Bayesian_Graphical_Inference_All_Plots_PNG_2026-08-25.zip` contains every
-  project-generated PNG, preserving project-relative paths, plus a manifest
-  with dimensions, byte sizes, and SHA-256 hashes.
-- `Bayesian_Graphical_Inference_App_2026-08-25.zip` contains the executable
+- `BGI_Plots_2026-08-25.zip` contains every project-generated PNG using short,
+  numbered archive names, plus a manifest that maps each file back to its full
+  project-relative path and records dimensions, byte sizes, and SHA-256 hashes.
+- `BGI_App_2026-08-25.zip` contains the executable
   workbench, analysis code, tests, documentation, the full node factor catalog,
   all 891-node seed edge catalogs, source values needed for interactive
   Tq/reference rescoring, and raw sources needed for incremental characterization
@@ -818,10 +818,16 @@ This omission both reduces package size and avoids treating a cache with a
 stale extraction-time evidence signature as primary scientific data.
 
 The application archive was extracted into a clean directory and validated
-with `python script.py --check`. It reported 12 node streams, 8 edge streams,
+with `python launch.py --check`. It reported 12 node streams, 8 edge streams,
 9,170 node candidates, 4 default node streams, and 6 default edge streams. A
 fresh server was then started from the extracted copy; `/api/health` returned
 `{"status": "ok"}` and the main page returned HTTP 200. Archive CRC checks and
 SHA-256 checksums are generated automatically. The reproducible builder is
 `code/release/build_shareable_packages.py`; detailed packaging notes are in
 `docs/SHAREABLE_RELEASE_2026-08-25.md`.
+
+The release builder uses short archive and internal root names and flattens the
+plot PNGs to unique numbered filenames. The plot manifest retains their full
+source provenance. It enforces a maximum hypothetical extraction path of 240
+characters when extracting beside the ZIP in `deliverables/`, leaving margin
+below the Windows Explorer 260-character legacy limit.

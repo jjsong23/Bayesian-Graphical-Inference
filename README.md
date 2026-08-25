@@ -28,12 +28,12 @@ Python 3.10 or newer is recommended.
 
 ```powershell
 python -m pip install -r requirements.txt
-python script.py
+python launch.py
 ```
 
 The workbench binds to `127.0.0.1` and opens at `http://127.0.0.1:8765/`.
-Use `python script.py --foreground` when you prefer a server that stops with
-Ctrl+C, or `python script.py --check` to validate a freshly extracted release.
+Use `python launch.py --foreground` when you prefer a server that stops with
+Ctrl+C, or `python launch.py --check` to validate a freshly extracted release.
 The PowerShell launcher remains available at `gui/run_workbench.ps1`.
 
 For a complete scientific and software overview, read
