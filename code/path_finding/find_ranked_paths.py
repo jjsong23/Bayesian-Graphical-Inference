@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Find and rank likely simple paths in the current undirected graph.
+"""Find and rank likely simple paths in the current partially directed graph.
 
 An external mouse protein target is automatically added with
 ``build_target_adjacency_vector``. Edges at the neutral 0.5 baseline are
-excluded by default. Retained paths are ranked by the product of their edge
-probabilities, equivalently by the sum of ``-log(probability)`` edge costs.
+excluded by default. Ontology rules and mapped OmniPath source-target records
+conservatively remove uniquely disallowed reverse traversals. Retained paths
+are ranked by the product of their edge probabilities, equivalently by the sum
+of ``-log(probability)`` edge costs.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from build_target_adjacency_vector import (
 from ontology_directionality import (
     RULE_CATALOG_PATH,
     apply_ontology_directionality,
+    build_omnipath_direction_evidence,
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
 )
@@ -47,6 +50,10 @@ UNIVERSE_RELATIVE = Path("data/node_selection/node_universe_combined_nonzero.tsv
 UNIPROT_RELATIVE = Path(
     "data/edge_characterization/kinase_predictor/"
     "phosphosite_database/raw/uniprot_mouse_reference_proteome.tsv.gz"
+)
+OMNIPATH_DIRECTION_RAW_RELATIVE = Path(
+    "data/edge_characterization/omnipath/2026-07-30/raw/"
+    "omnipath_mouse_core_post_translational.tsv"
 )
 
 # These aliases are intentionally narrow. They make the motivating PKA example
@@ -169,6 +176,11 @@ def parse_args() -> argparse.Namespace:
         "--disable-ontology-directionality",
         action="store_true",
         help="Retain both traversals for every edge and reproduce undirected path search.",
+    )
+    parser.add_argument(
+        "--disable-omnipath-directionality",
+        action="store_true",
+        help="Use ontology rules but ignore mapped OmniPath source-target directions.",
     )
     return parser.parse_args()
 
@@ -673,6 +685,7 @@ def find_ranked_paths(
     relay_classes: Iterable[str] = DEFAULT_SIGNAL_RELAY_CLASSES,
     exclude_any_scaffold: bool = False,
     ontology_directionality_enabled: bool = True,
+    omnipath_directionality_enabled: bool = True,
     auto_extend_target: bool = True,
     reuse_target_extension: bool = True,
     output_dir: Path | str | None = None,
@@ -742,12 +755,30 @@ def find_ranked_paths(
     directionality_class_catalog = pd.DataFrame()
     directionality_summary: dict[str, Any] | None = None
     directionality_catalog: dict[str, Any] | None = None
+    omnipath_direction_evidence = pd.DataFrame()
     if ontology_directionality_enabled:
         directionality_catalog = load_direction_rule_catalog(RULE_CATALOG_PATH)
         directionality_class_catalog = build_complete_class_pair_catalog(
             directionality_catalog,
             directionality_catalog["ontology_classes"],
         )
+        if omnipath_directionality_enabled:
+            omnipath_direction_path = project / OMNIPATH_DIRECTION_RAW_RELATIVE
+            if not omnipath_direction_path.is_file():
+                raise FileNotFoundError(
+                    "OmniPath directionality is enabled but its raw directed "
+                    f"interaction table is missing: {omnipath_direction_path}"
+                )
+            omnipath_direction_raw = pd.read_csv(
+                omnipath_direction_path,
+                sep="\t",
+                dtype=str,
+                keep_default_na=False,
+            )
+            omnipath_direction_evidence = build_omnipath_direction_evidence(
+                omnipath_direction_raw,
+                symbols,
+            )
         (
             propagation_matrix,
             directionality_audit,
@@ -759,6 +790,16 @@ def find_ranked_paths(
             audit_probability_cutoff=minimum_edge_probability,
             edge_output_cutoff=minimum_edge_probability,
             path_probability_cutoff=minimum_edge_probability,
+            omnipath_directions=(
+                omnipath_direction_evidence
+                if omnipath_directionality_enabled
+                else None
+            ),
+        )
+        directionality_summary["omnipath_direction_source"] = (
+            str(OMNIPATH_DIRECTION_RAW_RELATIVE)
+            if omnipath_directionality_enabled
+            else None
         )
 
     eligibility = build_intermediate_eligibility(
@@ -875,6 +916,9 @@ def find_ranked_paths(
         "retained_transition_count_before_intermediate_filter": retained_edge_count,
         "retained_transition_count_in_search_subgraph": retained_search_edge_count,
         "ontology_directionality_enabled": ontology_directionality_enabled,
+        "omnipath_directionality_enabled": bool(
+            ontology_directionality_enabled and omnipath_directionality_enabled
+        ),
         "ontology_directionality": directionality_summary,
         "minimum_edge_probability_exclusive": minimum_edge_probability,
         "neutral_baseline_edges_excluded": minimum_edge_probability >= 0.5,
@@ -917,8 +961,8 @@ def find_ranked_paths(
             "equivalent sum of -log(edge_probability)."
         ),
         "path_constraint": (
-            "Simple paths following allowed ontology-directed traversals; no node may "
-            "repeat within a path. Unresolved edges retain both traversals."
+            "Simple paths following allowed ontology/OmniPath-directed traversals; no "
+            "node may repeat within a path. Unresolved edges retain both traversals."
             if ontology_directionality_enabled
             else "Simple undirected paths only; no node may repeat within a path."
         ),
@@ -943,6 +987,15 @@ def find_ranked_paths(
         "input_sha256": {
             matrix_path.name: sha256_file(matrix_path),
             (project / UNIVERSE_RELATIVE).name: sha256_file(project / UNIVERSE_RELATIVE),
+            **(
+                {
+                    (project / OMNIPATH_DIRECTION_RAW_RELATIVE).name: sha256_file(
+                        project / OMNIPATH_DIRECTION_RAW_RELATIVE
+                    )
+                }
+                if ontology_directionality_enabled and omnipath_directionality_enabled
+                else {}
+            ),
         },
     }
 
@@ -977,6 +1030,7 @@ def find_ranked_paths(
         directionality_audit_path = resolved_output / "ontology_directionality_audit.tsv.gz"
         class_catalog_path = resolved_output / "ontology_class_pair_catalog.tsv"
         rules_path = resolved_output / "ontology_direction_rules.json"
+        omnipath_direction_path = resolved_output / "omnipath_direction_evidence.tsv.gz"
         paths.to_csv(paths_path, sep="\t", index=False, float_format="%.12g")
         path_edges.to_csv(edges_path, sep="\t", index=False, float_format="%.12g")
         eligibility.to_csv(eligibility_path, sep="\t", index=False)
@@ -1001,6 +1055,13 @@ def find_ranked_paths(
                 + "\n",
                 encoding="utf-8",
             )
+            if omnipath_directionality_enabled:
+                omnipath_direction_evidence.to_csv(
+                    omnipath_direction_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                )
         policy_readme = (
             "Internal nodes are permitted through this sensitivity-oriented signaling "
             f"class set: `{';'.join(summary['signal_relay_classes'])}`. Ligand, binding, "
@@ -1022,7 +1083,7 @@ edges with probability strictly greater than {minimum_edge_probability}. They
 are ranked by the product of their edge probabilities. This is equivalent to
 minimizing the sum of `-log(edge_probability)`.
 
-{"Ontology rules partially orient the propagation graph. Uniquely disallowed reverse traversals are removed; unresolved pairs retain both traversals." if ontology_directionality_enabled else "Ontology directionality was disabled, so every retained edge can be traversed both ways."}
+{"Ontology rules are applied first; mapped OmniPath source-target records add unique directions only for pairs ontology left unresolved. OmniPath cannot reopen or reverse an ontology-disallowed traversal. Remaining unresolved pairs retain both traversals." if ontology_directionality_enabled and omnipath_directionality_enabled else "Ontology rules partially orient the propagation graph. Uniquely disallowed reverse traversals are removed; unresolved pairs retain both traversals." if ontology_directionality_enabled else "Directionality was disabled, so every retained edge can be traversed both ways."}
 
 `ranked_paths.tsv` contains one row per complete path. `ranked_path_edges.tsv`
 contains one row per edge per path, with node names and signaling classes.
@@ -1046,6 +1107,15 @@ the edge evidence streams and adjacent edges are not necessarily independent.
                     directionality_audit_path.name: sha256_file(directionality_audit_path),
                     class_catalog_path.name: sha256_file(class_catalog_path),
                     rules_path.name: sha256_file(rules_path),
+                    **(
+                        {
+                            omnipath_direction_path.name: sha256_file(
+                                omnipath_direction_path
+                            )
+                        }
+                        if omnipath_directionality_enabled
+                        else {}
+                    ),
                 }
                 if ontology_directionality_enabled
                 else {}
@@ -1076,6 +1146,7 @@ def main() -> int:
         signaling_intermediates_only=not args.allow_all_intermediates,
         exclude_any_scaffold=args.exclude_any_scaffold,
         ontology_directionality_enabled=not args.disable_ontology_directionality,
+        omnipath_directionality_enabled=not args.disable_omnipath_directionality,
         auto_extend_target=not args.no_auto_extend,
         reuse_target_extension=not args.rebuild_target_extension,
         output_dir=args.output_dir,

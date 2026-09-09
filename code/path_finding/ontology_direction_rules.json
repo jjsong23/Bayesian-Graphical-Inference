@@ -1,9 +1,15 @@
 {
   "schema_version": 1,
   "name": "Conservative ontology signal-propagation rules",
-  "semantics": "A rule source_class -> target_class removes the reverse traversal for a supported undirected edge when, and only when, no rule supports the opposite traversal.",
-  "conflict_policy": "If multi-role annotations support both directions, retain both traversals and label the pair unresolved_conflicting_rules. If no rule matches, retain both traversals and label the pair unresolved_no_matching_rule.",
+  "semantics": "Within the ontology layer, a rule source_class -> target_class supports removal of the reverse traversal for a supported undirected edge.",
+  "conflict_policy": "If multi-role ontology annotations support both directions, the ontology layer leaves the pair unresolved. A unique external direction may subsequently resolve it under external_direction_policy. If no direction source resolves the pair, both traversals are retained.",
   "sign_policy": "Direction and biochemical sign are separate. These rules orient possible propagation but do not label activation or inhibition.",
+  "external_direction_policy": {
+    "source": "OmniPath mouse core post-translational interactions",
+    "rule": "Mapped source-target records support their reported direction. A unique ontology orientation remains in force. OmniPath uniquely orients only pairs that ontology left unresolved, so it can add a disallowed reverse traversal but cannot reopen or reverse an ontology-disallowed traversal. Opposing source directions are recorded for audit. If OmniPath records occur in both directions for an otherwise unresolved pair, both traversals are retained.",
+    "consensus_direction_usage": "The OmniPath consensus_direction flag is retained for audit but is not required; agreement of all mapped directed records for a pair is the operational criterion.",
+    "effect_on_probability": "None. The permitted traversal retains the undirected edge probability and only a uniquely disallowed reverse traversal is set to zero."
+  },
   "ontology_classes": [
     "receptor",
     "receptor_regulator",

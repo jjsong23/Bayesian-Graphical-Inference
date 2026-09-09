@@ -1,4 +1,13 @@
-const state = { registry: null, defaults: null, jobId: null, pollTimer: null };
+const state = {
+  registry: null,
+  defaults: null,
+  jobId: null,
+  pollTimer: null,
+  pathNetwork: null,
+  networkRankLimit: 10,
+  networkLayoutSeed: 0,
+  networkResizeTimer: null,
+};
 
 const $ = (id) => document.getElementById(id);
 const formatInt = (value) => new Intl.NumberFormat("en-US").format(Number(value || 0));
@@ -17,6 +26,141 @@ function formatProbability(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
   return number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatEvidenceNumber(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  if (number === 0) return "0";
+  if (number > 0.9999 && number < 1) {
+    return number.toFixed(12).replace(/0+$/, "").replace(/\.$/, "");
+  }
+  if (Math.abs(number) >= 1000 || Math.abs(number) < 0.001) return number.toExponential(3);
+  return number.toPrecision(5).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function evidenceScopeText(stream, kind) {
+  if (!stream.enabled) return "Not used";
+  if (kind === "node") {
+    if (stream.negative_evidence_eligible === false) return "Out of scope";
+    if (stream.observed) return "Observed";
+    if (stream.fixed_absence_penalty_applied) return "Nondetection penalized";
+    return "Not observed";
+  }
+  if (stream.source_record_retained) return "Record retained";
+  if (stream.absence_penalty_applied) return "Absence penalized";
+  if (stream.negative_evidence_eligible === false) return "Out of scope";
+  return stream.derived ? "Rule not triggered" : "No retained record";
+}
+
+function renderEvidenceInspection(payload) {
+  const result = $("evidence-inspector-result");
+  const body = $("evidence-ledger-body");
+  body.innerHTML = "";
+  const hypothesis = payload.kind === "node"
+    ? payload.symbol
+    : `${payload.node_a} — ${payload.node_b}`;
+  $("evidence-summary-hypothesis").textContent = hypothesis;
+  $("evidence-summary-prior").textContent = formatProbability(payload.prior_probability);
+  // Preserve near-boundary probabilities here: 0.99969 must not look like
+  // mathematical certainty merely because the compact chart formatter uses
+  // three decimal places elsewhere in the interface.
+  $("evidence-summary-posterior").textContent = formatEvidenceNumber(payload.stored_posterior_probability);
+  const selected = payload.kind === "node"
+    ? payload.selected_in_graph
+    : payload.supported_above_output_cutoff;
+  $("evidence-summary-decision").textContent = selected ? "Included" : "Below cutoff";
+  const difference = Number(payload.reconciliation_absolute_difference || 0);
+  const reconciled = difference <= 1e-7;
+  $("evidence-reconciliation").classList.toggle("warning", !reconciled);
+  $("evidence-reconciliation").textContent = reconciled
+    ? `Arithmetic check passed: stored ${formatEvidenceNumber(payload.stored_posterior_probability)}; reconstructed ${formatEvidenceNumber(payload.reconstructed_posterior_probability)} from the displayed contributions.`
+    : `Arithmetic warning: stored ${formatEvidenceNumber(payload.stored_posterior_probability)}; reconstructed ${formatEvidenceNumber(payload.reconstructed_posterior_probability)} (absolute difference ${formatEvidenceNumber(difference)}).`;
+
+  payload.streams.forEach((stream) => {
+    const row = document.createElement("tr");
+    row.className = `evidence-row evidence-${stream.status}`;
+    row.tabIndex = 0;
+    const values = [
+      stream.label,
+      stream.status,
+      evidenceScopeText(stream, payload.kind),
+      formatEvidenceNumber(stream.applied_bayes_factor),
+      formatEvidenceNumber(stream.weight),
+      formatEvidenceNumber(stream.weighted_log2_odds_contribution),
+    ];
+    values.forEach((value, index) => {
+      const cell = document.createElement("td");
+      if (index === 1) {
+        const badge = document.createElement("span");
+        badge.className = `evidence-status evidence-status-${stream.status}`;
+        badge.textContent = value;
+        cell.appendChild(badge);
+      } else {
+        cell.textContent = value;
+      }
+      row.appendChild(cell);
+    });
+    const showDetail = () => {
+      const parts = [stream.note];
+      if (stream.description) parts.push(stream.description);
+      if (stream.raw_value !== null && stream.raw_value !== undefined) {
+        parts.push(`${stream.raw_value_label || "Raw value"}: ${formatEvidenceNumber(stream.raw_value)}.`);
+      }
+      if (stream.source_factor !== null && stream.source_factor !== undefined) {
+        parts.push(`Source factor: ${formatEvidenceNumber(stream.source_factor)}.`);
+      }
+      if (stream.normalization_reference) {
+        const scale = stream.tq_multiplier === null || stream.tq_multiplier === undefined
+          ? ""
+          : `; ${stream.normalization_control || "scale"} ${formatEvidenceNumber(stream.tq_multiplier)}`;
+        parts.push(`Reference: ${stream.normalization_reference}${scale}.`);
+      }
+      if (stream.dependence_group) parts.push(`Shared-source group: ${stream.dependence_group}.`);
+      $("evidence-stream-detail").textContent = `${stream.label}: ${parts.filter(Boolean).join(" ")}`;
+      body.querySelectorAll("tr").forEach((candidate) => candidate.classList.toggle("selected", candidate === row));
+    };
+    row.addEventListener("click", showDetail);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        showDetail();
+      }
+    });
+    body.appendChild(row);
+  });
+  $("evidence-stream-detail").textContent = "Select a stream row for its normalization and missing-data explanation.";
+  $("evidence-inspector-message").textContent = `${payload.streams.filter((stream) => stream.enabled).length} enabled streams evaluated for ${hypothesis}.`;
+  result.classList.remove("hidden");
+}
+
+async function inspectEvidence(kind) {
+  if (!state.jobId) return;
+  const form = kind === "node" ? $("node-evidence-form") : $("edge-evidence-form");
+  const button = form.querySelector("button[type='submit']");
+  const params = new URLSearchParams();
+  if (kind === "node") {
+    params.set("symbol", $("node-evidence-symbol").value.trim());
+  } else {
+    params.set("node_a", $("edge-evidence-node-a").value.trim());
+    params.set("node_b", $("edge-evidence-node-b").value.trim());
+  }
+  button.disabled = true;
+  button.textContent = "Reading…";
+  $("evidence-inspector-message").textContent = "Reconstructing this hypothesis from the completed run…";
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/evidence/${kind}?${params.toString()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to inspect evidence");
+    renderEvidenceInspection(payload);
+  } catch (error) {
+    $("evidence-inspector-result").classList.add("hidden");
+    $("evidence-inspector-message").textContent = String(error?.message || error);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Inspect";
+  }
 }
 
 function renderProbabilityDistribution(kind, distribution) {
@@ -93,6 +237,354 @@ function renderProbabilityDistribution(kind, distribution) {
     wrapper.append(term, detail);
     stats.appendChild(wrapper);
   });
+}
+
+function networkHash(text) {
+  let hash = 2166136261;
+  for (const character of String(text)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function networkEvidenceClass(probability, available = true) {
+  if (!available || probability === null || probability === undefined) return "unscored";
+  const value = Number(probability);
+  if (value > 0.500000000001) return "supporting";
+  if (value < 0.499999999999) return "refuting";
+  return "neutral";
+}
+
+function networkEvidenceStrength(probability, available = true) {
+  if (!available || probability === null || probability === undefined) return 0.22;
+  const bounded = Math.max(1e-9, Math.min(1 - 1e-9, Number(probability)));
+  const absoluteLogOdds = Math.abs(Math.log(bounded / (1 - bounded)));
+  // A log-odds scale preserves visible differences among highly supported
+  // relationships (whose posteriors may all round to 1.000) while still
+  // mapping the neutral 0.5 posterior to zero visual strength.
+  return Math.min(1, Math.log1p(absoluteLogOdds) / Math.log1p(12));
+}
+
+function pathRankText(ranks) {
+  const values = (ranks || []).map(Number).sort((left, right) => left - right);
+  if (!values.length) return "none";
+  const shown = values.slice(0, 8).join(", ");
+  return values.length > 8 ? `${shown}, +${values.length - 8} more` : shown;
+}
+
+function visiblePathNetwork(network, rankLimit) {
+  const nodes = (network.nodes || [])
+    .filter((node) => (node.path_ranks || []).some((rank) => Number(rank) <= rankLimit))
+    .map((node) => {
+      const positions = (node.path_positions || []).filter((item) => Number(item.rank) <= rankLimit);
+      const pathPosition = positions.length
+        ? positions.reduce((total, item) => total + Number(item.position), 0) / positions.length
+        : Number(node.mean_path_position || 0.5);
+      const pathRanks = (node.path_ranks || []).filter((rank) => Number(rank) <= rankLimit);
+      return { ...node, pathPosition, visiblePathRanks: pathRanks };
+    });
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = (network.edges || [])
+    .filter((edge) => (edge.path_ranks || []).some((rank) => Number(rank) <= rankLimit))
+    .filter((edge) => nodeIds.has(edge.node_a) && nodeIds.has(edge.node_b))
+    .map((edge) => ({
+      ...edge,
+      visiblePathRanks: (edge.path_ranks || []).filter((rank) => Number(rank) <= rankLimit),
+    }));
+  return { nodes, edges };
+}
+
+function layoutPathNetwork(nodes, edges, width, height, seed) {
+  const marginX = Math.min(62, Math.max(46, width * 0.08));
+  const marginY = 38;
+  const usableWidth = Math.max(width - 2 * marginX, 120);
+  const usableHeight = Math.max(height - 2 * marginY, 180);
+  nodes.forEach((node) => {
+    const strength = networkEvidenceStrength(node.posterior_probability, node.posterior_available);
+    node.radius = node.posterior_available ? 8 + 8 * strength : 9;
+    node.targetX = marginX + Math.max(0, Math.min(1, node.pathPosition)) * usableWidth;
+    const hash = networkHash(`${node.id}:${seed}`);
+    node.x = node.targetX + ((hash % 1000) / 999 - 0.5) * Math.min(42, usableWidth * 0.09);
+    node.targetY = marginY + (((hash >>> 10) % 1000) / 999) * usableHeight;
+    node.y = node.targetY;
+    node.fixed = Boolean(node.is_start || node.is_target);
+    if (node.is_start) {
+      node.x = marginX;
+      node.y = height / 2;
+      node.targetY = node.y;
+    } else if (node.is_target) {
+      node.x = width - marginX;
+      node.y = height / 2;
+      node.targetY = node.y;
+    }
+  });
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const activeEdges = edges
+    .map((edge) => ({ edge, source: byId.get(edge.source), target: byId.get(edge.target) }))
+    .filter((item) => item.source && item.target);
+
+  const iterations = nodes.length > 120 ? 120 : 190;
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const forces = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]));
+    nodes.forEach((node) => {
+      const force = forces.get(node.id);
+      force.x += (node.targetX - node.x) * 0.075;
+      // Retain deterministic vertical lanes while the springs merge shared
+      // hubs. This prevents dense top-path unions from collapsing into a
+      // single horizontal knot.
+      force.y += (node.targetY - node.y) * 0.018;
+    });
+    for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
+        const left = nodes[leftIndex];
+        const right = nodes[rightIndex];
+        let dx = right.x - left.x;
+        let dy = right.y - left.y;
+        let distance = Math.hypot(dx, dy);
+        if (distance < 0.01) {
+          dx = ((networkHash(`${left.id}:${right.id}`) % 17) - 8) / 8;
+          dy = 1;
+          distance = Math.hypot(dx, dy);
+        }
+        const desired = left.radius + right.radius + 34;
+        if (distance < desired) {
+          const push = (desired - distance) * 0.055;
+          const unitX = dx / distance;
+          const unitY = dy / distance;
+          forces.get(left.id).x -= unitX * push;
+          forces.get(left.id).y -= unitY * push;
+          forces.get(right.id).x += unitX * push;
+          forces.get(right.id).y += unitY * push;
+        }
+      }
+    }
+    activeEdges.forEach(({ source, target }) => {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.max(Math.hypot(dx, dy), 0.01);
+      const layerDistance = Math.abs(target.targetX - source.targetX);
+      const desired = Math.max(48, Math.min(105, 45 + layerDistance * 0.38));
+      const pull = (distance - desired) * 0.016;
+      const unitX = dx / distance;
+      const unitY = dy / distance;
+      forces.get(source.id).x += unitX * pull;
+      forces.get(source.id).y += unitY * pull;
+      forces.get(target.id).x -= unitX * pull;
+      forces.get(target.id).y -= unitY * pull;
+    });
+    nodes.forEach((node) => {
+      if (node.fixed) return;
+      const force = forces.get(node.id);
+      node.x += Math.max(-4, Math.min(4, force.x));
+      node.y += Math.max(-4, Math.min(4, force.y));
+      node.x = Math.max(marginX, Math.min(width - marginX, node.x));
+      node.y = Math.max(marginY, Math.min(height - marginY, node.y));
+    });
+  }
+  return byId;
+}
+
+function setPathNetworkSelection(detail, nodeIds, edgeIds = []) {
+  const svg = $("path-network-svg");
+  const selectedNodes = new Set(nodeIds);
+  const selectedEdges = new Set(edgeIds);
+  svg.querySelectorAll("[data-network-node]").forEach((element) => {
+    element.classList.toggle("network-dimmed", !selectedNodes.has(element.dataset.networkNode));
+    element.classList.toggle("network-highlighted", selectedNodes.has(element.dataset.networkNode));
+  });
+  svg.querySelectorAll("[data-network-edge]").forEach((element) => {
+    element.classList.toggle("network-dimmed", !selectedEdges.has(element.dataset.networkEdge));
+    element.classList.toggle("network-highlighted", selectedEdges.has(element.dataset.networkEdge));
+  });
+  $("path-network-detail").textContent = detail;
+}
+
+function clearPathNetworkSelection(nodeCount, edgeCount, pathCount) {
+  const svg = $("path-network-svg");
+  svg.querySelectorAll(".network-dimmed, .network-highlighted").forEach((element) => {
+    element.classList.remove("network-dimmed", "network-highlighted");
+  });
+  $("path-network-detail").textContent = `${formatInt(nodeCount)} nodes and ${formatInt(edgeCount)} merged relationships from the top ${formatInt(pathCount)} path${pathCount === 1 ? "" : "s"}. Select a mark for exact probabilities, roles, and contributing path ranks.`;
+}
+
+function drawPathNetwork() {
+  const network = state.pathNetwork;
+  const svg = $("path-network-svg");
+  if (!network || !(network.nodes || []).length) return;
+  const rankLimit = Math.min(state.networkRankLimit, Number(network.visualized_path_count || 0));
+  const visible = visiblePathNetwork(network, rankLimit);
+  const width = Math.max(320, Math.round(svg.parentElement.getBoundingClientRect().width || 640));
+  const height = Math.max(430, Math.min(620, 350 + visible.nodes.length * 4.5));
+  svg.innerHTML = "";
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("height", String(height));
+
+  const defs = svgElement("defs");
+  ["supporting", "refuting", "neutral"].forEach((evidenceClass) => {
+    const marker = svgElement("marker", {
+      id: `path-network-arrow-${evidenceClass}`,
+      viewBox: "0 0 8 8",
+      refX: 7,
+      refY: 4,
+      markerWidth: 9,
+      markerHeight: 9,
+      markerUnits: "userSpaceOnUse",
+      orient: "auto-start-reverse",
+    });
+    marker.appendChild(svgElement("path", { d: "M 0 0 L 8 4 L 0 8 z", class: `network-arrow ${evidenceClass}` }));
+    defs.appendChild(marker);
+  });
+  svg.appendChild(defs);
+
+  const positions = layoutPathNetwork(
+    visible.nodes,
+    visible.edges,
+    width,
+    height,
+    state.networkLayoutSeed,
+  );
+  const edgeLayer = svgElement("g", { class: "network-edge-layer" });
+  const nodeLayer = svgElement("g", { class: "network-node-layer" });
+  svg.append(edgeLayer, nodeLayer);
+
+  visible.edges.forEach((edge) => {
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    if (!source || !target) return;
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.max(Math.hypot(dx, dy), 0.01);
+    const directed = edge.directionality === "uniquely_directed";
+    const sourceOffset = source.radius + 1;
+    const targetOffset = target.radius + (directed ? 6 : 1);
+    const x1 = source.x + (dx / distance) * sourceOffset;
+    const y1 = source.y + (dy / distance) * sourceOffset;
+    const x2 = target.x - (dx / distance) * targetOffset;
+    const y2 = target.y - (dy / distance) * targetOffset;
+    const strength = networkEvidenceStrength(edge.edge_probability);
+    const evidenceClass = networkEvidenceClass(edge.edge_probability);
+    const strokeWidth = 0.9 + 5.1 * strength;
+    const opacity = 0.3 + 0.68 * strength;
+    const pathData = `M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    const visiblePath = svgElement("path", {
+      d: pathData,
+      class: `network-edge ${evidenceClass}`,
+      "data-network-edge": edge.id,
+      "data-node-a": edge.node_a,
+      "data-node-b": edge.node_b,
+      "stroke-width": strokeWidth.toFixed(2),
+      opacity: opacity.toFixed(3),
+      tabindex: 0,
+      role: "button",
+      "aria-label": `${edge.node_a} to ${edge.node_b}, edge posterior ${formatEvidenceNumber(edge.edge_probability)}`,
+      ...(directed ? { "marker-end": `url(#path-network-arrow-${evidenceClass})` } : {}),
+    });
+    const directionText = directed
+      ? `constrained ${edge.source} → ${edge.target}`
+      : edge.directionality === "undirected"
+        ? "directionality disabled"
+        : "direction unresolved; both traversals allowed";
+    const detail = `${edge.node_a} — ${edge.node_b} · edge posterior ${formatEvidenceNumber(edge.edge_probability)} · ${directionText} · shown in path ranks ${pathRankText(edge.visiblePathRanks)}.`;
+    visiblePath.appendChild(svgElement("title", {}, detail));
+    const selectEdge = (event) => {
+      event.stopPropagation();
+      setPathNetworkSelection(detail, [edge.node_a, edge.node_b], [edge.id]);
+    };
+    visiblePath.addEventListener("click", selectEdge);
+    visiblePath.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectEdge(event);
+      }
+    });
+    const hitPath = svgElement("path", {
+      d: pathData,
+      class: "network-edge-hit",
+      "data-network-edge": edge.id,
+      "stroke-width": Math.max(14, strokeWidth + 8),
+    });
+    hitPath.addEventListener("click", selectEdge);
+    edgeLayer.append(visiblePath, hitPath);
+  });
+
+  visible.nodes.forEach((node) => {
+    const group = svgElement("g", {
+      class: `network-node-group${node.is_start ? " start" : ""}${node.is_target ? " target" : ""}`,
+      transform: `translate(${node.x.toFixed(2)} ${node.y.toFixed(2)})`,
+      "data-network-node": node.id,
+      tabindex: 0,
+      role: "button",
+      "aria-label": `${node.label}, node posterior ${formatEvidenceNumber(node.posterior_probability)}`,
+    });
+    group.appendChild(svgElement("circle", { r: Math.max(22, node.radius + 7), class: "network-node-hit" }));
+    const evidenceClass = networkEvidenceClass(node.posterior_probability, node.posterior_available);
+    const strength = networkEvidenceStrength(node.posterior_probability, node.posterior_available);
+    const circle = svgElement("circle", {
+      r: node.radius.toFixed(2),
+      class: `network-node ${evidenceClass}`,
+      "fill-opacity": node.posterior_available ? (0.34 + 0.64 * strength).toFixed(3) : "0.55",
+    });
+    group.appendChild(circle);
+    if (node.is_start || node.is_target) {
+      group.appendChild(svgElement("circle", { r: (node.radius + 4).toFixed(2), class: "network-node-ring" }));
+    }
+    const labelAttributes = node.is_start
+      ? { x: node.radius + 6, y: 3, "text-anchor": "start" }
+      : node.is_target
+        ? { x: -node.radius - 6, y: 3, "text-anchor": "end" }
+        : { x: 0, y: -node.radius - 5, "text-anchor": "middle" };
+    group.appendChild(svgElement("text", { ...labelAttributes, class: "network-node-label" }, node.label));
+    const posteriorText = node.posterior_available
+      ? `node posterior ${formatEvidenceNumber(node.posterior_probability)}`
+      : "no Bayesian node posterior (curated messenger or external endpoint)";
+    const roles = String(node.classes || "unclassified").replaceAll(";", ", ");
+    const detail = `${node.label}${node.name ? ` — ${node.name}` : ""} · ${posteriorText} · roles: ${roles} · shown in path ranks ${pathRankText(node.visiblePathRanks)}.`;
+    group.appendChild(svgElement("title", {}, detail));
+    const selectNode = (event) => {
+      event.stopPropagation();
+      const incident = visible.edges.filter((edge) => edge.node_a === node.id || edge.node_b === node.id);
+      const neighbors = new Set([node.id]);
+      incident.forEach((edge) => {
+        neighbors.add(edge.node_a);
+        neighbors.add(edge.node_b);
+      });
+      setPathNetworkSelection(detail, [...neighbors], incident.map((edge) => edge.id));
+    };
+    group.addEventListener("click", selectNode);
+    group.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectNode(event);
+      }
+    });
+    nodeLayer.appendChild(group);
+  });
+  svg.addEventListener("click", () => clearPathNetworkSelection(visible.nodes.length, visible.edges.length, rankLimit));
+  clearPathNetworkSelection(visible.nodes.length, visible.edges.length, rankLimit);
+}
+
+function renderPathNetwork(network) {
+  state.pathNetwork = network;
+  const section = $("path-network-section");
+  const available = Number(network?.visualized_path_count || 0);
+  section.classList.toggle("hidden", !available || !(network?.nodes || []).length);
+  if (!available || !(network?.nodes || []).length) return;
+  const limitSelect = $("path-network-limit");
+  const choices = [...new Set([Math.min(5, available), Math.min(10, available), Math.min(25, available), available])]
+    .filter((value) => value > 0)
+    .sort((left, right) => left - right);
+  limitSelect.innerHTML = "";
+  choices.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = `Top ${value}`;
+    limitSelect.appendChild(option);
+  });
+  state.networkRankLimit = Math.min(10, available);
+  limitSelect.value = String(state.networkRankLimit);
+  state.networkLayoutSeed = 0;
+  drawPathNetwork();
 }
 
 function streamCard(stream, group, current) {
@@ -231,6 +723,7 @@ function populateControls() {
   $("path-max-hops").value = path.max_hops;
   $("path-cutoff").value = path.minimum_edge_probability;
   $("ontology-directionality").checked = path.ontology_directionality_enabled;
+  $("omnipath-directionality").checked = path.omnipath_directionality_enabled;
   $("signal-only").checked = path.signaling_intermediates_only;
   $("exclude-multirole-scaffolds").checked = path.exclude_multirole_scaffolds;
   renderPathOntologyClasses(path);
@@ -304,6 +797,7 @@ function collectConfiguration() {
       max_hops: Number($("path-max-hops").value),
       minimum_edge_probability: Number($("path-cutoff").value),
       ontology_directionality_enabled: $("ontology-directionality").checked,
+      omnipath_directionality_enabled: $("omnipath-directionality").checked,
       signaling_intermediates_only: $("signal-only").checked,
       exclude_multirole_scaffolds: $("exclude-multirole-scaffolds").checked,
       allowed_intermediate_classes: Array.from(
@@ -336,8 +830,14 @@ function setCalibrationControls(enabled) {
 function setPathControls(enabled) {
   $("path-controls").querySelectorAll("input, button").forEach((control) => { control.disabled = !enabled; });
   $("path-controls").style.opacity = enabled ? "1" : ".45";
+  setDirectionalityControls(enabled);
   setOntologyControls(enabled);
   setTemporalControls(enabled);
+}
+
+function setDirectionalityControls(pathEnabled) {
+  $("omnipath-directionality").disabled =
+    !pathEnabled || !$("ontology-directionality").checked;
 }
 
 function setOntologyControls(pathEnabled) {
@@ -397,11 +897,14 @@ function updateJob(job) {
 
 function renderResult(job) {
   const preview = job.preview || { metrics: {}, top_paths: [], files: [], warnings: [] };
+  $("evidence-inspector-result").classList.add("hidden");
+  $("evidence-inspector-message").textContent = "Choose a hypothesis to see its update ledger.";
   $("metric-nodes").textContent = formatInt(preview.metrics.selected_nodes);
   $("metric-edges").textContent = formatInt(preview.metrics.supported_edges);
   $("metric-paths").textContent = formatInt(preview.metrics.ranked_paths);
   renderProbabilityDistribution("node", preview.probability_distributions?.nodes);
   renderProbabilityDistribution("edge", preview.probability_distributions?.edges);
+  renderPathNetwork(preview.path_network);
   const calibration = preview.calibration;
   $("calibration-result").classList.toggle("hidden", !calibration?.enabled);
   if (calibration?.enabled) {
@@ -422,7 +925,13 @@ function renderResult(job) {
     const percent = 100 * Number(directionality.proportion_uniquely_oriented || 0);
     $("oriented-edge-count").textContent = formatInt(directionality.uniquely_oriented_edge_count);
     $("oriented-edge-percent").textContent = `${percent.toFixed(1)}%`;
-    $("directionality-result-detail").textContent = `${formatInt(directionality.retained_unique_edge_count)} edges above the output cutoff; ${formatInt(directionality.unresolved_no_matching_rule_count)} had no matching rule and ${formatInt(directionality.unresolved_conflicting_rules_count)} had conflicting multi-role rules.`;
+    const ontologyOnly = Number(directionality.uniquely_oriented_by_ontology_only_count || 0);
+    const omnipathOnly = Number(directionality.uniquely_oriented_by_omnipath_only_count || 0);
+    const both = Number(directionality.uniquely_oriented_by_both_count || 0);
+    const precedence = Number(directionality.ontology_precedence_over_opposing_omnipath_count || 0);
+    const noDirection = Number(directionality.unresolved_no_direction_evidence_count ?? directionality.unresolved_no_matching_rule_count ?? 0);
+    const conflicts = Number(directionality.unresolved_conflicting_direction_count ?? directionality.unresolved_conflicting_rules_count ?? 0);
+    $("directionality-result-detail").textContent = `${formatInt(directionality.retained_unique_edge_count)} edges above the output cutoff; ontology-led: ${formatInt(ontologyOnly)}, added by OmniPath: ${formatInt(omnipathOnly)}, agreed by both: ${formatInt(both)}. ${formatInt(precedence)} opposing OmniPath calls retained the ontology restriction. ${formatInt(noDirection)} had no direction evidence and ${formatInt(conflicts)} remained bidirectional.`;
   }
   const temporal = preview.temporal_validation;
   const temporalExecuted = Boolean(temporal?.executed);
@@ -518,6 +1027,7 @@ async function startRun(event) {
   event.preventDefault();
   $("run-button").disabled = true;
   state.jobId = null;
+  $("evidence-inspector-result").classList.add("hidden");
   $("cancel-job-button").disabled = true;
   $("cancel-job-button").textContent = "Cancel analysis";
   showPanel("job-state");
@@ -586,10 +1096,27 @@ async function initialize() {
 }
 
 $("workflow-form").addEventListener("submit", startRun);
+$("node-evidence-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  inspectEvidence("node");
+});
+$("edge-evidence-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  inspectEvidence("edge");
+});
 $("cancel-job-button").addEventListener("click", cancelRun);
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
 $("calibration-enabled").addEventListener("change", (event) => setCalibrationControls(event.target.checked));
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));
+$("ontology-directionality").addEventListener("change", () => setDirectionalityControls($("path-enabled").checked));
+$("path-network-limit").addEventListener("change", (event) => {
+  state.networkRankLimit = Number(event.target.value);
+  drawPathNetwork();
+});
+$("path-network-relayout").addEventListener("click", () => {
+  state.networkLayoutSeed += 1;
+  drawPathNetwork();
+});
 $("temporal-enabled").addEventListener("change", () => setTemporalControls($("path-enabled").checked));
 $("signal-only").addEventListener("change", () => setOntologyControls($("path-enabled").checked));
 $("penalize-unobserved").addEventListener("change", (event) => {
@@ -606,4 +1133,9 @@ $("ontology-none").addEventListener("click", () => {
 });
 $("dismiss-error").addEventListener("click", () => showPanel("empty-state"));
 $("reconnect-server").addEventListener("click", () => window.location.reload());
+window.addEventListener("resize", () => {
+  if (!state.pathNetwork || $("path-network-section").classList.contains("hidden")) return;
+  window.clearTimeout(state.networkResizeTimer);
+  state.networkResizeTimer = window.setTimeout(drawPathNetwork, 140);
+});
 initialize();

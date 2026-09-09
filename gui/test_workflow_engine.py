@@ -13,6 +13,7 @@ from workflow_engine import (
     PROJECT_ROOT,
     _calibration_parameter_specs,
     append_external_target,
+    build_path_network_payload,
     combine_edge_factors,
     default_configuration,
     edge_stream_factor_table,
@@ -29,6 +30,7 @@ from incremental_edge_cache import (
 )
 from ontology_directionality import (
     apply_ontology_directionality,
+    build_omnipath_direction_evidence,
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
 )
@@ -41,6 +43,7 @@ class WorkflowEngineTests(unittest.TestCase):
 
     def test_default_configuration_is_current_workflow(self) -> None:
         config = normalize_configuration(None, self.registry)
+        self.assertTrue(config["path"]["omnipath_directionality_enabled"])
         enabled_nodes = {
             key for key, state in config["node_streams"].items() if state["enabled"]
         }
@@ -154,6 +157,23 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("/cancel`, { method: \"POST\" }", javascript)
         self.assertIn('job.status === "cancelled"', javascript)
         self.assertIn('/api/jobs/active', javascript)
+
+    def test_gui_exposes_merged_interactive_path_network(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        for control in (
+            "path-network-section",
+            "path-network-limit",
+            "path-network-relayout",
+            "path-network-svg",
+            "path-network-detail",
+        ):
+            self.assertIn(f'id="{control}"', html)
+        self.assertIn("function renderPathNetwork(network)", javascript)
+        self.assertIn("function layoutPathNetwork", javascript)
+        self.assertIn("directionality === \"uniquely_directed\"", javascript)
+        self.assertIn("Math.log1p(absoluteLogOdds)", javascript)
+        self.assertIn('markerUnits: "userSpaceOnUse"', javascript)
 
     def test_gui_distinguishes_server_disconnect_from_bad_configuration(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -325,13 +345,172 @@ class WorkflowEngineTests(unittest.TestCase):
         conflict = audit.loc[
             audit["node_a"].eq("MultiA") & audit["node_b"].eq("MultiB")
         ].iloc[0]
-        self.assertEqual(conflict["directionality_status"], "unresolved_conflicting_rules")
+        self.assertEqual(
+            conflict["directionality_status"], "unresolved_conflicting_directions"
+        )
         self.assertGreater(summary["edge_output_graph"]["uniquely_oriented_edge_count"], 0)
         class_pairs = build_complete_class_pair_catalog(
             catalog,
             [item["id"] for item in self.registry["path_ontology_classes"]],
         )
         self.assertEqual(len(class_pairs), 153)
+
+    def test_omnipath_directions_orient_only_unidirectional_pairs(self) -> None:
+        symbols = ["Ligand", "Receptor", "A", "B", "C", "D"]
+        raw = pd.DataFrame(
+            [
+                {
+                    "source_genesymbol": "Receptor",
+                    "target_genesymbol": "Ligand",
+                    "is_directed": "True",
+                    "consensus_direction": "False",
+                    "sources": "KEA",
+                    "references": "KEA:2",
+                },
+                {
+                    "source_genesymbol": "A",
+                    "target_genesymbol": "B",
+                    "is_directed": "True",
+                    "consensus_direction": "False",
+                    "sources": "HPRD",
+                    "references": "HPRD:3",
+                },
+                {
+                    "source_genesymbol": "C",
+                    "target_genesymbol": "D",
+                    "is_directed": "True",
+                    "consensus_direction": "False",
+                    "sources": "X",
+                    "references": "X:4",
+                },
+                {
+                    "source_genesymbol": "D",
+                    "target_genesymbol": "C",
+                    "is_directed": "True",
+                    "consensus_direction": "False",
+                    "sources": "Y",
+                    "references": "Y:5",
+                },
+            ]
+        )
+        omnipath = build_omnipath_direction_evidence(raw, symbols)
+        self.assertEqual(len(omnipath), 3)
+        ab = omnipath.loc[
+            omnipath["node_a"].eq("A") & omnipath["node_b"].eq("B")
+        ].iloc[0]
+        self.assertTrue(ab["omnipath_supports_a_to_b"])
+        self.assertFalse(ab["omnipath_supports_b_to_a"])
+        cd = omnipath.loc[
+            omnipath["node_a"].eq("C") & omnipath["node_b"].eq("D")
+        ].iloc[0]
+        self.assertTrue(cd["omnipath_bidirectional"])
+
+        values = np.full((len(symbols), len(symbols)), 0.9, dtype=float)
+        np.fill_diagonal(values, 0.0)
+        matrix = pd.DataFrame(values, index=symbols, columns=symbols)
+        metadata = pd.DataFrame(
+            {
+                "symbol": symbols,
+                "classes": ["ligand", "receptor", "", "", "", ""],
+            }
+        )
+        catalog = load_direction_rule_catalog(
+            known_classes=[item["id"] for item in self.registry["path_ontology_classes"]]
+        )
+        directed, audit, summary = apply_ontology_directionality(
+            matrix,
+            metadata,
+            catalog,
+            audit_probability_cutoff=0.5,
+            edge_output_cutoff=0.5,
+            path_probability_cutoff=0.5,
+            omnipath_directions=omnipath,
+        )
+        self.assertEqual(directed.loc["A", "B"], 0.9)
+        self.assertEqual(directed.loc["B", "A"], 0.0)
+        self.assertEqual(directed.loc["C", "D"], 0.9)
+        self.assertEqual(directed.loc["D", "C"], 0.9)
+        self.assertEqual(directed.loc["Ligand", "Receptor"], 0.9)
+        self.assertEqual(directed.loc["Receptor", "Ligand"], 0.0)
+        ligand_receptor = audit.loc[
+            audit["node_a"].eq("Ligand") & audit["node_b"].eq("Receptor")
+        ].iloc[0]
+        self.assertEqual(
+            ligand_receptor["directionality_status"],
+            "oriented_a_to_b",
+        )
+        self.assertEqual(
+            ligand_receptor["direction_evidence_sources"],
+            "ontology_precedence_over_omnipath_conflict",
+        )
+        edge_summary = summary["edge_output_graph"]
+        self.assertEqual(edge_summary["uniquely_oriented_by_omnipath_only_count"], 1)
+        self.assertEqual(edge_summary["unresolved_conflicting_direction_count"], 1)
+        self.assertEqual(
+            edge_summary["ontology_precedence_over_opposing_omnipath_count"], 1
+        )
+
+    def test_path_network_merges_paths_and_marks_only_constrained_arrows(self) -> None:
+        path_rows = pd.DataFrame(
+            [
+                {"rank": 1, "path_symbols": "A -> B -> D"},
+                {"rank": 2, "path_symbols": "A -> C -> B -> D"},
+            ]
+        )
+        path_edges = pd.DataFrame(
+            [
+                {"path_rank": 1, "step": 1, "source_symbol": "A", "target_symbol": "B", "edge_probability": 0.9},
+                {"path_rank": 1, "step": 2, "source_symbol": "B", "target_symbol": "D", "edge_probability": 0.8},
+                {"path_rank": 2, "step": 1, "source_symbol": "A", "target_symbol": "C", "edge_probability": 0.7},
+                {"path_rank": 2, "step": 2, "source_symbol": "C", "target_symbol": "B", "edge_probability": 0.75},
+                {"path_rank": 2, "step": 3, "source_symbol": "B", "target_symbol": "D", "edge_probability": 0.8},
+            ]
+        )
+        metadata = pd.DataFrame(
+            {
+                "symbol": ["A", "B", "C", "D"],
+                "display_symbol": ["A", "B", "C", "D"],
+                "name": ["start", "hub", "branch", "target"],
+                "classes": ["kinase", "signaling_process", "receptor", "external_target"],
+                "node_type": ["protein"] * 4,
+                "gui_posterior": [0.9, 0.7, 0.6, np.nan],
+            }
+        )
+        propagation = pd.DataFrame(
+            np.zeros((4, 4)), index=["A", "B", "C", "D"], columns=["A", "B", "C", "D"]
+        )
+        for left, right, probability in (
+            ("A", "B", 0.9),
+            ("A", "C", 0.7),
+            ("B", "C", 0.75),
+            ("B", "D", 0.8),
+        ):
+            propagation.loc[left, right] = probability
+            propagation.loc[right, left] = probability
+        propagation.loc["B", "A"] = 0.0
+
+        payload = build_path_network_payload(
+            path_rows,
+            path_edges,
+            metadata,
+            propagation,
+            directed_graph=True,
+        )
+        self.assertEqual(payload["visualized_path_count"], 2)
+        self.assertEqual(len(payload["nodes"]), 4)
+        self.assertEqual(len(payload["edges"]), 4)
+        ab = next(edge for edge in payload["edges"] if edge["id"] == "A--B")
+        self.assertEqual(ab["directionality"], "uniquely_directed")
+        self.assertEqual((ab["source"], ab["target"]), ("A", "B"))
+        bd = next(edge for edge in payload["edges"] if edge["id"] == "B--D")
+        self.assertEqual(bd["directionality"], "unresolved_bidirectional")
+        self.assertEqual(bd["path_ranks"], [1, 2])
+        node_b = next(node for node in payload["nodes"] if node["id"] == "B")
+        self.assertEqual(node_b["path_count"], 2)
+        self.assertAlmostEqual(node_b["mean_path_position"], (0.5 + 2 / 3) / 2)
+        node_d = next(node for node in payload["nodes"] if node["id"] == "D")
+        self.assertIsNone(node_d["posterior_probability"])
+        self.assertTrue(node_d["is_target"])
 
     def test_incremental_pairs_stream_without_materializing_full_graph(self) -> None:
         symbols = ["SeedA", "AddedA", "SeedB", "AddedB"]

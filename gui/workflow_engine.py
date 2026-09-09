@@ -52,6 +52,7 @@ from incremental_edge_cache import (  # noqa: E402
 from ontology_directionality import (  # noqa: E402
     RULE_CATALOG_PATH,
     apply_ontology_directionality,
+    build_omnipath_direction_evidence,
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
 )
@@ -110,6 +111,10 @@ HPA_PROFILES_RELATIVE = Path(
 OMNIPATH_EFFORT_MATRIX_RELATIVE = Path(
     "results/edge_characterization/localization_kinase_predictor_string_hpa_omnipath/"
     "omnipath_curation_effort_matrix.tsv"
+)
+OMNIPATH_DIRECTION_RAW_RELATIVE = Path(
+    "data/edge_characterization/omnipath/2026-07-30/raw/"
+    "omnipath_mouse_core_post_translational.tsv"
 )
 STITCH_UNIVERSE_EDGES_RELATIVE = Path(
     "results/edge_characterization/"
@@ -347,6 +352,9 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             ),
             "ontology_directionality_enabled": bool(
                 defaults["ontology_directionality_enabled"]
+            ),
+            "omnipath_directionality_enabled": bool(
+                defaults["omnipath_directionality_enabled"]
             ),
             "signaling_intermediates_only": bool(
                 defaults["signaling_intermediates_only"]
@@ -611,6 +619,9 @@ def normalize_configuration(
     path["enabled"] = bool(path["enabled"])
     path["ontology_directionality_enabled"] = bool(
         path["ontology_directionality_enabled"]
+    )
+    path["omnipath_directionality_enabled"] = bool(
+        path["omnipath_directionality_enabled"]
     )
     path["start"] = str(path["start"]).strip()
     path["target"] = str(path["target"]).strip()
@@ -2586,6 +2597,7 @@ def combine_edge_factors(
     *,
     graph_metadata: pd.DataFrame | None = None,
     audit_collector: dict[str, pd.DataFrame] | None = None,
+    contribution_collector: dict[str, np.ndarray] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     prior = config["edge_integration"]["prior_probability"]
     penalize_unsupported = config["edge_integration"]["penalize_unsupported"]
@@ -2605,6 +2617,15 @@ def combine_edge_factors(
     seed_set = set(seed_universe["symbol"].astype(str))
     seed_graph_symbols = [symbol for symbol in graph_symbols if symbol in seed_set]
     has_incremental_nodes = len(seed_graph_symbols) != len(graph_symbols)
+    incremental_pairs: list[tuple[str, str]] = []
+    if has_incremental_nodes:
+        incremental_set = set(graph_symbols).difference(seed_set)
+        incremental_pairs = [
+            (left, right)
+            for left_index, left in enumerate(graph_symbols)
+            for right in graph_symbols[left_index + 1 :]
+            if left in incremental_set or right in incremental_set
+        ]
     stream_defs = {stream["id"]: stream for stream in registry["edge_streams"]}
     active_streams: list[dict[str, Any]] = []
     total_penalty_applications = 0
@@ -2631,12 +2652,21 @@ def combine_edge_factors(
         )
         tables = [seed_table]
         if has_incremental_nodes:
+            incremental_loader = (
+                incremental_pair_factor_table
+                if len(incremental_pairs) <= 50_000
+                else incremental_factor_table
+            )
             tables.append(
-                incremental_factor_table(
+                incremental_loader(
                     project,
                     definition["normalization"]["handler"],
                     _stream_multiplier(state),
-                    graph_symbols,
+                    (
+                        incremental_pairs
+                        if incremental_loader is incremental_pair_factor_table
+                        else graph_symbols
+                    ),
                     continuous_negative=stream_continuous_negative,
                     minimum_bayes_factor=continuous_floor,
                 )
@@ -2653,8 +2683,9 @@ def combine_edge_factors(
         weighted_logs = float(state["weight"]) * np.log(values)
         left_index = left[mask].astype(int).to_numpy()
         right_index = right[mask].astype(int).to_numpy()
-        np.add.at(log_odds, (left_index, right_index), weighted_logs)
-        np.add.at(log_odds, (right_index, left_index), weighted_logs)
+        stream_log_odds = np.zeros_like(log_odds)
+        np.add.at(stream_log_odds, (left_index, right_index), weighted_logs)
+        np.add.at(stream_log_odds, (right_index, left_index), weighted_logs)
         observed_pairs = np.zeros_like(log_odds, dtype=bool)
         observed_pairs[left_index, right_index] = True
         observed_pairs[right_index, left_index] = True
@@ -2676,17 +2707,20 @@ def combine_edge_factors(
         if negative_fill_factor is not None:
             penalty_log = float(state["weight"]) * math.log(negative_fill_factor)
             np.add.at(
-                log_odds,
+                stream_log_odds,
                 (unsupported_left, unsupported_right),
                 penalty_log,
             )
             np.add.at(
-                log_odds,
+                stream_log_odds,
                 (unsupported_right, unsupported_left),
                 penalty_log,
             )
             penalties_applied = int(len(unsupported_left))
             total_penalty_applications += penalties_applied
+        log_odds += stream_log_odds
+        if contribution_collector is not None:
+            contribution_collector[stream_id] = stream_log_odds
         active_streams.append(
             {
                 "id": stream_id,
@@ -2728,6 +2762,19 @@ def combine_edge_factors(
         weighted_logs = float(state["weight"]) * np.log(values)
         np.add.at(log_odds, (left_index, right_index), weighted_logs)
         np.add.at(log_odds, (right_index, left_index), weighted_logs)
+        if contribution_collector is not None:
+            derived_log_odds = np.zeros_like(log_odds)
+            np.add.at(
+                derived_log_odds,
+                (left_index, right_index),
+                weighted_logs,
+            )
+            np.add.at(
+                derived_log_odds,
+                (right_index, left_index),
+                weighted_logs,
+            )
+            contribution_collector[stream_id] = derived_log_odds
         if len(table):
             pair_pre = np.clip(
                 table["preclosure_probability"].to_numpy(float),
@@ -3317,6 +3364,188 @@ def _records(frame: pd.DataFrame, columns: list[str], limit: int) -> list[dict[s
     return json.loads(result.to_json(orient="records"))
 
 
+PATH_NETWORK_VISUALIZATION_LIMIT = 50
+
+
+def build_path_network_payload(
+    path_rows: pd.DataFrame,
+    path_edges: pd.DataFrame,
+    graph_metadata: pd.DataFrame,
+    propagation_matrix: pd.DataFrame,
+    *,
+    directed_graph: bool,
+    path_limit: int = PATH_NETWORK_VISUALIZATION_LIMIT,
+) -> dict[str, Any]:
+    """Build a compact, auditable union graph from the highest-ranked paths.
+
+    Repeated edges are represented once and retain the complete list of path
+    ranks that use them.  A displayed arrow means the propagation matrix truly
+    permits only one traversal direction; unresolved edges stay arrowless even
+    though each serialized path necessarily traverses them in one direction.
+    """
+    available_path_count = int(len(path_rows))
+    empty = {
+        "available_path_count": available_path_count,
+        "visualized_path_count": 0,
+        "path_limit": int(path_limit),
+        "directed_graph": bool(directed_graph),
+        "start_symbol": None,
+        "target_symbol": None,
+        "nodes": [],
+        "edges": [],
+    }
+    if path_rows.empty or path_edges.empty or path_limit < 1:
+        return empty
+
+    ranks = (
+        pd.to_numeric(path_rows["rank"], errors="coerce")
+        .dropna()
+        .astype(int)
+        .sort_values()
+        .drop_duplicates()
+        .head(path_limit)
+        .tolist()
+    )
+    if not ranks:
+        return empty
+    rank_set = set(ranks)
+    edges = path_edges.loc[
+        pd.to_numeric(path_edges["path_rank"], errors="coerce").isin(rank_set)
+    ].copy()
+    if edges.empty:
+        return empty
+    edges["path_rank"] = pd.to_numeric(edges["path_rank"], errors="raise").astype(int)
+    edges["step"] = pd.to_numeric(edges["step"], errors="raise").astype(int)
+    edges["edge_probability"] = pd.to_numeric(
+        edges["edge_probability"], errors="raise"
+    ).astype(float)
+
+    metadata = graph_metadata.copy().fillna("")
+    metadata["symbol"] = metadata["symbol"].astype(str)
+    metadata = metadata.drop_duplicates("symbol", keep="last").set_index("symbol")
+    symbols = propagation_matrix.index.astype(str).tolist()
+    symbol_position = {symbol: index for index, symbol in enumerate(symbols)}
+
+    path_nodes: dict[str, dict[str, Any]] = {}
+    start_symbol: str | None = None
+    target_symbol: str | None = None
+    for rank, group in edges.groupby("path_rank", sort=True):
+        ordered = group.sort_values("step")
+        sequence = [str(ordered.iloc[0]["source_symbol"]), *ordered["target_symbol"].astype(str)]
+        if start_symbol is None:
+            start_symbol = sequence[0]
+            target_symbol = sequence[-1]
+        denominator = max(len(sequence) - 1, 1)
+        for index, symbol in enumerate(sequence):
+            record = path_nodes.setdefault(
+                symbol,
+                {"path_ranks": set(), "path_positions": []},
+            )
+            record["path_ranks"].add(int(rank))
+            record["path_positions"].append(
+                {"rank": int(rank), "position": float(index / denominator)}
+            )
+
+    node_rows: list[dict[str, Any]] = []
+    for symbol, record in path_nodes.items():
+        meta = metadata.loc[symbol] if symbol in metadata.index else pd.Series(dtype=object)
+        posterior_value = pd.to_numeric(
+            pd.Series([meta.get("gui_posterior", "")]), errors="coerce"
+        ).iloc[0]
+        posterior = None if pd.isna(posterior_value) else float(posterior_value)
+        positions = record["path_positions"]
+        path_ranks = sorted(int(value) for value in record["path_ranks"])
+        node_rows.append(
+            {
+                "id": symbol,
+                "label": str(meta.get("display_symbol", "") or symbol),
+                "name": str(meta.get("name", "")),
+                "classes": str(meta.get("classes", "")),
+                "node_type": str(meta.get("node_type", "")),
+                "posterior_probability": posterior,
+                "posterior_available": posterior is not None,
+                "evidence_basis": (
+                    "bayesian_node_posterior"
+                    if posterior is not None
+                    else "curated_or_external_node"
+                ),
+                "is_start": symbol == start_symbol,
+                "is_target": symbol == target_symbol,
+                "best_path_rank": min(path_ranks),
+                "path_count": len(path_ranks),
+                "path_ranks": path_ranks,
+                "path_positions": positions,
+                "mean_path_position": float(
+                    np.mean([item["position"] for item in positions])
+                ),
+            }
+        )
+
+    pair_records: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in edges.itertuples(index=False):
+        source = str(row.source_symbol)
+        target = str(row.target_symbol)
+        if source not in symbol_position or target not in symbol_position:
+            continue
+        canonical = tuple(sorted((source, target), key=symbol_position.__getitem__))
+        record = pair_records.setdefault(
+            canonical,
+            {
+                "probability": float(row.edge_probability),
+                "path_ranks": set(),
+                "path_traversals": set(),
+            },
+        )
+        record["probability"] = max(
+            float(record["probability"]), float(row.edge_probability)
+        )
+        record["path_ranks"].add(int(row.path_rank))
+        record["path_traversals"].add(f"{source}->{target}")
+
+    edge_rows: list[dict[str, Any]] = []
+    for (node_a, node_b), record in pair_records.items():
+        forward = float(propagation_matrix.loc[node_a, node_b])
+        reverse = float(propagation_matrix.loc[node_b, node_a])
+        uniquely_directed = bool(directed_graph and ((forward > 0) ^ (reverse > 0)))
+        if uniquely_directed and reverse > 0:
+            source, target = node_b, node_a
+        else:
+            source, target = node_a, node_b
+        path_ranks = sorted(int(value) for value in record["path_ranks"])
+        edge_rows.append(
+            {
+                "id": f"{node_a}--{node_b}",
+                "node_a": node_a,
+                "node_b": node_b,
+                "source": source,
+                "target": target,
+                "edge_probability": float(record["probability"]),
+                "directionality": (
+                    "uniquely_directed"
+                    if uniquely_directed
+                    else "unresolved_bidirectional"
+                    if directed_graph
+                    else "undirected"
+                ),
+                "path_count": len(path_ranks),
+                "best_path_rank": min(path_ranks),
+                "path_ranks": path_ranks,
+                "path_traversals": sorted(record["path_traversals"]),
+            }
+        )
+
+    node_rows.sort(key=lambda row: (row["mean_path_position"], row["id"]))
+    edge_rows.sort(key=lambda row: (row["best_path_rank"], row["id"]))
+    return {
+        **empty,
+        "visualized_path_count": len(ranks),
+        "start_symbol": start_symbol,
+        "target_symbol": target_symbol,
+        "nodes": node_rows,
+        "edges": edge_rows,
+    }
+
+
 def run_workflow(
     supplied_configuration: dict[str, Any] | None = None,
     *,
@@ -3526,6 +3755,7 @@ def run_workflow(
         directionality_class_catalog = pd.DataFrame()
         directionality_summary: dict[str, Any] | None = None
         directionality_catalog: dict[str, Any] | None = None
+        omnipath_direction_evidence = pd.DataFrame()
         if (
             config["path"]["enabled"]
             and config["path"]["ontology_directionality_enabled"]
@@ -3541,6 +3771,23 @@ def run_workflow(
                 directionality_catalog,
                 [item["id"] for item in registry["path_ontology_classes"]],
             )
+            if config["path"]["omnipath_directionality_enabled"]:
+                omnipath_direction_path = project / OMNIPATH_DIRECTION_RAW_RELATIVE
+                if not omnipath_direction_path.is_file():
+                    raise FileNotFoundError(
+                        "OmniPath directionality is enabled but its raw directed "
+                        f"interaction table is missing: {omnipath_direction_path}"
+                    )
+                omnipath_direction_raw = pd.read_csv(
+                    omnipath_direction_path,
+                    sep="\t",
+                    dtype=str,
+                    keep_default_na=False,
+                )
+                omnipath_direction_evidence = build_omnipath_direction_evidence(
+                    omnipath_direction_raw,
+                    graph_symbols,
+                )
             orientation_cutoff = min(
                 float(cutoff),
                 float(config["path"]["minimum_edge_probability"]),
@@ -3558,6 +3805,16 @@ def run_workflow(
                 path_probability_cutoff=float(
                     config["path"]["minimum_edge_probability"]
                 ),
+                omnipath_directions=(
+                    omnipath_direction_evidence
+                    if config["path"]["omnipath_directionality_enabled"]
+                    else None
+                ),
+            )
+            directionality_summary["omnipath_direction_source"] = (
+                str(OMNIPATH_DIRECTION_RAW_RELATIVE)
+                if config["path"]["omnipath_directionality_enabled"]
+                else None
             )
         path_rows = pd.DataFrame()
         path_edges = pd.DataFrame()
@@ -3579,6 +3836,27 @@ def run_workflow(
             )
             if path_summary is not None:
                 path_summary["ontology_directionality"] = directionality_summary
+
+        path_network = build_path_network_payload(
+            path_rows,
+            path_edges,
+            graph_metadata,
+            propagation_matrix,
+            directed_graph=directionality_summary is not None,
+        )
+        if path_summary is not None:
+            path_summary["merged_path_visualization"] = {
+                "available_path_count": path_network["available_path_count"],
+                "visualized_path_count": path_network["visualized_path_count"],
+                "path_limit": path_network["path_limit"],
+                "merged_node_count": len(path_network["nodes"]),
+                "merged_edge_count": len(path_network["edges"]),
+                "uniquely_directed_edge_count": sum(
+                    edge["directionality"] == "uniquely_directed"
+                    for edge in path_network["edges"]
+                ),
+                "artifact": "top_path_network.json",
+            }
 
         if config["temporal_validation"]["enabled"]:
             temporal_config = config["temporal_validation"]
@@ -3674,10 +3952,12 @@ def run_workflow(
         directionality_audit_path = output / "ontology_directionality_audit.tsv.gz"
         directionality_class_catalog_path = output / "ontology_class_pair_catalog.tsv"
         directionality_rules_path = output / "ontology_direction_rules.json"
+        omnipath_direction_evidence_path = output / "omnipath_direction_evidence.tsv.gz"
         temporal_paths_path = output / "ranked_paths_temporal.tsv"
         temporal_genes_path = output / "temporal_gene_responses.tsv.gz"
         temporal_trend_path = output / "temporal_variance_trend.tsv"
         temporal_summary_path = output / "temporal_validation_summary.json"
+        path_network_path = output / "top_path_network.json"
         summary_path = output / "analysis_summary.json"
         check_cancel()
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -3786,6 +4066,14 @@ def run_workflow(
                     directionality_rules_path,
                 ]
             )
+            if config["path"]["omnipath_directionality_enabled"]:
+                omnipath_direction_evidence.to_csv(
+                    omnipath_direction_evidence_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                )
+                files.append(omnipath_direction_evidence_path)
         for stream_id, audit in derived_audits.items():
             check_cancel()
             audit_path = output / f"{safe_name(stream_id)}_audit.tsv.gz"
@@ -3800,6 +4088,10 @@ def run_workflow(
             path_edges.to_csv(path_edges_path, sep="\t", index=False, float_format="%.12g")
             eligibility.to_csv(eligibility_path, sep="\t", index=False)
             files.extend([paths_path, path_edges_path, eligibility_path])
+            path_network_path.write_text(
+                json.dumps(path_network, indent=2) + "\n", encoding="utf-8"
+            )
+            files.append(path_network_path)
         if temporal_summary is not None:
             check_cancel()
             temporal_summary_path.write_text(
@@ -3898,6 +4190,7 @@ def run_workflow(
             )
             if not path_rows.empty
             else [],
+            "path_network": path_network,
             "probability_distributions": {
                 "nodes": node_summary["probability_distribution"],
                 "edges": edge_summary["probability_distribution"],

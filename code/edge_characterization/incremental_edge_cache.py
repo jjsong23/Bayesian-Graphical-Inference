@@ -829,27 +829,45 @@ def ensure_incremental_pairs(
 
     connection = _connect(project)
     try:
-        connection.execute(
-            "CREATE TEMP TABLE requested_nodes("
-            "symbol TEXT PRIMARY KEY, is_dynamic INTEGER NOT NULL) WITHOUT ROWID"
-        )
-        connection.executemany(
-            "INSERT INTO requested_nodes(symbol, is_dynamic) VALUES (?, ?)",
-            [(symbol, int(symbol in dynamic_symbols)) for symbol in symbols],
-        )
-        existing_count = int(
+        # For the usual one/few added-endpoint case, exact primary-key probes are
+        # substantially faster than scanning a multi-gigabyte cache and joining it
+        # to a temporary node table.  Retain the set-based query for very large
+        # dynamic scopes, where one probe per pair would itself become expensive.
+        if requested_count <= 50_000:
+            exists_sql = (
+                "SELECT 1 FROM pair_evidence "
+                "WHERE evidence_signature=? AND node_a=? AND node_b=?"
+            )
+            existing_count = sum(
+                connection.execute(
+                    exists_sql,
+                    (signature, *canonical_pair(left, right)),
+                ).fetchone()
+                is not None
+                for left, right in iter_incremental_pairs(symbols, dynamic_symbols)
+            )
+        else:
             connection.execute(
-                """
-                SELECT COUNT(*)
-                FROM pair_evidence AS pair
-                JOIN requested_nodes AS left_node ON left_node.symbol = pair.node_a
-                JOIN requested_nodes AS right_node ON right_node.symbol = pair.node_b
-                WHERE pair.evidence_signature=?
-                  AND (left_node.is_dynamic=1 OR right_node.is_dynamic=1)
-                """,
-                (signature,),
-            ).fetchone()[0]
-        )
+                "CREATE TEMP TABLE requested_nodes("
+                "symbol TEXT PRIMARY KEY, is_dynamic INTEGER NOT NULL) WITHOUT ROWID"
+            )
+            connection.executemany(
+                "INSERT INTO requested_nodes(symbol, is_dynamic) VALUES (?, ?)",
+                [(symbol, int(symbol in dynamic_symbols)) for symbol in symbols],
+            )
+            existing_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM pair_evidence AS pair
+                    JOIN requested_nodes AS left_node ON left_node.symbol = pair.node_a
+                    JOIN requested_nodes AS right_node ON right_node.symbol = pair.node_b
+                    WHERE pair.evidence_signature=?
+                      AND (left_node.is_dynamic=1 OR right_node.is_dynamic=1)
+                    """,
+                    (signature,),
+                ).fetchone()[0]
+            )
         base_profiles = _load_base_profiles(project, base_symbols)
         requested_metadata = graph_metadata.loc[
             graph_metadata["symbol"].isin(dynamic_symbols)

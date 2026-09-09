@@ -14,9 +14,128 @@ import pandas as pd
 
 RULE_CATALOG_PATH = Path(__file__).with_name("ontology_direction_rules.json")
 
+OMNIPATH_DIRECTION_COLUMNS = [
+    "node_a",
+    "node_b",
+    "directed_record_count",
+    "directional_interactions",
+    "omnipath_supports_a_to_b",
+    "omnipath_supports_b_to_a",
+    "omnipath_bidirectional",
+    "consensus_direction_record_count",
+    "resources",
+    "references",
+]
+
 
 def split_classes(value: object) -> set[str]:
     return {token.strip() for token in str(value).split(";") if token.strip()}
+
+
+def _boolean_series(values: pd.Series) -> pd.Series:
+    return values.astype(str).str.strip().str.casefold().isin({"true", "1", "yes"})
+
+
+def _joined_tokens(values: Iterable[object]) -> str:
+    tokens = {
+        token.strip()
+        for value in values
+        for token in str(value).split(";")
+        if token.strip() and token.strip().casefold() != "nan"
+    }
+    return ";".join(sorted(tokens, key=lambda value: (value.casefold(), value)))
+
+
+def build_omnipath_direction_evidence(
+    raw: pd.DataFrame,
+    graph_symbols: Iterable[str],
+) -> pd.DataFrame:
+    """Collapse mapped directed OmniPath rows to one audit row per graph pair.
+
+    Every directed source-target record is retained as directional evidence;
+    ``consensus_direction`` is reported for provenance but is not required.
+    A pair is unidirectional only when all mapped records agree. Records in
+    both directions deliberately preserve both traversals downstream.
+    """
+    required = {"source_genesymbol", "target_genesymbol", "is_directed"}
+    missing = required.difference(raw.columns)
+    if missing:
+        raise ValueError(
+            "OmniPath direction table is missing columns: " + ", ".join(sorted(missing))
+        )
+    symbols = [str(value) for value in graph_symbols]
+    if len(symbols) != len(set(symbols)):
+        raise ValueError("OmniPath direction mapping requires unique graph symbols")
+    folded: dict[str, str] = {}
+    for symbol in symbols:
+        key = symbol.casefold()
+        if key in folded and folded[key] != symbol:
+            raise ValueError(
+                f"graph symbols {folded[key]!r} and {symbol!r} collide case-insensitively"
+            )
+        folded[key] = symbol
+    position = {symbol: index for index, symbol in enumerate(symbols)}
+    directed = raw.loc[_boolean_series(raw["is_directed"])].copy()
+    directed["mapped_source"] = (
+        directed["source_genesymbol"].astype(str).str.strip().str.casefold().map(folded)
+    )
+    directed["mapped_target"] = (
+        directed["target_genesymbol"].astype(str).str.strip().str.casefold().map(folded)
+    )
+    directed = directed.loc[
+        directed["mapped_source"].notna()
+        & directed["mapped_target"].notna()
+        & directed["mapped_source"].ne(directed["mapped_target"])
+    ].copy()
+    if directed.empty:
+        return pd.DataFrame(columns=OMNIPATH_DIRECTION_COLUMNS)
+
+    source_position = directed["mapped_source"].map(position).to_numpy(int)
+    target_position = directed["mapped_target"].map(position).to_numpy(int)
+    source_first = source_position < target_position
+    directed["node_a"] = np.where(
+        source_first, directed["mapped_source"], directed["mapped_target"]
+    )
+    directed["node_b"] = np.where(
+        source_first, directed["mapped_target"], directed["mapped_source"]
+    )
+    directed["record_a_to_b"] = source_first
+    directed["record_b_to_a"] = ~source_first
+    if "consensus_direction" in directed:
+        directed["consensus_direction_bool"] = _boolean_series(
+            directed["consensus_direction"]
+        )
+    else:
+        directed["consensus_direction_bool"] = False
+
+    rows: list[dict[str, Any]] = []
+    for (node_a, node_b), group in directed.groupby(["node_a", "node_b"], sort=False):
+        supports_a_to_b = bool(group["record_a_to_b"].any())
+        supports_b_to_a = bool(group["record_b_to_a"].any())
+        interactions = []
+        if supports_a_to_b:
+            interactions.append(f"{node_a}->{node_b}")
+        if supports_b_to_a:
+            interactions.append(f"{node_b}->{node_a}")
+        rows.append(
+            {
+                "node_a": node_a,
+                "node_b": node_b,
+                "directed_record_count": int(len(group)),
+                "directional_interactions": ";".join(interactions),
+                "omnipath_supports_a_to_b": supports_a_to_b,
+                "omnipath_supports_b_to_a": supports_b_to_a,
+                "omnipath_bidirectional": supports_a_to_b and supports_b_to_a,
+                "consensus_direction_record_count": int(
+                    group["consensus_direction_bool"].sum()
+                ),
+                "resources": _joined_tokens(group.get("sources", pd.Series(dtype=object))),
+                "references": _joined_tokens(
+                    group.get("references", pd.Series(dtype=object))
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=OMNIPATH_DIRECTION_COLUMNS)
 
 
 def load_direction_rule_catalog(
@@ -134,6 +253,10 @@ def _status_summary(
     probabilities: np.ndarray,
     uniquely_oriented: np.ndarray,
     conflicts: np.ndarray,
+    ontology_a_to_b: np.ndarray,
+    ontology_b_to_a: np.ndarray,
+    omnipath_a_to_b: np.ndarray,
+    omnipath_b_to_a: np.ndarray,
     cutoff: float,
 ) -> dict[str, Any]:
     retained = probabilities > cutoff
@@ -141,10 +264,35 @@ def _status_summary(
     oriented = int((retained & uniquely_oriented).sum())
     conflict_count = int((retained & conflicts).sum())
     no_rule = total - oriented - conflict_count
+    ontology_unique = ontology_a_to_b ^ ontology_b_to_a
+    omnipath_unique = omnipath_a_to_b ^ omnipath_b_to_a
+    sources_agree = ontology_unique & omnipath_unique & (
+        (ontology_a_to_b & omnipath_a_to_b)
+        | (ontology_b_to_a & omnipath_b_to_a)
+    )
+    sources_oppose = ontology_unique & omnipath_unique & ~sources_agree
+    oriented_ontology_only = int(
+        (retained & uniquely_oriented & ontology_unique & ~sources_agree).sum()
+    )
+    oriented_omnipath_only = int(
+        (retained & uniquely_oriented & ~ontology_unique & omnipath_unique).sum()
+    )
+    oriented_by_both = int(
+        (retained & uniquely_oriented & sources_agree).sum()
+    )
     return {
         "probability_cutoff_exclusive": float(cutoff),
         "retained_unique_edge_count": total,
         "uniquely_oriented_edge_count": oriented,
+        "uniquely_oriented_by_ontology_only_count": oriented_ontology_only,
+        "uniquely_oriented_by_omnipath_only_count": oriented_omnipath_only,
+        "uniquely_oriented_by_both_count": oriented_by_both,
+        "ontology_precedence_over_opposing_omnipath_count": int(
+            (retained & sources_oppose).sum()
+        ),
+        "unresolved_no_direction_evidence_count": no_rule,
+        "unresolved_conflicting_direction_count": conflict_count,
+        # Backward-compatible aliases retained for older GUI/result readers.
         "unresolved_no_matching_rule_count": no_rule,
         "unresolved_conflicting_rules_count": conflict_count,
         "proportion_uniquely_oriented": oriented / total if total else 0.0,
@@ -164,12 +312,15 @@ def apply_ontology_directionality(
     audit_probability_cutoff: float,
     edge_output_cutoff: float,
     path_probability_cutoff: float,
+    omnipath_directions: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Return a partially directed propagation matrix and pair-level audit.
 
-    A uniquely matched class rule removes only the disallowed reverse
-    traversal. No-rule and contradictory multi-role cases retain both
-    directions. Edge probabilities are never increased or re-estimated.
+    A unique ontology direction removes the disallowed reverse traversal.
+    OmniPath may uniquely orient a pair only when ontology left it unresolved;
+    it cannot reopen or reverse an ontology restriction. Missing and remaining
+    bidirectional cases retain both directions. Edge probabilities are never
+    increased or re-estimated.
     """
     if matrix.shape[0] != matrix.shape[1]:
         raise ValueError("ontology directionality requires a square matrix")
@@ -214,12 +365,76 @@ def apply_ontology_directionality(
         a_to_b_bits[source[left] & target[right]] |= bit
         b_to_a_bits[source[right] & target[left]] |= bit
 
-    a_to_b = a_to_b_bits != 0
-    b_to_a = b_to_a_bits != 0
-    oriented_a_to_b = a_to_b & ~b_to_a
-    oriented_b_to_a = b_to_a & ~a_to_b
+    ontology_a_to_b = a_to_b_bits != 0
+    ontology_b_to_a = b_to_a_bits != 0
+    omnipath_a_to_b = np.zeros(len(left), dtype=bool)
+    omnipath_b_to_a = np.zeros(len(left), dtype=bool)
+    omnipath_record_count = np.zeros(len(left), dtype=np.int64)
+    omnipath_consensus_count = np.zeros(len(left), dtype=np.int64)
+    omnipath_interactions = np.full(len(left), "", dtype=object)
+    omnipath_resources = np.full(len(left), "", dtype=object)
+    omnipath_references = np.full(len(left), "", dtype=object)
+    omnipath_pair_count = 0
+    if omnipath_directions is not None:
+        required = {
+            "node_a",
+            "node_b",
+            "omnipath_supports_a_to_b",
+            "omnipath_supports_b_to_a",
+        }
+        missing = required.difference(omnipath_directions.columns)
+        if missing:
+            raise ValueError(
+                "OmniPath direction evidence is missing columns: "
+                + ", ".join(sorted(missing))
+            )
+        evidence_lookup = {
+            (str(row.node_a), str(row.node_b)): row
+            for row in omnipath_directions.itertuples(index=False)
+        }
+        symbol_values = np.asarray(symbols, dtype=object)
+        for pair_index, (left_index, right_index) in enumerate(zip(left, right)):
+            evidence = evidence_lookup.get(
+                (str(symbol_values[left_index]), str(symbol_values[right_index]))
+            )
+            if evidence is None:
+                continue
+            omnipath_pair_count += 1
+            omnipath_a_to_b[pair_index] = bool(evidence.omnipath_supports_a_to_b)
+            omnipath_b_to_a[pair_index] = bool(evidence.omnipath_supports_b_to_a)
+            omnipath_record_count[pair_index] = int(
+                getattr(evidence, "directed_record_count", 0)
+            )
+            omnipath_consensus_count[pair_index] = int(
+                getattr(evidence, "consensus_direction_record_count", 0)
+            )
+            omnipath_interactions[pair_index] = str(
+                getattr(evidence, "directional_interactions", "")
+            )
+            omnipath_resources[pair_index] = str(getattr(evidence, "resources", ""))
+            omnipath_references[pair_index] = str(getattr(evidence, "references", ""))
+
+    ontology_unique_a_to_b = ontology_a_to_b & ~ontology_b_to_a
+    ontology_unique_b_to_a = ontology_b_to_a & ~ontology_a_to_b
+    ontology_unique = ontology_unique_a_to_b | ontology_unique_b_to_a
+    omnipath_unique_a_to_b = omnipath_a_to_b & ~omnipath_b_to_a
+    omnipath_unique_b_to_a = omnipath_b_to_a & ~omnipath_a_to_b
+    omnipath_unique = omnipath_unique_a_to_b | omnipath_unique_b_to_a
+    # Ontology constraints are the established project policy. OmniPath may
+    # orient only pairs that ontology left unresolved, so enabling this source
+    # can add disallowed traversals but can never reopen or reverse an existing
+    # ontology-disallowed traversal.
+    oriented_a_to_b = ontology_unique_a_to_b | (
+        ~ontology_unique & omnipath_unique_a_to_b
+    )
+    oriented_b_to_a = ontology_unique_b_to_a | (
+        ~ontology_unique & omnipath_unique_b_to_a
+    )
     uniquely_oriented = oriented_a_to_b | oriented_b_to_a
-    conflicts = a_to_b & b_to_a
+    conflicts = ~uniquely_oriented & (
+        (ontology_a_to_b & ontology_b_to_a)
+        | (omnipath_a_to_b & omnipath_b_to_a)
+    )
 
     directed_values = values.copy()
     directed_values[right[oriented_a_to_b], left[oriented_a_to_b]] = 0.0
@@ -228,10 +443,27 @@ def apply_ontology_directionality(
     directed = pd.DataFrame(directed_values, index=symbols, columns=symbols)
     directed.index.name = matrix.index.name or "symbol"
 
-    status = np.full(len(left), "unresolved_no_matching_rule", dtype=object)
-    status[conflicts] = "unresolved_conflicting_rules"
+    status = np.full(len(left), "unresolved_no_direction_evidence", dtype=object)
+    status[conflicts] = "unresolved_conflicting_directions"
     status[oriented_a_to_b] = "oriented_a_to_b"
     status[oriented_b_to_a] = "oriented_b_to_a"
+    ontology_any = ontology_a_to_b | ontology_b_to_a
+    omnipath_any = omnipath_a_to_b | omnipath_b_to_a
+    sources_agree = ontology_unique & omnipath_unique & (
+        (ontology_unique_a_to_b & omnipath_unique_a_to_b)
+        | (ontology_unique_b_to_a & omnipath_unique_b_to_a)
+    )
+    sources_oppose = ontology_unique & omnipath_unique & ~sources_agree
+    orientation_source = np.full(len(left), "none", dtype=object)
+    orientation_source[ontology_unique] = "ontology"
+    orientation_source[~ontology_unique & omnipath_unique] = "omnipath"
+    orientation_source[sources_agree] = "ontology;omnipath_agree"
+    orientation_source[sources_oppose] = (
+        "ontology_precedence_over_omnipath_conflict"
+    )
+    orientation_source[~uniquely_oriented & (ontology_any | omnipath_any)] = (
+        "unresolved_direction_conflict"
+    )
     audit = pd.DataFrame(
         {
             "node_a": np.asarray(symbols, dtype=object)[left],
@@ -240,10 +472,21 @@ def apply_ontology_directionality(
             "node_a_classes": aligned["classes"].astype(str).to_numpy()[left],
             "node_b_classes": aligned["classes"].astype(str).to_numpy()[right],
             "directionality_status": status,
+            "direction_evidence_sources": orientation_source,
+            "ontology_omnipath_direction_conflict": sources_oppose,
             "allowed_a_to_b": ~oriented_b_to_a,
             "allowed_b_to_a": ~oriented_a_to_b,
+            "ontology_supports_a_to_b": ontology_a_to_b,
+            "ontology_supports_b_to_a": ontology_b_to_a,
             "rule_ids_a_to_b": _rule_ids_from_bits(a_to_b_bits, rules),
             "rule_ids_b_to_a": _rule_ids_from_bits(b_to_a_bits, rules),
+            "omnipath_supports_a_to_b": omnipath_a_to_b,
+            "omnipath_supports_b_to_a": omnipath_b_to_a,
+            "omnipath_directed_record_count": omnipath_record_count,
+            "omnipath_consensus_direction_record_count": omnipath_consensus_count,
+            "omnipath_directional_interactions": omnipath_interactions,
+            "omnipath_resources": omnipath_resources,
+            "omnipath_references": omnipath_references,
             "above_edge_output_cutoff": probabilities > edge_output_cutoff,
             "above_path_probability_cutoff": probabilities > path_probability_cutoff,
         }
@@ -274,16 +517,36 @@ def apply_ontology_directionality(
             probabilities,
             uniquely_oriented,
             conflicts,
+            ontology_a_to_b,
+            ontology_b_to_a,
+            omnipath_a_to_b,
+            omnipath_b_to_a,
             edge_output_cutoff,
         ),
         "path_graph": _status_summary(
             probabilities,
             uniquely_oriented,
             conflicts,
+            ontology_a_to_b,
+            ontology_b_to_a,
+            omnipath_a_to_b,
+            omnipath_b_to_a,
             path_probability_cutoff,
         ),
+        "omnipath_directionality_enabled": omnipath_directions is not None,
+        "omnipath_mapped_pair_count_in_graph": int(len(omnipath_directions))
+        if omnipath_directions is not None
+        else 0,
+        "omnipath_mapped_pair_count_above_audit_cutoff": int(omnipath_pair_count),
         "rule_match_counts": rule_match_counts,
-        "conflict_policy": catalog["conflict_policy"],
+        "conflict_policy": (
+            "Unique ontology orientations are retained as the established project "
+            "policy. OmniPath uniquely orients only pairs that ontology left "
+            "unresolved; therefore enabling OmniPath can add disallowed reverse "
+            "traversals but cannot reopen or reverse an ontology constraint. "
+            "Opposing source directions are recorded in the audit. Bidirectional "
+            "OmniPath records do not orient an otherwise unresolved pair."
+        ),
         "sign_policy": catalog["sign_policy"],
         "matrix_semantics": (
             "The original undirected edge probability is retained for every allowed "

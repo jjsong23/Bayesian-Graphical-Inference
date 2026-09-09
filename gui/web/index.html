@@ -163,7 +163,11 @@
             <div class="path-rules">
               <label class="check-field">
                 <input id="ontology-directionality" type="checkbox" />
-                <span>Apply conservative ontology directionality</span>
+                <span>Apply conservative directionality</span>
+              </label>
+              <label class="check-field">
+                <input id="omnipath-directionality" type="checkbox" />
+                <span>Include OmniPath source→target directions</span>
               </label>
               <label class="check-field">
                 <input id="signal-only" type="checkbox" />
@@ -183,7 +187,7 @@
               <p>Select which node annotations qualify a protein or molecule to relay a path.</p>
               <div id="path-ontology-classes" class="ontology-grid"></div>
             </fieldset>
-            <p class="scientific-note">Ontology directionality removes a reverse traversal only when one conservative role rule supports a unique direction; no-rule and conflicting multi-role pairs remain traversable both ways. This changes path traversal, not the Bayesian edge probability. The sensitivity-oriented relay default includes ligand, binding, generic signaling-process, catalytic, regulatory, and second-messenger roles. Adaptor/scaffold is available but off by default. Endpoints are always exempt. Up to 500 paths can be requested.</p>
+            <p class="scientific-note">The directionality layer applies the established ontology-role restrictions first. OmniPath source→target records can add a unique direction only where ontology left a pair unresolved; they cannot reopen or reverse an ontology-disallowed traversal. Bidirectional OmniPath evidence leaves an otherwise unresolved pair traversable both ways, and source disagreements are audited. This changes path traversal, not the Bayesian edge probability or activation/inhibition sign. The sensitivity-oriented relay default includes ligand, binding, generic signaling-process, catalytic, regulatory, and second-messenger roles. Adaptor/scaffold is available but off by default. Endpoints are always exempt. Up to 500 paths can be requested.</p>
           </div>
         </section>
 
@@ -311,7 +315,7 @@
           </section>
           <section id="directionality-result" class="directionality-result hidden" aria-labelledby="directionality-result-title">
             <div>
-              <p class="eyebrow">Ontology directionality</p>
+              <p class="eyebrow">Ontology + OmniPath directionality</p>
               <h3 id="directionality-result-title"><strong id="oriented-edge-count">—</strong> supported edges uniquely oriented</h3>
               <p id="directionality-result-detail"></p>
             </div>
@@ -324,6 +328,79 @@
               <p id="temporal-result-detail"></p>
             </div>
             <strong id="temporal-passing-genes">—</strong>
+          </section>
+          <section id="path-network-section" class="path-network-section hidden" aria-labelledby="path-network-title">
+            <div class="table-heading path-network-heading">
+              <div>
+                <p class="eyebrow">Merged pathway view</p>
+                <h3 id="path-network-title">Predicted signaling network</h3>
+              </div>
+              <div class="path-network-controls">
+                <label for="path-network-limit">Show</label>
+                <select id="path-network-limit" aria-label="Number of top paths shown"></select>
+                <button id="path-network-relayout" type="button" class="secondary-button">Re-layout</button>
+              </div>
+            </div>
+            <p class="path-network-note">Top paths are overlaid into one network. Shared hubs and relationships appear once; select any node or edge for its evidence details.</p>
+            <div class="path-network-canvas">
+              <svg id="path-network-svg" role="img" aria-labelledby="path-network-title path-network-description">
+                <desc id="path-network-description">Merged network of the most likely paths. Node appearance represents node posterior probability and edge appearance represents edge posterior probability.</desc>
+              </svg>
+            </div>
+            <div class="path-network-legend" aria-label="Network legend">
+              <span><i class="legend-node legend-node-supported"></i>Support</span>
+              <span><i class="legend-node legend-node-refuting"></i>Counterevidence</span>
+              <span><i class="legend-node legend-node-neutral"></i>Near prior</span>
+              <span><i class="legend-node legend-node-unscored"></i>No node posterior</span>
+              <span><i class="legend-edge legend-edge-weak"></i><i class="legend-edge legend-edge-strong"></i>Evidence magnitude (log-odds scale)</span>
+              <span><i class="legend-arrow">→</i>Constrained direction</span>
+            </div>
+            <p id="path-network-detail" class="path-network-detail" aria-live="polite"></p>
+          </section>
+          <section id="evidence-inspector" class="evidence-inspector" aria-labelledby="evidence-inspector-title">
+            <div class="table-heading evidence-inspector-heading">
+              <div>
+                <p class="eyebrow">Evidence transparency</p>
+                <h3 id="evidence-inspector-title">Inspect one hypothesis</h3>
+              </div>
+              <span>Exact run settings</span>
+            </div>
+            <p class="evidence-inspector-note">Enter a node symbol or two nodes from this completed graph. The ledger shows which enabled streams supported, refuted, or left the hypothesis neutral, including the BF, weight, and change in log<sub>2</sub> posterior odds. Disabled streams are shown but never counted.</p>
+            <div class="evidence-query-grid">
+              <form id="node-evidence-form" class="evidence-query-card">
+                <label for="node-evidence-symbol"><strong>Node</strong><span>Gene symbol</span></label>
+                <div class="evidence-query-row">
+                  <input id="node-evidence-symbol" type="text" placeholder="Prkaca" autocomplete="off" />
+                  <button type="submit" class="secondary-button">Inspect</button>
+                </div>
+              </form>
+              <form id="edge-evidence-form" class="evidence-query-card">
+                <label><strong>Edge</strong><span>Two graph nodes; order does not matter</span></label>
+                <div class="evidence-edge-fields">
+                  <input id="edge-evidence-node-a" type="text" placeholder="Prkaca" aria-label="First edge node" autocomplete="off" />
+                  <span aria-hidden="true">—</span>
+                  <input id="edge-evidence-node-b" type="text" placeholder="Aqp2" aria-label="Second edge node" autocomplete="off" />
+                  <button type="submit" class="secondary-button">Inspect</button>
+                </div>
+              </form>
+            </div>
+            <p id="evidence-inspector-message" class="evidence-inspector-message muted">Choose a hypothesis to see its update ledger.</p>
+            <div id="evidence-inspector-result" class="evidence-inspector-result hidden">
+              <div class="evidence-summary-grid">
+                <div><span>Hypothesis</span><strong id="evidence-summary-hypothesis">—</strong></div>
+                <div><span>Prior</span><strong id="evidence-summary-prior">—</strong></div>
+                <div><span>Posterior</span><strong id="evidence-summary-posterior">—</strong></div>
+                <div><span>Decision</span><strong id="evidence-summary-decision">—</strong></div>
+              </div>
+              <div id="evidence-reconciliation" class="evidence-reconciliation"></div>
+              <div class="evidence-ledger-wrap">
+                <table class="evidence-ledger">
+                  <thead><tr><th>Evidence stream</th><th>Call</th><th>Observed / scope</th><th>BF</th><th>Weight</th><th>Δ log₂ odds</th></tr></thead>
+                  <tbody id="evidence-ledger-body"></tbody>
+                </table>
+              </div>
+              <p id="evidence-stream-detail" class="evidence-stream-detail">Select a stream row for its normalization and missing-data explanation.</p>
+            </div>
           </section>
           <div class="table-heading"><h3>Most likely paths</h3><span>Product score</span></div>
           <div class="table-wrap">

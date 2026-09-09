@@ -1,10 +1,10 @@
 # Codex project context
 
-Read this file before changing the project. It is the short handoff for a new Codex session; the detailed scientific record is in `docs/full_project_methods.md`, `docs/edge_characterization_methods_891.md`, `docs/path_finding_target_extension.md`, and `docs/lab_notebook/`.
+Read this file before changing the project. It is the canonical short handoff for a new Codex session: it defines what the repository is for, where its data live, which scientific conventions are intentional, and which implementation decisions must not be silently reversed. The detailed scientific record is in `docs/full_project_methods.md`, `docs/edge_characterization_methods_891.md`, `docs/path_finding_target_extension.md`, and `docs/lab_notebook/`. Check `CHANGELOG.md` and the newest lab-notebook entry for changes made after the longer methods documents were written.
 
 ## One-sentence objective
 
-Construct an auditable Bayesian graph of renal principal-cell signaling participants, estimate undirected association probabilities between them from selectable evidence streams, and rank plausible signal-propagating paths from a user-selected start node to a target such as Aqp2.
+Construct an auditable Bayesian graph of renal collecting-duct/principal-cell signaling participants, estimate undirected association probabilities between them from selectable evidence streams, and rank plausible signal-propagating paths from a user-selected start node to a target such as Aqp2.
 
 ## Current architecture
 
@@ -21,10 +21,16 @@ symmetric undirected probability matrix
         |
         | optional external-target row/column
         v
-ontology-constrained, product-ranked loopless paths
+ontology + OmniPath traversal constraints
+        |
+        v
+product-ranked loopless paths
+        |
+        +--> optional temporal-order audit
+        +--> merged interactive top-path network
 ```
 
-The validated seed graph contains **891 nodes: 871 proteins and 20 curated secondary messengers**. The GUI is no longer capped at 891: newly selected protein nodes are characterized against the active universe and added as needed. Raw observations for new unordered pairs are cached so later runs calculate only previously unseen pairs under the current source signature.
+The validated seed graph contains **891 nodes: 871 proteins and 20 curated secondary messengers**. The GUI is no longer capped at 891: newly selected protein nodes are characterized against the active universe and added as needed. Raw observations for new unordered pairs are cached so later runs calculate only previously unseen pairs under the current source signature. The Git repository contains code, tests, configuration, and documentation; the large `data/`, `results/`, `outputs/`, and SQLite cache trees are restored from the companion OneDrive archive and are intentionally ignored by Git.
 
 A lab-specific Aqp2/collecting-duct profile additionally enables proteome and
 RNA abundance for CCD, OMCD, and IMCD. All six new streams plus the existing
@@ -99,7 +105,7 @@ The canonical symbol field is `symbol`; duplicate symbols were removed when the 
 
 ## Edge characterization streams
 
-Bayesian edge characterization remains **undirected and symmetric**. An unordered biological pair is represented once in pair tables and mirrored across the edge-probability matrix; self-edges are excluded. Path inference now has a separate conservative ontology-direction layer. It removes a reverse traversal only when the versioned role catalog supports one unique direction; no-rule and conflicting multi-role pairs remain traversable both ways. The allowed traversal keeps the original undirected probability, so directionality does not re-estimate edge existence. Direction and activation/inhibition annotations from sources such as OmniPath remain retained for audit but are not yet used by this ontology-only first pass.
+Bayesian edge characterization remains **undirected and symmetric**. An unordered biological pair is represented once in pair tables and mirrored across the edge-probability matrix; self-edges are excluded. Path inference has a separate conservative propagation-direction layer. Versioned ontology-role rules are applied first. Mapped OmniPath mouse core source-target records can uniquely orient a pair only when ontology left it unresolved; they cannot reopen or reverse an ontology-disallowed traversal. A bidirectional OmniPath record leaves an unresolved pair traversable both ways. The allowed traversal keeps the original undirected edge probability, so directionality does not re-estimate edge existence. Activation/inhibition sign remains audit metadata and is not used to score or orient a path.
 
 Selectable streams include:
 
@@ -135,7 +141,7 @@ Validation output: `results/gui_runs/scaffold_binary_closure_validation_20260804
 
 ## Target extension and path inference
 
-`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` applies the auditable role catalog in `ontology_direction_rules.json` and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by the product of allowed traversal probabilities, implemented with additive `-log(p)` costs and a hop-limited Yen/Dijkstra search.
+`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` combines the auditable role catalog in `ontology_direction_rules.json` with mapped OmniPath directions and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by the product of allowed traversal probabilities, implemented with additive `-log(p)` costs and a hop-limited Yen/Dijkstra search.
 
 Path intermediates are controlled by ontology-derived role classes in the GUI. The sensitivity-oriented interface exposes all current role labels and lets the user select which may propagate signals. Multi-role kinase/scaffold proteins remain eligible whenever they match any selected relay role. The separate strict scaffold override excludes every scaffold-tagged intermediate and should remain optional. Start and target nodes are endpoint exemptions.
 
@@ -147,11 +153,13 @@ Temporal validation is post-path annotation, not another edge Bayes factor. It n
 
 ## Workbench entry points
 
+- Portable root launcher: `launch.py`
 - Start: `gui/run_workbench.ps1`
 - Detached start: `gui/run_workbench.ps1 -Background`
 - Detached launcher: `gui/launch_workbench.py`
 - Server: `gui/server.py`
 - Main workflow: `gui/workflow_engine.py`
+- Per-hypothesis evidence reconstruction: `gui/evidence_inspector.py`
 - Evidence metadata: `gui/evidence_registry.json`
 - Browser client: `gui/web/`
 - Bayesian primitives: `code/bayes_factors.py`
@@ -173,13 +181,81 @@ The registry drives the cards and generic factor combination. A genuinely new ra
 - Current methods: `docs/full_project_methods.md`
 - Current edge methods: `docs/edge_characterization_methods_891.md`
 - Collecting-duct node results: `results/collecting_duct_node_selection/`
-- Recent decisions: `docs/lab_notebook/2026-08-10.md`
+- Tq-aware end-to-end ablation: `code/sensitivity_analysis/analyze_end_to_end_ablation.py`
+- Recent decisions: newest dated entry under `docs/lab_notebook/`
 
 The full data/results tree is not stored in GitHub. Restore it from the dated complete-project archive described in `DATA_AND_RESULTS.md`, preserving paths.
 
+## 2026-09-09 current implementation handoff
+
+The registry currently contains **12 node streams and 8 edge streams**; the
+generic profile enables 4 node and 6 edge streams. The following capabilities
+postdate the longer August methods summary and are part of the current code:
+
+1. **Tq-aware end-to-end ablation.**
+   `code/sensitivity_analysis/analyze_end_to_end_ablation.py` tests every
+   registered stream by default, including disabled optional sources in a
+   matched add-one comparison. Mutually exclusive alternatives, such as the two
+   HPA variants, are compared in replacement contexts. Only the focal
+   Tq/reference multiplier is swept; weights, priors, cutoffs, non-focal Tq
+   values, and calibration results are held fixed. Node ablation repeats node
+   selection and rebuilds edges, directionality, and paths. Edge ablation keeps
+   the node set fixed but rebuilds downstream edge/path results. Outputs include
+   posterior changes, unique-edge cutoff flips, exact-route rank changes,
+   conditional Bernoulli KL divergence, Jaccard similarities, robustness
+   ranges, PNG summaries, checkpoints, and a methods README. Calibration is
+   deliberately not refit because that would measure optimizer compensation
+   rather than the marginal effect of removing the stream.
+
+2. **Per-hypothesis evidence inspection.**
+   A completed GUI run can inspect one node or one unordered edge. The ledger
+   shows every registered stream—including disabled ones—its support/refute/
+   neutral/disabled call, assay scope, applied BF, weight, weighted change in
+   log2 odds, normalization control, and missing-data rule. The backend
+   reconstructs the posterior from the displayed terms and reports any mismatch
+   with the stored posterior. The API is
+   `/api/jobs/<job_id>/evidence/node?symbol=...` or
+   `/api/jobs/<job_id>/evidence/edge?node_a=...&node_b=...`. At present, the
+   server must still know the completed job in its in-memory job registry; a
+   server restart preserves run files but not inspector access to that old job.
+
+3. **Ontology plus OmniPath directionality.**
+   Directionality is enabled by default for path search, and OmniPath direction
+   use has a separate enabled-by-default checkbox beneath it. Ontology has
+   precedence. OmniPath adds a disallowed reverse traversal only for an
+   ontology-unresolved, uniquely directed pair. Every run writes the propagation
+   matrix, complete edge audit, rules, class-pair catalog, and mapped OmniPath
+   direction evidence. The validated default run oriented 35,061 of 224,434
+   supported unique edges (15.6%): 33,720 by ontology only, 813 by OmniPath only,
+   and 528 by both. These are traversal constraints, not new edge probabilities
+   and not activation/inhibition calls.
+
+4. **Merged predicted-network view.**
+   Path runs write `top_path_network.json` and expose the same payload in the GUI
+   preview. The backend unions up to the top 50 ranked paths, collapses repeated
+   unordered relationships, preserves contributing path ranks, and marks an
+   arrow only when exactly one traversal is allowed. The browser shows Top 5,
+   Top 10, Top 25, or all available visualized paths in one nonlinear layout.
+   Node size/color and edge width/color encode posterior evidence magnitude on a
+   capped log-odds scale; green supports, red refutes, gray is near the 0.5
+   prior, and orange denotes a curated messenger or external target without a
+   node posterior. Selecting a node highlights its immediate neighborhood;
+   selecting an edge reports its exact posterior, direction status, and path
+   ranks. The latest local default validation merged 25 paths into 19 nodes and
+   38 relationships, 12 uniquely directed and 26 unresolved.
+
+5. **Small incremental-pair performance path.**
+   The SQLite cache now uses exact primary-key probes and exact pair-factor
+   loads when at most 50,000 dynamic unordered pairs are requested. Larger
+   expansions retain the set-based cache scan. This changes query strategy, not
+   scientific scoring or cache semantics.
+
+The dated implementation record is
+`docs/lab_notebook/2026-08-26_to_2026-09-09.md`.
+
 ## First checks in a new Codex session
 
-1. Read this file and the most recent lab-notebook entry.
+1. Read this file, `CHANGELOG.md`, and the most recent lab-notebook entry.
 2. Inspect `git status` and preserve unrelated user changes.
 3. Confirm the companion data archive has been restored before running the GUI.
 4. Run the unit tests listed in `README.md` before and after logic changes.

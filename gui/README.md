@@ -79,12 +79,28 @@ server**.
    any selected class matches. The optional scaffold override still removes
    every scaffold-tagged intermediate, even if another selected role matches.
 
-   Conservative ontology directionality is enabled by default. A uniquely
-   matched role rule removes only the reverse traversal while retaining the
-   original edge probability in the allowed direction. Pairs with no rule or
-   contradictory multi-role rules remain traversable both ways. The exact rule
-   JSON, complete class-pair catalog, edge-level audit, and partially directed
-   propagation matrix are downloadable from every directional run.
+   Conservative directionality is enabled by default and combines ontology-role
+   rules with mapped OmniPath source-target records. Established ontology
+   restrictions are applied first. OmniPath can add a unique direction only for
+   a pair ontology left unresolved; it cannot reopen or reverse an
+   ontology-disallowed traversal. The original edge probability is retained in
+   every allowed direction. Pairs with no direction evidence, and unresolved
+   pairs with bidirectional evidence, remain traversable both ways. Source
+   disagreements are recorded in the audit. OmniPath direction use has a
+   separate checkbox beneath the master directionality control.
+
+   Completed path runs also display a merged pathway map. The browser overlays
+   up to the first 50 ranked paths, collapses repeated relationships to one
+   edge, and lets the viewer switch among the top 5, 10, 25, or all available
+   visualized paths. Node radius and color intensity encode distance of the node
+   posterior from the neutral 0.5 prior; green indicates support, red indicates
+   counterevidence, and orange identifies curated or external nodes without a
+   Bayesian node posterior. Edge width and color use the same encoding for edge
+   posteriors. Magnitude is drawn on a capped log-odds scale so relationships
+   remain visually distinguishable even when several posteriors are very close
+   to one. Arrowheads appear only when the propagation matrix actually
+   disallows the reverse traversal. Selecting a mark reveals the exact
+   probability, ontology roles, direction status, and contributing path ranks.
 
 4. **Validate temporal order (optional).** Compare the current path order with
    the raw 1/2/5/15-minute dDAVP phosphoproteomic time course. Replicate mode
@@ -105,10 +121,13 @@ graph size, edge cutoff, hop limit, and endpoint connectivity.
 
 Each run writes a new immutable folder under `results/gui_runs/` containing the
 configuration, node posterior table, selected-node universe, adjacency matrix,
-supported edge list, path tables, eligibility audit, and JSON summary.
+supported edge list, path tables, eligibility audit, compact
+`top_path_network.json` union graph, and JSON summary.
 Directional runs additionally contain `propagation_adjacency_matrix.tsv`,
 `ontology_directionality_audit.tsv.gz`, `ontology_class_pair_catalog.tsv`, and
-`ontology_direction_rules.json`.
+`ontology_direction_rules.json`. Runs using OmniPath directions also contain
+`omnipath_direction_evidence.tsv.gz`, including mapped directions, record counts,
+resources, references, and consensus-direction counts.
 Temporal runs additionally contain `ranked_paths_temporal.tsv`,
 `temporal_gene_responses.tsv.gz`, `temporal_variance_trend.tsv`, and
 `temporal_validation_summary.json`. The unmodified `ranked_paths.tsv` remains
@@ -199,6 +218,28 @@ smaller supported tails visible. The plot also shows the configured output
 cutoff and reports the below-prior, exact-prior, above-cutoff, mean, and range
 statistics. The below-prior count makes negative node evidence directly visible.
 The same distribution summaries are retained in `analysis_summary.json`.
+
+## Per-hypothesis evidence inspector
+
+After a workflow completes, the result panel can reconstruct the update ledger
+for one node or one unordered edge from that exact run. Enter a gene symbol in
+the node form, or enter the two endpoint symbols in either order in the edge
+form. The inspector reports the stored prior, posterior, cutoff decision, and
+one row for every registered evidence stream. Enabled rows are classified as
+`supports` when their applied Bayes factor is above 1, `refutes` when it is
+below 1, and `neutral` when it equals 1. Disabled streams remain visible for
+auditability but contribute zero log-odds.
+
+Each row exposes the applied Bayes factor, fitted/configured weight, and its
+weighted change in log2 posterior odds. Selecting a row adds the raw statistic,
+source factor, normalization reference or Tq multiplier, missing-data scope,
+and shared-source note when available. The summary independently reconstructs
+the posterior from the displayed contributions and compares it with the value
+stored in `node_posteriors.tsv.gz` or `edge_adjacency_matrix.tsv`. This
+arithmetic check makes stale or incomplete audit data visible instead of
+silently presenting a plausible-looking decomposition. Edge inspection is
+performed for only the requested unordered pair, so it does not rerun the
+full pairwise workflow.
 
 ## Temporal validation interpretation
 

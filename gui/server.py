@@ -16,7 +16,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from workflow_engine import (
     PROJECT_ROOT,
@@ -26,6 +26,7 @@ from workflow_engine import (
     run_workflow,
 )
 from incremental_edge_cache import current_cache_counts
+from evidence_inspector import inspect_edge_evidence, inspect_node_evidence
 
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
@@ -217,10 +218,65 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[3] == "files":
                 self.send_job_file(parts[2], parts[4])
                 return
+            if len(parts) == 5 and parts[3] == "evidence":
+                self.send_evidence_inspection(parts[2], parts[4], parsed.query)
+                return
         if path.startswith("/api/"):
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
         self.send_static(path)
+
+    def send_evidence_inspection(
+        self,
+        job_id: str,
+        evidence_kind: str,
+        raw_query: str,
+    ) -> None:
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            status = job.status if job else None
+            output_directory = (
+                Path(job.output_directory)
+                if job and job.output_directory
+                else None
+            )
+        if job is None:
+            self.send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
+            return
+        if status != "complete" or output_directory is None:
+            self.send_json(
+                {"error": "Evidence can be inspected only after the run is complete"},
+                HTTPStatus.CONFLICT,
+            )
+            return
+        query = parse_qs(raw_query, keep_blank_values=True)
+
+        def one(name: str) -> str:
+            value = query.get(name, [""])[0].strip()
+            if len(value) > 160:
+                raise ValueError(f"{name} is too long")
+            return value
+
+        try:
+            if evidence_kind == "node":
+                payload = inspect_node_evidence(
+                    output_directory,
+                    one("symbol"),
+                    project_root=PROJECT_ROOT,
+                )
+            elif evidence_kind == "edge":
+                payload = inspect_edge_evidence(
+                    output_directory,
+                    one("node_a"),
+                    one("node_b"),
+                    project_root=PROJECT_ROOT,
+                )
+            else:
+                self.send_json({"error": "unknown evidence kind"}, HTTPStatus.NOT_FOUND)
+                return
+            self.send_json(payload)
+        except (ValueError, FileNotFoundError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def do_POST(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path)
