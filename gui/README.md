@@ -47,12 +47,12 @@ server**.
    cutoff (default 0.5) are retained; curated second messengers can be included
    separately. Candidates outside the validated 891-node seed are inserted
    after incremental edge characterization. Every node dataset also has its
-   own `Tq ×` control. An optional global nondetection rule gives each eligible
-   but unobserved candidate a configurable BF below 1 in every enabled node
-   stream. It is off by default; the conservative default strength is BF 0.5.
+   own `Tq ×` control. A global nondetection rule gives each eligible but
+   unobserved candidate a configurable BF below 1 in every enabled node stream.
+   It is enabled in the Version 1 profile with BF 0.5.
    Non-kinases remain out of scope and neutral in the kinase-activity stream.
    The six collecting-duct streams and two selective PKA-subunit-KO streams are
-   off in the generic default. The 891-node edge catalog remains the immutable
+   enabled in the Version 1 profile. The 891-node edge catalog remains the immutable
    seed; the revised site-centric double-KO stream expands the current default
    to 1,051 proteins, or 1,071 nodes with curated messengers.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
@@ -64,18 +64,21 @@ server**.
    assigns a configurable BF below 1 to a pair that is eligible for an enabled
    source but has no non-neutral relationship in that source. Out-of-scope
    pairs remain neutral. The option is off by default and its default penalty
-   is BF 0.5. Scaffold closure is positive-only and off by default because it
-   reuses the selected pre-closure graph rather than adding an independent
-   experiment.
+   is BF 0.5. Scaffold closure is positive-only and enabled in the Version 1
+   profile; it reuses the selected pre-closure graph rather than adding an
+   independent experiment.
 3. **Find paths.** Choose a selected start node and any mouse protein target.
    Targets outside the node universe are characterized from the same evidence
    streams and appended as an undirected row/column. Paths are ranked by the
-   product of their edge probabilities. The path panel exposes every
+   geometric mean of their edge probabilities. The raw product remains an
+   audit column, while the path panel exposes every
    ontology-derived node-role class and the GO root term(s) used to assign it.
-   Users select which roles may serve as internal signal relays. The
-   sensitivity-oriented default enables ligand, binding, generic
-   signaling-process, catalytic, regulatory, and second-messenger classes;
-   `adaptor_scaffold` is available but disabled. Multi-role nodes qualify when
+   Users select which roles may serve as internal signal relays. The Version 1
+   default enables receptor, receptor-regulator, ligand, catalytic,
+   GTPase-regulator, kinase/phosphatase-binding, and curated second-messenger
+   classes. Broad second-messenger-binding, generic signaling-process,
+   signaling-regulation, and `adaptor_scaffold` roles remain available but are
+   disabled. Multi-role nodes qualify when
    any selected class matches. The optional scaffold override still removes
    every scaffold-tagged intermediate, even if another selected role matches.
 
@@ -149,6 +152,13 @@ designated phosphoproteomic streams default to 0.1. Each value is preserved in
 `configuration.json` and reported as the `preferred` entry in the calibrated
 parameter audit. Derived scaffold closure has no Tq/reference parameter and is
 therefore not given a preferred-scale control.
+
+Completed calibrated runs also show the fitted values directly in the result
+panel. Separate node and edge tables place each stream's starting and fitted
+weight beside its starting, preferred, and fitted Tq/reference multiplier. The
+JSON, TSV parameter table, optimizer trace, and bounds remain downloadable for
+machine-readable audit, but reading those files is no longer required to see
+the fitted model.
 
 ## Per-dataset normalization
 
@@ -231,15 +241,85 @@ below 1, and `neutral` when it equals 1. Disabled streams remain visible for
 auditability but contribute zero log-odds.
 
 Each row exposes the applied Bayes factor, fitted/configured weight, and its
-weighted change in log2 posterior odds. Selecting a row adds the raw statistic,
-source factor, normalization reference or Tq multiplier, missing-data scope,
-and shared-source note when available. The summary independently reconstructs
+weighted change in log2 posterior odds. It also reports where that applied BF
+falls in the stream's full run-specific distribution. Node distributions cover
+all modeled protein candidates; edge distributions cover every unique
+undirected graph pair, including neutral and negative-evidence assignments.
+Selecting a row opens a log2(BF) histogram centered on BF=1, marks the selected
+hypothesis, and reports its empirical percentile or a compact histogram-based
+estimate when the full edge vector was intentionally not serialized. Selecting
+a node or edge in the merged network automatically loads the same ledger;
+selecting a ranked path highlights its route and initially loads the path's
+lowest-probability edge. Selecting a row also adds the raw statistic, source
+factor, normalization reference or Tq multiplier, missing-data scope, and
+shared-source note when available. The summary independently reconstructs
 the posterior from the displayed contributions and compares it with the value
 stored in `node_posteriors.tsv.gz` or `edge_adjacency_matrix.tsv`. This
 arithmetic check makes stale or incomplete audit data visible instead of
 silently presenting a plausible-looking decomposition. Edge inspection is
 performed for only the requested unordered pair, so it does not rerun the
 full pairwise workflow.
+
+The merged network uses fixed node sizes and fixed edge widths. Scored nodes
+and edges use separate monotone scales spanning the posterior probabilities
+actually present for that mark type in the currently visible Top-N path graph.
+The node scale is blue and the edge scale is green; within each scale, the
+minimum is lightest and the maximum is darkest. Two vertical color bars beside
+the graph report the exact minimum, midpoint, and maximum, and both ranges are
+recalculated when Top-N changes. Selecting a mark reports its exact probability.
+Orange still identifies curated messengers or external endpoints without a
+Bayesian node posterior. This graph color is the combined posterior, whereas
+the inspector's `Weight` column is the distinct per-stream exponent used in
+`BF^weight` during updating.
+
+## Complete-session HTML export
+
+Every completed run exposes **Save entire session (.html)**. This is not the
+browser's generic “save page” feature. The backend generates a single
+self-contained scientific report with inline CSS, inline JavaScript, and no
+external network dependencies. It contains:
+
+- job identity and creation/start/finish timestamps;
+- the exact submitted configuration and evidence-registry snapshot;
+- complete backend summary and GUI preview payloads;
+- node and edge posterior histograms with prior and cutoff markers;
+- a static merged top-path network and the complete GUI-ranked path table;
+- fitted calibration parameters when calibration was enabled;
+- an offline evidence interpreter with the same prior, posterior, decision,
+  reconciliation check, per-stream support/refute/neutral call, observed/scope
+  status, applied BF, model weight, change in log2 odds, BF percentile,
+  explanatory note, and BF-distribution plot used by the live GUI;
+- automatically frozen interpretation ledgers for every inspectable node and
+  edge in the top-path network visible when the export button was pressed,
+  plus every additional node/edge ledger opened manually during that browser
+  session; and
+- a recoverable vault containing every file in that run directory.
+
+The network in the saved report is interactive: selecting a protein node or an
+edge opens its frozen ledger without contacting the Python server.  The report
+also renders the submitted evidence-stream settings as readable node- and
+edge-stage tables (enabled state, weight, Tq/reference multiplier, preferred
+Tq anchor, and stream-specific parameters), while retaining the exact JSON for
+machine reproducibility.  The rank limit used by the live network at export is
+preserved, so every selectable mark in the archived graph has a matching
+offline interpretation.  Nodes with no Bayesian node posterior (curated small
+molecules or external endpoints) remain visibly unscored, as in the GUI.
+
+Large uncompressed text artifacts, especially square adjacency matrices, are
+gzip-compressed inside the HTML before base64 encoding. Files that are already
+compressed are embedded unchanged. The report's Download buttons restore the
+original bytes in current Edge, Chrome, Firefox, and Safari releases. Each vault
+row records original size, embedded size, encoding, and SHA-256. The virtual
+`session_snapshot.json` artifact contains the session metadata, client view
+state, manual inspection history, automatically materialized interpretation
+catalog and scope, and file manifest in machine-readable form.
+
+The export endpoint is
+`POST /api/jobs/<job_id>/session-report`. It accepts up to 100 inspected
+hypothesis payloads plus compact client view state. Report generation reads the
+already-written run directory and does not rerun node selection, edge
+characterization, directionality, or path finding. Its implementation is in
+`session_report.py` and its regression test is in `test_session_report.py`.
 
 ## Temporal validation interpretation
 
@@ -290,7 +370,9 @@ the standard factor table.
   selectable but share a dependence-group warning because they come from the
   same TMT experiment.
 - HPA alternatives are mutually exclusive.
-- Path products are ranking scores, not calibrated whole-path probabilities.
+- Geometric-mean path scores summarize typical edge strength; they are not
+  calibrated whole-path probabilities. Raw products remain secondary audit
+  values.
 - Every run preserves its exact configuration and complete audit tables.
 - Scaffold closure is labeled as dependent proximity/co-complex evidence, not
   proof of a direct binary PPI, and is disabled by default.

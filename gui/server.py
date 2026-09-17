@@ -27,9 +27,122 @@ from workflow_engine import (
 )
 from incremental_edge_cache import current_cache_counts
 from evidence_inspector import inspect_edge_evidence, inspect_node_evidence
+from session_report import build_session_report
 
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
+MAX_AUTOMATIC_EXPORT_INTERPRETATIONS = 1000
+
+
+def utc_timestamp() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
+def _evidence_payload_key(payload: dict[str, Any]) -> str:
+    """Return the same stable hypothesis key used by the browser inspector."""
+
+    if payload.get("kind") == "node":
+        return f"node:{str(payload.get('symbol', '')).casefold()}"
+    left, right = sorted(
+        (str(payload.get("node_a", "")), str(payload.get("node_b", ""))),
+        key=str.casefold,
+    )
+    return f"edge:{left.casefold()}|{right.casefold()}"
+
+
+def _materialize_export_interpretations(
+    job_payload: dict[str, Any],
+    output_directory: Path,
+    history: list[dict[str, Any]],
+    client_state: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+    """Freeze evidence ledgers for every node/edge visible in the saved graph.
+
+    A live GUI can ask Python to interpret any hypothesis.  A standalone HTML
+    cannot.  The export therefore snapshots all ledgers in the currently
+    visible top-path network, in addition to hypotheses the scientist already
+    opened.  This gives every clickable mark in the archived network the same
+    evidence-transparency behavior it had in the live application.
+    """
+
+    catalog: dict[str, dict[str, Any]] = {}
+    for item in history:
+        if item.get("kind") in {"node", "edge"}:
+            catalog[_evidence_payload_key(item)] = item
+
+    preview = job_payload.get("preview") or {}
+    network = preview.get("path_network") or {}
+    available_limit = int(network.get("visualized_path_count") or 0)
+    requested_limit = int(
+        client_state.get("visible_path_rank_limit") or min(50, available_limit)
+    )
+    visible_limit = min(max(requested_limit, 0), available_limit)
+
+    def visible(item: dict[str, Any]) -> bool:
+        ranks = [int(value) for value in item.get("path_ranks", [])]
+        return not ranks or any(rank <= visible_limit for rank in ranks)
+
+    candidates: list[tuple[str, tuple[str, ...]]] = []
+    for node in network.get("nodes", []):
+        if visible(node) and node.get("posterior_available"):
+            candidates.append(("node", (str(node.get("id", "")),)))
+    for edge in network.get("edges", []):
+        if visible(edge):
+            candidates.append(
+                (
+                    "edge",
+                    (str(edge.get("node_a", "")), str(edge.get("node_b", ""))),
+                )
+            )
+
+    errors: list[str] = []
+    automatic_count = 0
+    for kind, symbols in candidates:
+        stub = (
+            {"kind": "node", "symbol": symbols[0]}
+            if kind == "node"
+            else {"kind": "edge", "node_a": symbols[0], "node_b": symbols[1]}
+        )
+        key = _evidence_payload_key(stub)
+        if key in catalog:
+            continue
+        if automatic_count >= MAX_AUTOMATIC_EXPORT_INTERPRETATIONS:
+            errors.append(
+                "The automatic offline interpretation catalog reached its "
+                f"safety limit of {MAX_AUTOMATIC_EXPORT_INTERPRETATIONS} hypotheses."
+            )
+            break
+        try:
+            if kind == "node":
+                result = inspect_node_evidence(
+                    output_directory,
+                    symbols[0],
+                    project_root=PROJECT_ROOT,
+                )
+            else:
+                result = inspect_edge_evidence(
+                    output_directory,
+                    symbols[0],
+                    symbols[1],
+                    project_root=PROJECT_ROOT,
+                )
+            result["export_catalog_source"] = "visible_top_path_network"
+            catalog[key] = result
+            automatic_count += 1
+        except Exception as exc:  # noqa: BLE001 - one ledger must not abort the archive
+            errors.append(f"{kind} {' — '.join(symbols)}: {exc}")
+
+    scope = {
+        "visible_path_rank_limit": visible_limit,
+        "manual_history_count": len(history),
+        "automatic_network_ledger_count": automatic_count,
+        "catalog_hypothesis_count": len(catalog),
+        "coverage": (
+            "Every inspectable node and edge in the network view saved at export "
+            "time, plus every hypothesis manually inspected in this browser session."
+        ),
+    }
+    return list(catalog.values()), scope, errors
 
 
 @dataclass
@@ -43,6 +156,9 @@ class Job:
     summary: dict[str, Any] | None = None
     output_directory: str | None = None
     error: str | None = None
+    created_at: str = field(default_factory=utc_timestamp)
+    started_at: str | None = None
+    finished_at: str | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
@@ -63,6 +179,9 @@ def public_job(job: Job) -> dict[str, Any]:
         "files": job.preview.get("files", []) if job.preview else [],
         "error": job.error,
         "cancel_requested": job.cancel_event.is_set(),
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
     }
 
 
@@ -95,6 +214,7 @@ def execute_job(job_id: str) -> None:
             current = JOBS[job_id]
             current.status = "running"
             current.message = "Starting"
+            current.started_at = utc_timestamp()
         result = run_workflow(
             job.configuration,
             project_root=PROJECT_ROOT,
@@ -111,12 +231,14 @@ def execute_job(job_id: str) -> None:
             job.preview = result.preview
             job.summary = result.summary
             job.output_directory = str(result.output_directory)
+            job.finished_at = utc_timestamp()
     except WorkflowCancelled:
         with JOBS_LOCK:
             job = JOBS[job_id]
             job.status = "cancelled"
             job.message = "Cancelled"
             job.error = None
+            job.finished_at = utc_timestamp()
     except Exception as exc:  # noqa: BLE001 - boundary must report scientific failures
         traceback.print_exc()
         with JOBS_LOCK:
@@ -124,6 +246,7 @@ def execute_job(job_id: str) -> None:
             job.status = "failed"
             job.message = "Analysis failed"
             job.error = str(exc)
+            job.finished_at = utc_timestamp()
     finally:
         if lock_acquired:
             ANALYSIS_LOCK.release()
@@ -281,6 +404,17 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path)
         parts = [part for part in path.split("/") if part]
+        if (
+            len(parts) == 4
+            and parts[:2] == ["api", "jobs"]
+            and parts[3] == "session-report"
+        ):
+            try:
+                payload = self.read_json()
+                self.create_session_report(parts[2], payload)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
             job_id = parts[2]
             with JOBS_LOCK:
@@ -341,6 +475,79 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
+    def create_session_report(self, job_id: str, payload: dict[str, Any]) -> None:
+        """Create one portable HTML report without mutating scientific results."""
+
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            if job is None:
+                job_payload = None
+                configuration = None
+                output_directory = None
+            else:
+                # JSON round-tripping makes a stable snapshot of nested mutable
+                # dictionaries before report generation begins on this request
+                # thread.
+                job_payload = json.loads(json.dumps(public_job(job), default=str))
+                configuration = json.loads(json.dumps(job.configuration, default=str))
+                output_directory = (
+                    Path(job.output_directory) if job.output_directory else None
+                )
+        if job_payload is None:
+            self.send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
+            return
+        if job_payload["status"] != "complete" or output_directory is None:
+            self.send_json(
+                {"error": "A complete session can be exported only after the run finishes"},
+                HTTPStatus.CONFLICT,
+            )
+            return
+
+        inspections = payload.get("inspection_history", [])
+        client_state = payload.get("client_state", {})
+        if not isinstance(inspections, list) or not all(
+            isinstance(item, dict) for item in inspections
+        ):
+            raise ValueError("inspection_history must be a list of objects")
+        if len(inspections) > 100:
+            raise ValueError("inspection_history may contain at most 100 hypotheses")
+        if not isinstance(client_state, dict):
+            raise ValueError("client_state must be an object")
+
+        interpretation_catalog, interpretation_scope, interpretation_errors = (
+            _materialize_export_interpretations(
+                job_payload,
+                output_directory,
+                inspections,
+                client_state,
+            )
+        )
+
+        session = {
+            "schema_version": 2,
+            "application": "Graphical Bayesian Inference Version 1",
+            "job": job_payload,
+            "configuration": configuration,
+            "registry": load_registry(PROJECT_ROOT),
+            "client_state": client_state,
+            "inspection_history": inspections,
+            "interpretation_catalog": interpretation_catalog,
+            "interpretation_scope": interpretation_scope,
+            "interpretation_errors": interpretation_errors,
+        }
+        try:
+            report = build_session_report(session, output_directory)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.send_json(
+                {"error": f"Unable to create the session report: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        report["url"] = (
+            f"/api/jobs/{job_id}/files/{report['file']}"
+        )
+        self.send_json(report, HTTPStatus.CREATED)
+
     def send_job_file(self, job_id: str, requested_name: str) -> None:
         safe_requested = Path(requested_name).name
         if safe_requested != requested_name:
@@ -380,8 +587,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", f"{mime_type}; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 

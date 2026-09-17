@@ -21,12 +21,19 @@ class EvidenceInspectorTests(unittest.TestCase):
 
     def test_node_ledger_reconciles_exact_recorded_contributions(self) -> None:
         config = default_configuration(self.registry)
+        # The Version 1 profile enables every node stream. Keep one stream
+        # disabled explicitly so this ledger test continues to exercise both
+        # enabled and disabled rendering states.
+        disabled = next(reversed(config["node_streams"]))
+        config["node_streams"][disabled]["enabled"] = False
         enabled = [
             stream_id
             for stream_id, state in config["node_streams"].items()
             if state["enabled"]
         ]
-        assigned = dict(zip(enabled, [2.0, 0.5, 1.0, 1.0]))
+        assigned = {stream_id: 1.0 for stream_id in enabled}
+        assigned[enabled[0]] = 2.0
+        assigned[enabled[1]] = 0.5
         row: dict[str, object] = {
             "gene_symbol": "TestNode",
             "node_name": "Test node",
@@ -65,10 +72,11 @@ class EvidenceInspectorTests(unittest.TestCase):
         statuses = {item["stream_id"]: item["status"] for item in payload["streams"]}
         self.assertEqual(statuses[enabled[0]], "supports")
         self.assertEqual(statuses[enabled[1]], "refutes")
-        disabled = next(
-            stream_id
-            for stream_id, state in config["node_streams"].items()
-            if not state["enabled"]
+        enabled_rows = [item for item in payload["streams"] if item["enabled"]]
+        self.assertTrue(all(item["factor_distribution"] for item in enabled_rows))
+        self.assertTrue(all(item["distribution_position"]["exact"] for item in enabled_rows))
+        self.assertTrue(
+            all(item["factor_distribution"]["hypothesis_count"] == 1 for item in enabled_rows)
         )
         self.assertEqual(statuses[disabled], "disabled")
 
@@ -85,6 +93,9 @@ class EvidenceInspectorTests(unittest.TestCase):
             patch.object(Path, "is_file", return_value=True),
             patch.object(evidence_inspector, "_read_configuration", return_value=config),
             patch.object(evidence_inspector, "load_registry", return_value=self.registry),
+            patch.object(
+                evidence_inspector, "_stream_distribution_catalog", return_value={}
+            ),
             patch.object(
                 evidence_inspector,
                 "_matrix_symbols_and_probability",
@@ -113,11 +124,15 @@ class EvidenceInspectorTests(unittest.TestCase):
             "node-evidence-form",
             "edge-evidence-form",
             "evidence-ledger-body",
+            "evidence-stream-distribution-chart",
+            "evidence-stream-distribution-summary",
         ):
             self.assertIn(f'id="{control}"', html)
         self.assertIn("async function inspectEvidence(kind)", javascript)
         self.assertIn("weighted_log2_odds_contribution", javascript)
         self.assertIn("reconciliation_absolute_difference", javascript)
+        self.assertIn("factor_distribution", javascript)
+        self.assertIn("distribution_position", javascript)
 
 
 if __name__ == "__main__":

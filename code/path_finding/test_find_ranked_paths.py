@@ -28,7 +28,8 @@ def brute_force_paths(
     def visit(path: tuple[int, ...], product: float) -> None:
         node = path[-1]
         if node == target:
-            found.append((product, path))
+            hops = len(path) - 1
+            found.append((product ** (1.0 / hops), path))
             return
         if len(path) - 1 >= max_hops:
             return
@@ -58,7 +59,7 @@ class RankedPathTests(unittest.TestCase):
             values[left, right] = values[right, left] = probability
         self.matrix = pd.DataFrame(values, index=symbols, columns=symbols)
 
-    def test_rank_order_matches_exhaustive_enumeration(self) -> None:
+    def test_geometric_mean_rank_matches_exhaustive_enumeration(self) -> None:
         adjacency, _ = build_adjacency(self.matrix, 0.5)
         expected = brute_force_paths(adjacency, 0, 4, max_hops=4)
         observed = k_shortest_simple_paths(
@@ -71,9 +72,27 @@ class RankedPathTests(unittest.TestCase):
         )
         self.assertEqual([item.nodes for item in observed], [item[1] for item in expected])
         np.testing.assert_allclose(
-            [math.exp(-item.cost) for item in observed],
+            [math.exp(-item.cost / (len(item.nodes) - 1)) for item in observed],
             [item[0] for item in expected],
         )
+
+    def test_geometric_mean_can_prefer_a_longer_stronger_path(self) -> None:
+        values = np.zeros((3, 3), dtype=float)
+        values[0, 2] = values[2, 0] = 0.85
+        values[0, 1] = values[1, 0] = 0.90
+        values[1, 2] = values[2, 1] = 0.90
+        matrix = pd.DataFrame(values, index=["A", "B", "T"], columns=["A", "B", "T"])
+        adjacency, _ = build_adjacency(matrix, 0.5)
+        observed = k_shortest_simple_paths(
+            adjacency,
+            values,
+            0,
+            2,
+            top_k=2,
+            max_hops=2,
+        )
+        self.assertEqual([item.nodes for item in observed], [(0, 1, 2), (0, 2)])
+        self.assertLess(0.90 * 0.90, 0.85)
 
     def test_cutoff_is_strict(self) -> None:
         adjacency, edge_count = build_adjacency(self.matrix, 0.9)
@@ -133,8 +152,8 @@ class RankedPathTests(unittest.TestCase):
         self.assertFalse(bool(audit.loc["Scaffold", "allowed_as_intermediate"]))
         self.assertTrue(bool(audit.loc["Mapk", "allowed_as_intermediate"]))
         self.assertTrue(bool(audit.loc["Ligand", "allowed_as_intermediate"]))
-        self.assertTrue(bool(audit.loc["Binder", "allowed_as_intermediate"]))
-        self.assertTrue(bool(audit.loc["Generic", "allowed_as_intermediate"]))
+        self.assertFalse(bool(audit.loc["Binder", "allowed_as_intermediate"]))
+        self.assertFalse(bool(audit.loc["Generic", "allowed_as_intermediate"]))
         self.assertTrue(bool(audit.loc["SM_CAMP", "allowed_as_intermediate"]))
         self.assertFalse(bool(audit.loc["Target", "allowed_as_intermediate"]))
         self.assertTrue(bool(audit.loc["Target", "permitted_in_search"]))

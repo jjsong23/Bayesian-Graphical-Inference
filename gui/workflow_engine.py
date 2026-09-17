@@ -773,6 +773,85 @@ def probability_distribution_summary(
     }
 
 
+def evidence_factor_distribution_summary(
+    values: np.ndarray | pd.Series,
+    *,
+    distribution_scope: str,
+    bin_count: int = 41,
+) -> dict[str, Any]:
+    """Summarize applied Bayes factors on a neutral-centered log2 scale.
+
+    Evidence streams use incompatible raw units, whereas every integrated
+    stream ultimately contributes a positive Bayes factor. Summarizing the
+    applied factors therefore gives the GUI a common, auditable distribution:
+    BF < 1 refutes, BF = 1 is neutral, and BF > 1 supports. Quantiles allow an
+    inspected hypothesis to be placed approximately without serializing a
+    full edge-sized vector into the browser payload.
+    """
+    factors = np.asarray(values, dtype=float).reshape(-1)
+    factors = factors[np.isfinite(factors)]
+    if bin_count < 1:
+        raise ValueError("evidence-factor histogram bin count must be positive")
+    if np.any(factors <= 0):
+        raise ValueError("evidence-factor distribution contains non-positive values")
+    if not len(factors):
+        return {
+            "scale": "log2_bayes_factor",
+            "distribution_scope": distribution_scope,
+            "hypothesis_count": 0,
+            "minimum": None,
+            "median": None,
+            "mean": None,
+            "maximum": None,
+            "refuting_count": 0,
+            "neutral_count": 0,
+            "supporting_count": 0,
+            "bin_edges_log2": [],
+            "bin_counts": [],
+            "quantile_percentages": [],
+            "quantile_bayes_factors": [],
+            "value_counts": [],
+        }
+
+    log2_factors = np.log2(factors)
+    span = max(float(np.max(np.abs(log2_factors))), 0.25)
+    edges = np.linspace(-span, span, bin_count + 1)
+    counts, edges = np.histogram(log2_factors, bins=edges)
+    quantile_percentages = np.linspace(0.0, 100.0, 101)
+    quantile_values = np.quantile(factors, quantile_percentages / 100.0)
+    neutral = np.isclose(factors, 1.0, rtol=0.0, atol=1e-12)
+    sample_size = min(len(factors), 8192)
+    sample_indices = np.linspace(0, len(factors) - 1, sample_size, dtype=int)
+    sampled_unique = np.unique(factors[sample_indices])
+    if len(sampled_unique) <= 64:
+        unique_values, unique_counts = np.unique(factors, return_counts=True)
+    else:
+        unique_values = np.asarray([], dtype=float)
+        unique_counts = np.asarray([], dtype=int)
+    compact_value_counts = [
+        {"bayes_factor": float(value), "count": int(count)}
+        for value, count in zip(unique_values, unique_counts, strict=True)
+    ] if len(unique_values) <= 64 else []
+    return {
+        "scale": "log2_bayes_factor",
+        "distribution_scope": distribution_scope,
+        "hypothesis_count": int(len(factors)),
+        "minimum": float(factors.min()),
+        "median": float(np.median(factors)),
+        "mean": float(factors.mean()),
+        "maximum": float(factors.max()),
+        "refuting_count": int((factors < 1.0 - 1e-12).sum()),
+        "neutral_count": int(neutral.sum()),
+        "supporting_count": int((factors > 1.0 + 1e-12).sum()),
+        "bin_edges_log2": [float(value) for value in edges],
+        "bin_counts": [int(value) for value in counts],
+        "quantile_percentages": [float(value) for value in quantile_percentages],
+        "quantile_bayes_factors": [float(value) for value in quantile_values],
+        "value_counts": compact_value_counts,
+        "binning": f"{bin_count} equal-width bins on a symmetric log2(BF) domain",
+    }
+
+
 def complement_minimum_likelihood(
     values: np.ndarray | pd.Series,
     thresholds: np.ndarray | pd.Series | float,
@@ -1243,6 +1322,10 @@ def select_nodes(
                     definition
                 ),
                 "source_neutral_value": neutral_value,
+                "factor_distribution": evidence_factor_distribution_summary(
+                    bayes_factors,
+                    distribution_scope="all modeled protein candidates",
+                ),
             }
         )
     if stream_audit_columns:
@@ -2462,6 +2545,7 @@ def scaffold_triadic_closure_factors(
     state: dict[str, Any],
     *,
     graph_metadata: pd.DataFrame | None = None,
+    check_cancel: Callable[[], None] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Assign one fixed factor to every protein pair sharing a strong scaffold.
 
@@ -2473,6 +2557,8 @@ def scaffold_triadic_closure_factors(
     scaffold degree and the number of shared scaffolds do not change the factor.
     The operation is one pass, so inferred closure edges never become anchors.
     """
+    if check_cancel is not None:
+        check_cancel()
     symbols = list(graph_symbols)
     metadata = _metadata_for_graph(project, symbols, graph_metadata)
     node_types = metadata.get("node_type", pd.Series("", index=metadata.index))
@@ -2541,6 +2627,8 @@ def scaffold_triadic_closure_factors(
     if not len(usable):
         return pd.DataFrame(columns=columns), empty_summary
 
+    if check_cancel is not None:
+        check_cancel()
     usable_anchors = anchors[:, usable].astype(np.uint16)
     support_count = usable_anchors @ usable_anchors.T
     n_proteins = len(protein_indices)
@@ -2551,9 +2639,15 @@ def scaffold_triadic_closure_factors(
     protein_symbols = np.asarray(symbols, dtype=object)[protein_indices]
     scaffold_symbols = np.asarray(symbols, dtype=object)[scaffold_indices]
     supporting_lists: list[str] = []
-    for left, right in zip(rows_i, rows_j, strict=True):
+    for pair_index, (left, right) in enumerate(
+        zip(rows_i, rows_j, strict=True)
+    ):
+        if check_cancel is not None and pair_index % 2048 == 0:
+            check_cancel()
         support = np.flatnonzero(anchors[left] & anchors[right])
         supporting_lists.append(";".join(scaffold_symbols[support].tolist()))
+    if check_cancel is not None:
+        check_cancel()
     audit = pd.DataFrame(
         {
             "node_a": protein_symbols[rows_i],
@@ -2598,7 +2692,10 @@ def combine_edge_factors(
     graph_metadata: pd.DataFrame | None = None,
     audit_collector: dict[str, pd.DataFrame] | None = None,
     contribution_collector: dict[str, np.ndarray] | None = None,
+    check_cancel: Callable[[], None] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if check_cancel is not None:
+        check_cancel()
     prior = config["edge_integration"]["prior_probability"]
     penalize_unsupported = config["edge_integration"]["penalize_unsupported"]
     unsupported_factor = config["edge_integration"]["unsupported_bayes_factor"]
@@ -2610,6 +2707,7 @@ def combine_edge_factors(
     )
     base_log_odds = math.log(prior / (1.0 - prior))
     log_odds = np.full((len(graph_symbols), len(graph_symbols)), base_log_odds, dtype=float)
+    unique_pair_indices = np.triu_indices(len(graph_symbols), 1)
     index = {symbol: position for position, symbol in enumerate(graph_symbols)}
     seed_universe = pd.read_csv(
         project / UNIVERSE_RELATIVE, sep="\t", dtype=str
@@ -2631,6 +2729,8 @@ def combine_edge_factors(
     total_penalty_applications = 0
     derived_streams: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for stream_id, state in config["edge_streams"].items():
+        if check_cancel is not None:
+            check_cancel()
         if not state["enabled"] or state["weight"] <= 0:
             continue
         definition = stream_defs[stream_id]
@@ -2650,6 +2750,8 @@ def combine_edge_factors(
             continuous_negative=stream_continuous_negative,
             minimum_bayes_factor=continuous_floor,
         )
+        if check_cancel is not None:
+            check_cancel()
         tables = [seed_table]
         if has_incremental_nodes:
             incremental_loader = (
@@ -2695,6 +2797,8 @@ def combine_edge_factors(
             graph_symbols,
             graph_metadata=graph_metadata,
         )
+        if check_cancel is not None:
+            check_cancel()
         eligible_upper = np.triu(eligible_pairs, 1)
         unsupported_upper = eligible_upper & ~observed_pairs
         unsupported_left, unsupported_right = np.where(unsupported_upper)
@@ -2741,11 +2845,23 @@ def combine_edge_factors(
                     negative_fill_factor if penalties_applied else None
                 ),
                 "negative_evidence_policy": definition.get("negative_evidence"),
+                "factor_distribution": evidence_factor_distribution_summary(
+                    np.exp(
+                        np.clip(
+                            stream_log_odds[unique_pair_indices] / float(state["weight"]),
+                            -700.0,
+                            700.0,
+                        )
+                    ),
+                    distribution_scope="all unique undirected graph pairs",
+                ),
             }
         )
     preclosure_probabilities = stable_expit(log_odds)
     np.fill_diagonal(preclosure_probabilities, 0.0)
     for stream_id, definition, state in derived_streams:
+        if check_cancel is not None:
+            check_cancel()
         handler = definition["normalization"]["handler"]
         if handler != "scaffold_triadic_closure":
             raise ValueError(f"unsupported derived edge handler: {handler}")
@@ -2755,25 +2871,28 @@ def combine_edge_factors(
             preclosure_probabilities,
             state,
             graph_metadata=graph_metadata,
+            check_cancel=check_cancel,
         )
+        if check_cancel is not None:
+            check_cancel()
         left_index = table["node_a"].map(index).astype(int).to_numpy()
         right_index = table["node_b"].map(index).astype(int).to_numpy()
         values = table["bayes_factor"].to_numpy(float)
         weighted_logs = float(state["weight"]) * np.log(values)
         np.add.at(log_odds, (left_index, right_index), weighted_logs)
         np.add.at(log_odds, (right_index, left_index), weighted_logs)
+        derived_log_odds = np.zeros_like(log_odds)
+        np.add.at(
+            derived_log_odds,
+            (left_index, right_index),
+            weighted_logs,
+        )
+        np.add.at(
+            derived_log_odds,
+            (right_index, left_index),
+            weighted_logs,
+        )
         if contribution_collector is not None:
-            derived_log_odds = np.zeros_like(log_odds)
-            np.add.at(
-                derived_log_odds,
-                (left_index, right_index),
-                weighted_logs,
-            )
-            np.add.at(
-                derived_log_odds,
-                (right_index, left_index),
-                weighted_logs,
-            )
             contribution_collector[stream_id] = derived_log_odds
         if len(table):
             pair_pre = np.clip(
@@ -2807,13 +2926,26 @@ def combine_edge_factors(
                 "derived": True,
                 "parameters": dict(state.get("parameters", {})),
                 "derivation_summary": closure_summary,
+                "factor_distribution": evidence_factor_distribution_summary(
+                    np.exp(
+                        np.clip(
+                            derived_log_odds[unique_pair_indices]
+                            / float(state["weight"]),
+                            -700.0,
+                            700.0,
+                        )
+                    ),
+                    distribution_scope="all unique undirected graph pairs",
+                ),
             }
         )
+    if check_cancel is not None:
+        check_cancel()
     probabilities = stable_expit(log_odds)
     np.fill_diagonal(probabilities, 0.0)
     matrix = pd.DataFrame(probabilities, index=graph_symbols, columns=graph_symbols)
     matrix.index.name = "symbol"
-    upper = probabilities[np.triu_indices(len(graph_symbols), 1)]
+    upper = probabilities[unique_pair_indices]
     cutoff = config["edge_integration"]["output_probability_cutoff"]
     summary = {
         "edge_prior_probability": prior,
@@ -3741,6 +3873,7 @@ def run_workflow(
             graph_symbols,
             graph_metadata=graph_metadata,
             audit_collector=derived_audits,
+            check_cancel=check_cancel,
         )
         if "scaffold_triadic_closure" in derived_audits:
             warnings.append(
@@ -4171,6 +4304,7 @@ def run_workflow(
                 [
                     "rank",
                     "hop_count",
+                    "geometric_mean_edge_probability",
                     "path_probability_product",
                     "path_symbols",
                     *(

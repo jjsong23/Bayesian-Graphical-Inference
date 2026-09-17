@@ -11,12 +11,14 @@ import pandas as pd
 from workflow_engine import (
     DEFAULT_SIGNAL_RELAY_CLASSES,
     PROJECT_ROOT,
+    WorkflowCancelled,
     _calibration_parameter_specs,
     append_external_target,
     build_path_network_payload,
     combine_edge_factors,
     default_configuration,
     edge_stream_factor_table,
+    evidence_factor_distribution_summary,
     load_registry,
     node_stream_values,
     normalize_configuration,
@@ -57,18 +59,45 @@ class WorkflowEngineTests(unittest.TestCase):
                 "pc_transcript",
                 "kinase_activity",
                 "phosphoprotein_response",
+                "pka_ca_ko_phosphoprotein_response",
+                "pka_cb_ko_phosphoprotein_response",
+                "collecting_duct_proteome_ccd",
+                "collecting_duct_proteome_omcd",
+                "collecting_duct_proteome_imcd",
+                "collecting_duct_rna_ccd",
+                "collecting_duct_rna_omcd",
+                "collecting_duct_rna_imcd",
             },
         )
-        for group in ("node_streams", "edge_streams"):
-            definitions = {item["id"]: item for item in self.registry[group]}
-            for stream_id, state in config[group].items():
-                has_control = definitions[stream_id]["normalization"].get(
-                    "user_control", True
-                )
-                if has_control:
-                    self.assertEqual(state["tq_multiplier"], 1.0)
-                else:
-                    self.assertNotIn("tq_multiplier", state)
+        self.assertEqual(
+            {
+                stream_id: state["tq_multiplier"]
+                for stream_id, state in config["node_streams"].items()
+            },
+            {
+                "protein_abundance": 0.1,
+                "pc_transcript": 0.6,
+                "kinase_activity": 0.1,
+                "phosphoprotein_response": 0.1,
+                "pka_ca_ko_phosphoprotein_response": 0.1,
+                "pka_cb_ko_phosphoprotein_response": 0.05,
+                "collecting_duct_proteome_ccd": 0.1,
+                "collecting_duct_proteome_omcd": 0.1,
+                "collecting_duct_proteome_imcd": 0.1,
+                "collecting_duct_rna_ccd": 0.5,
+                "collecting_duct_rna_omcd": 0.5,
+                "collecting_duct_rna_imcd": 0.5,
+            },
+        )
+        for stream_id, state in config["edge_streams"].items():
+            definition = next(
+                item for item in self.registry["edge_streams"]
+                if item["id"] == stream_id
+            )
+            if definition["normalization"].get("user_control", True):
+                self.assertEqual(state["tq_multiplier"], 1.0)
+            else:
+                self.assertNotIn("tq_multiplier", state)
         self.assertEqual(
             enabled_edges,
             {
@@ -78,6 +107,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "hpa_primary",
                 "omnipath_core",
                 "stitch_secondary_messenger",
+                "scaffold_triadic_closure",
             },
         )
         self.assertEqual(
@@ -124,7 +154,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "multistart_count": 2,
             },
         )
-        self.assertFalse(config["node_integration"]["penalize_unobserved"])
+        self.assertTrue(config["node_integration"]["penalize_unobserved"])
         self.assertEqual(
             config["node_integration"]["unobserved_bayes_factor"], 0.5
         )
@@ -134,6 +164,10 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(
             config["node_integration"]["continuous_bayes_factor_floor"], 1e-6
         )
+        self.assertEqual(config["path"]["start"], "Aqp2")
+        self.assertEqual(config["path"]["target"], "Prkaca")
+        self.assertEqual(config["path"]["top_k"], 100)
+        self.assertEqual(config["path"]["max_hops"], 6)
 
     def test_exact_half_priors_are_valid_html_values(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -158,6 +192,30 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn('job.status === "cancelled"', javascript)
         self.assertIn('/api/jobs/active', javascript)
 
+    def test_edge_integration_honors_cancellation_checkpoints(self) -> None:
+        supplied = default_configuration(self.registry)
+        for state in supplied["edge_streams"].values():
+            state["enabled"] = False
+        supplied["edge_streams"]["stitch_secondary_messenger"]["enabled"] = True
+        config = normalize_configuration(supplied, self.registry)
+        calls = 0
+
+        def cancel_after_entry() -> None:
+            nonlocal calls
+            calls += 1
+            if calls >= 2:
+                raise WorkflowCancelled("test cancellation")
+
+        with self.assertRaises(WorkflowCancelled):
+            combine_edge_factors(
+                PROJECT_ROOT,
+                self.registry,
+                config,
+                ["Prkaca", "Aqp2"],
+                check_cancel=cancel_after_entry,
+            )
+        self.assertGreaterEqual(calls, 2)
+
     def test_gui_exposes_merged_interactive_path_network(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
         javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
@@ -172,8 +230,52 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("function renderPathNetwork(network)", javascript)
         self.assertIn("function layoutPathNetwork", javascript)
         self.assertIn("directionality === \"uniquely_directed\"", javascript)
-        self.assertIn("Math.log1p(absoluteLogOdds)", javascript)
+        self.assertIn("state.networkRankLimit = Math.min(50, available)", javascript)
+        self.assertIn("geometric_mean_edge_probability", javascript)
+        self.assertIn("function observedProbabilityScale", javascript)
+        self.assertIn("function updatePathNetworkColorScale", javascript)
+        self.assertIn("Nodes and edges use separate monotone posterior scales", html)
+        for kind in ("node", "edge"):
+            self.assertIn(f'id="path-network-{kind}-color-gradient"', html)
+            self.assertIn(f'id="path-network-{kind}-color-maximum"', html)
+            self.assertIn(f'id="path-network-{kind}-color-minimum"', html)
+            self.assertIn(f"var(--network-${{palette}}-low)", javascript)
+            self.assertIn(f"var(--network-${{palette}}-high)", javascript)
         self.assertIn('markerUnits: "userSpaceOnUse"', javascript)
+        self.assertIn("function networkEvidenceColor", javascript)
+        self.assertIn("const strokeWidth = 2.6", javascript)
+        self.assertIn('inspectEvidence("node")', javascript)
+        self.assertIn('inspectEvidence("edge")', javascript)
+
+    def test_gui_renders_calibrated_parameters_and_factor_positions(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        for control in (
+            "calibration-parameters",
+            "node-calibration-parameters-body",
+            "edge-calibration-parameters-body",
+            "evidence-stream-distribution-chart",
+            "evidence-stream-distribution-summary",
+        ):
+            self.assertIn(f'id="{control}"', html)
+        self.assertIn("function renderCalibrationParameters", javascript)
+        self.assertIn("function renderEvidenceFactorDistribution", javascript)
+        self.assertIn("distribution_position", javascript)
+
+    def test_evidence_factor_distribution_is_neutral_centered_and_compact(self) -> None:
+        summary = evidence_factor_distribution_summary(
+            np.asarray([0.5, 1.0, 1.0, 1.5, 2.0]),
+            distribution_scope="test hypotheses",
+            bin_count=8,
+        )
+        self.assertEqual(summary["hypothesis_count"], 5)
+        self.assertEqual(summary["refuting_count"], 1)
+        self.assertEqual(summary["neutral_count"], 2)
+        self.assertEqual(summary["supporting_count"], 2)
+        self.assertEqual(sum(summary["bin_counts"]), 5)
+        self.assertEqual(summary["distribution_scope"], "test hypotheses")
+        self.assertEqual(len(summary["quantile_percentages"]), 101)
+        self.assertEqual(sum(item["count"] for item in summary["value_counts"]), 5)
 
     def test_gui_distinguishes_server_disconnect_from_bad_configuration(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -534,8 +636,8 @@ class WorkflowEngineTests(unittest.TestCase):
         supplied["edge_streams"]["scaffold_triadic_closure"]["enabled"] = True
         config = normalize_configuration(supplied, self.registry)
         _, selected, _ = select_nodes(PROJECT_ROOT, self.registry, config)
-        self.assertEqual(len(selected), 3350)
-        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 5_609_575)
+        self.assertEqual(len(selected), 1506)
+        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 1_133_265)
 
     def test_path_ontology_class_selection_is_normalized_and_validated(self) -> None:
         supplied = default_configuration(self.registry)
@@ -559,16 +661,17 @@ class WorkflowEngineTests(unittest.TestCase):
         config = normalize_configuration(None, self.registry)
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
         self.assertEqual(len(factors), 9170)
-        self.assertEqual(len(selected), 1071)
-        self.assertEqual(summary["selected_protein_count"], 1051)
-        self.assertEqual(summary["incrementally_added_protein_count"], 180)
+        self.assertEqual(len(selected), 1506)
+        self.assertEqual(summary["selected_protein_count"], 1486)
+        self.assertEqual(summary["incrementally_added_protein_count"], 881)
         self.assertEqual(summary["curated_second_messenger_count"], 20)
         self.assertTrue(summary["posterior_probabilities_are_independent"])
         self.assertEqual(summary["node_prior_probability"], 0.5)
         self.assertEqual(summary["node_output_probability_cutoff"], 0.5)
         self.assertTrue((factors["initial_prior"] == 0.5).all())
         self.assertTrue((factors["gui_initial_prior_probability"] == 0.5).all())
-        self.assertTrue((factors["gui_posterior"] >= 0.5).all())
+        self.assertTrue((factors["gui_posterior"] > 0.0).all())
+        self.assertTrue((factors["gui_posterior"] < 1.0).all())
         self.assertEqual(
             int((factors["gui_posterior"] > 0.5).sum()),
             summary["selected_protein_count"],
@@ -585,7 +688,11 @@ class WorkflowEngineTests(unittest.TestCase):
             distribution["above_output_cutoff_count"],
             summary["selected_protein_count"],
         )
-        self.assertEqual(distribution["below_prior_count"], 0)
+        self.assertEqual(distribution["below_prior_count"], 7681)
+        for stream in summary["active_streams"]:
+            factor_distribution = stream["factor_distribution"]
+            self.assertEqual(factor_distribution["hypothesis_count"], len(factors))
+            self.assertEqual(sum(factor_distribution["bin_counts"]), len(factors))
 
     def test_neutral_node_evidence_preserves_independent_half_priors(self) -> None:
         config = normalize_configuration(None, self.registry)
@@ -603,6 +710,13 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(len(selected), 20)
 
     def test_optional_nondetection_evidence_can_lower_node_posteriors(self) -> None:
+        neutral_supplied = default_configuration(self.registry)
+        neutral_supplied["node_integration"]["penalize_unobserved"] = False
+        neutral_config = normalize_configuration(neutral_supplied, self.registry)
+        _, neutral_selected, neutral_summary = select_nodes(
+            PROJECT_ROOT, self.registry, neutral_config
+        )
+
         supplied = default_configuration(self.registry)
         supplied["node_integration"]["penalize_unobserved"] = True
         supplied["node_integration"]["unobserved_bayes_factor"] = 0.5
@@ -621,7 +735,11 @@ class WorkflowEngineTests(unittest.TestCase):
             summary["candidates_below_prior"],
         )
         self.assertLess(summary["posterior_minimum"], 0.5)
-        self.assertLess(summary["selected_protein_count"], 1051)
+        self.assertLess(
+            summary["selected_protein_count"],
+            neutral_summary["selected_protein_count"],
+        )
+        self.assertLess(len(selected), len(neutral_selected))
         self.assertEqual(len(selected), summary["selected_protein_count"] + 20)
 
         active_ids = [stream["id"] for stream in summary["active_streams"]]
@@ -721,13 +839,13 @@ class WorkflowEngineTests(unittest.TestCase):
             selected["symbol"].tolist(),
         )
         values = matrix.to_numpy(float)
-        self.assertEqual(matrix.shape, (1071, 1071))
+        self.assertEqual(matrix.shape, (1506, 1506))
         self.assertTrue(np.array_equal(values, values.T))
-        self.assertTrue(np.array_equal(np.diag(values), np.zeros(1071)))
+        self.assertTrue(np.array_equal(np.diag(values), np.zeros(1506)))
         self.assertGreater(summary["pairs_above_output_cutoff"], 169414)
         distribution = summary["probability_distribution"]
-        self.assertEqual(distribution["hypothesis_count"], 572985)
-        self.assertEqual(sum(distribution["bin_counts"]), 572985)
+        self.assertEqual(distribution["hypothesis_count"], 1_133_265)
+        self.assertEqual(sum(distribution["bin_counts"]), 1_133_265)
         self.assertEqual(
             distribution["at_exact_prior_count"], summary["pairs_at_exact_prior"]
         )
@@ -735,6 +853,10 @@ class WorkflowEngineTests(unittest.TestCase):
             distribution["above_output_cutoff_count"],
             summary["pairs_above_output_cutoff"],
         )
+        for stream in summary["active_streams"]:
+            factor_distribution = stream["factor_distribution"]
+            self.assertEqual(factor_distribution["hypothesis_count"], 1_133_265)
+            self.assertEqual(sum(factor_distribution["bin_counts"]), 1_133_265)
 
     def test_optional_edge_absence_penalty_lowers_only_eligible_pairs(self) -> None:
         supplied = default_configuration(self.registry)
@@ -909,7 +1031,7 @@ class WorkflowEngineTests(unittest.TestCase):
         }
         self.assertEqual(len(definitions), 6)
         self.assertTrue(
-            all(not config["node_streams"][stream_id]["enabled"] for stream_id in definitions)
+            all(config["node_streams"][stream_id]["enabled"] for stream_id in definitions)
         )
         self.assertEqual(
             {
@@ -933,7 +1055,7 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertTrue(np.all(sensitive >= original - 1e-14), stream_id)
             self.assertTrue(np.any(sensitive > original + 1e-14), stream_id)
 
-    def test_selective_pka_subunit_ko_streams_are_separate_and_optional(self) -> None:
+    def test_selective_pka_subunit_ko_streams_are_separate(self) -> None:
         stream_ids = {
             "pka_ca_ko_phosphoprotein_response",
             "pka_cb_ko_phosphoprotein_response",
@@ -951,21 +1073,23 @@ class WorkflowEngineTests(unittest.TestCase):
 
         supplied = default_configuration(self.registry)
         self.assertTrue(
-            all(not supplied["node_streams"][stream_id]["enabled"] for stream_id in stream_ids)
+            all(supplied["node_streams"][stream_id]["enabled"] for stream_id in stream_ids)
         )
+        for stream_id in supplied["node_streams"]:
+            supplied["node_streams"][stream_id]["enabled"] = stream_id in stream_ids
         for stream_id in stream_ids:
             supplied["node_streams"][stream_id]["enabled"] = True
         config = normalize_configuration(supplied, self.registry)
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
 
         self.assertEqual(len(factors), 9170)
-        self.assertEqual(summary["selected_protein_count"], 1232)
-        self.assertEqual(len(selected), 1252)
+        self.assertEqual(len(selected), summary["selected_protein_count"] + 20)
         expected_counts = {
             "pka_ca_ko_phosphoprotein_response": (776, 267),
             "pka_cb_ko_phosphoprotein_response": (776, 261),
         }
         active = {item["id"]: item for item in summary["active_streams"]}
+        self.assertEqual(set(active), stream_ids)
         for stream_id, (observed_count, positive_count) in expected_counts.items():
             definition = definitions[stream_id]
             self.assertEqual(
@@ -1149,14 +1273,13 @@ class WorkflowEngineTests(unittest.TestCase):
 
     def test_more_sensitive_node_setting_adds_nodes_beyond_seed(self) -> None:
         supplied = default_configuration(self.registry)
-        supplied["node_streams"]["protein_abundance"]["tq_multiplier"] = 0.95
+        supplied["node_streams"]["protein_abundance"]["tq_multiplier"] = 0.05
         config = normalize_configuration(supplied, self.registry)
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
-        # With the current objective 0.5 prior and strict posterior > 0.5
-        # selection rule, any net-positive BF support is sufficient.  Lowering
-        # this Tq therefore adds 188 proteins beyond the immutable 891-node seed.
-        self.assertEqual(len(selected), 1079)
-        self.assertEqual(summary["incrementally_added_protein_count"], 188)
+        # Lowering the Version 1 protein-abundance multiplier from 0.10 to the
+        # validated minimum 0.05 makes that stream more sensitive.
+        self.assertEqual(len(selected), 1518)
+        self.assertEqual(summary["incrementally_added_protein_count"], 892)
         self.assertTrue(
             factors.loc[
                 factors["gene_symbol"].isin(selected["symbol"]),

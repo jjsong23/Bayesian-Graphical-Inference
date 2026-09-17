@@ -7,13 +7,12 @@ This research codebase builds and explores a probabilistic signaling graph for r
 3. **Path inference** ranks plausible paths from a chosen signaling receptor or regulator to a target protein.
 4. **Temporal validation** optionally tests whether measured dDAVP phosphoproteomic response times are consistent with the proposed path order.
 
-The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, optional scope-aware Bayes factors below 1 for node nondetections and unsupported edge pairs, partial directionality, path constraints, external-target insertion, and optional uncertainty-aware temporal annotations. Completed runs include posterior-distribution plots, a per-node/per-edge evidence ledger that reconstructs the Bayesian update, and an interactive merged network of the highest-ranked paths. Negative evidence can use either a stage-wide fixed absence factor or a per-dataset continuous mode that removes the positive-only floor, treats eligible nondetections as `x=0`, and lets weak observations produce BF below 1. The optional regularized positive-control calibration stage independently fits node and edge weights/Tq scales to supplied known-present controls. Negative evidence, calibration, scaffold closure, and temporal validation are disabled by default.
+The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, optional scope-aware Bayes factors below 1 for node nondetections and unsupported edge pairs, partial directionality, path constraints, external-target insertion, and optional uncertainty-aware temporal annotations. Completed runs include posterior-distribution plots, a per-node/per-edge evidence ledger that reconstructs the Bayesian update, and an interactive merged network of the highest-ranked paths. Negative evidence can use either a stage-wide fixed absence factor or a per-dataset continuous mode that removes the positive-only floor, treats eligible nondetections as `x=0`, and lets weak observations produce BF below 1. The optional regularized positive-control calibration stage independently fits node and edge weights/Tq scales to supplied known-present controls. Calibration, continuous negative evidence, edge-absence penalties, and temporal validation are disabled by default. The Version 1 profile enables the simple node-nondetection penalty and scaffold-mediated closure shown in the GUI.
 
-For the lab-specific Aqp2 analysis, node selection additionally exposes rat
-proteome and mouse RNA abundance for CCD, OMCD, and IMCD as six separate
-streams. They are off in the generic default profile so the validated 891-node
-baseline remains reproducible; the all-collecting-duct profile and its mapping
-audits are under `results/collecting_duct_node_selection/` and
+For the lab-specific Aqp2 analysis, node selection exposes rat proteome and
+mouse RNA abundance for CCD, OMCD, and IMCD as six separate streams. All six
+are enabled in the Version 1 default profile; the mapping audits are under
+`results/collecting_duct_node_selection/` and
 `data/node_selection/collecting_duct/` in the companion data archive.
 
 ## Repository and data archive
@@ -64,6 +63,13 @@ The workbench binds to `127.0.0.1` and opens at `http://127.0.0.1:8765/`.
 Use `python launch.py --foreground` when you prefer a server that stops with
 Ctrl+C, or `python launch.py --check` to validate a freshly extracted release.
 The PowerShell launcher remains available at `gui/run_workbench.ps1`.
+
+After a run completes, use **Save entire session (.html)** in the results
+panel to create one self-contained offline record. It includes the exact run
+configuration, summaries, posterior plots, merged path network, ranked paths,
+calibration results, evidence ledgers inspected during the browser session,
+and a compressed vault from which every generated run file can be restored
+with its original name and SHA-256 checksum.
 
 For a complete scientific and software overview, read
 [`docs/PROJECT_COMPLETE_SUMMARY_2026-08-25.md`](docs/PROJECT_COMPLETE_SUMMARY_2026-08-25.md).

@@ -205,30 +205,32 @@ used only after its input and output hashes and validation flags are checked.
 
 The default search excludes every edge at the exact 0.5 neutral baseline,
 allows at most six edges per path, restricts internal nodes to mechanistic
-signal relays, and returns up to 25 loopless paths. For a path
+signal relays, and returns up to 50 loopless paths by default. For a path
 `r = (v_0, v_1, ..., v_h)`, the ranking score is
 
 \[
-S(r)=\prod_{i=0}^{h-1}p(v_i,v_{i+1}).
+S_{GM}(r)=\left(\prod_{i=0}^{h-1}p(v_i,v_{i+1})\right)^{1/h}.
 \]
 
-Because logarithms are monotonic, descending (S(r)) is equivalent to
+Because logarithms are monotonic, descending geometric mean is equivalent to
 ascending
 
 \[
-C(r)=\sum_{i=0}^{h-1}-\log p(v_i,v_{i+1}).
+C_{GM}(r)=\frac{1}{h}\sum_{i=0}^{h-1}-\log p(v_i,v_{i+1}).
 \]
 
-The additive representation permits conventional shortest-path machinery.
-The implementation uses Yen's algorithm to rank distinct simple paths. Each
-spur-path subproblem is solved by Dijkstra search on a hop-layered graph, which
-enforces the maximum-hop setting. No NetworkX dependency is required.
+Within a fixed hop count, product and geometric-mean order are identical. The
+implementation therefore finds the exact top paths separately for every
+permitted hop count, using an admissible exact-hop dynamic-programming bound
+and Yen/A* simple-path search, then merges those lists by mean negative-log
+edge cost. This is exact for the requested top K rather than a beam-search
+approximation. No NetworkX dependency is required.
 
-The product naturally penalizes additional edges but does not prohibit a
-multi-step path from outranking a direct edge when every edge in the multi-step
-path has sufficiently high support. The output also reports hop count,
-geometric mean edge probability, and minimum/bottleneck edge probability so
-users can inspect why a route ranked highly.
+The geometric mean removes the product score's automatic path-length penalty
+and instead measures typical edge strength. Consequently, a longer route can
+outrank a shorter route when its average edge support is stronger. The output
+retains the raw product, total negative-log product, hop count, and
+minimum/bottleneck edge probability for auditing.
 
 ## Signal-propagation constraint
 
@@ -287,6 +289,11 @@ matching relay classes, eligibility decision, endpoint exemption, and reason
 for every matrix node.
 
 ## Prkaca-to-Aqp2 sensitivity-oriented reference run
+
+The counts and table in this subsection are a historical validation of the
+former product-ranking rule. They are retained for provenance and are
+superseded for current ranking behavior by the 2026-09-17 geometric-mean
+validation recorded in the lab notebook.
 
 The current reference run used the GUI workflow defaults with:
 
@@ -351,8 +358,8 @@ The incremental schema and reference policy are documented in
 
 ## Interpretation limitation
 
-The product score is appropriate for ranking under the model, but it must not
-be described as a calibrated probability that the complete biological route
-exists. Edge evidence streams can be dependent, and edges within a route need
-not be statistically independent. Routes should therefore be compared as
-model-supported hypotheses and then reviewed for biological plausibility.
+The geometric mean is a length-normalized ranking statistic, not a calibrated
+probability that the complete biological route exists. Edge evidence streams
+can be dependent, and edges within a route need not be statistically
+independent. Routes should therefore be compared as model-supported hypotheses
+and then reviewed for biological plausibility.

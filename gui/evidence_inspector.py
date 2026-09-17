@@ -20,6 +20,7 @@ from workflow_engine import (
     _raw_seed_edge_factor_table,
     _stream_multiplier,
     edge_stream_eligibility_matrix,
+    evidence_factor_distribution_summary,
     load_registry,
     stable_expit,
 )
@@ -96,6 +97,101 @@ def _run_stream_state(
 
 def _posterior_from_log_odds(log_odds: float) -> float:
     return float(stable_expit(np.asarray([log_odds], dtype=float))[0])
+
+
+def _exact_factor_position(
+    values: np.ndarray | pd.Series,
+    selected_factor: float,
+) -> dict[str, Any] | None:
+    factors = np.asarray(values, dtype=float).reshape(-1)
+    factors = factors[np.isfinite(factors) & (factors > 0)]
+    if not len(factors) or not math.isfinite(selected_factor) or selected_factor <= 0:
+        return None
+    tied = np.isclose(factors, selected_factor, rtol=1e-12, atol=1e-12)
+    below = int(((factors < selected_factor) & ~tied).sum())
+    tied_count = int(tied.sum())
+    lower = 100.0 * below / len(factors)
+    upper = 100.0 * (below + tied_count) / len(factors)
+    return {
+        "lower_percentile": lower,
+        "upper_percentile": upper,
+        "midpoint_percentile": (lower + upper) / 2.0,
+        "tied_hypothesis_count": tied_count,
+        "hypothesis_count": int(len(factors)),
+        "exact": True,
+    }
+
+
+def _stream_distribution_catalog(
+    run: Path,
+    section: str,
+) -> dict[str, dict[str, Any]]:
+    summary_path = run / "analysis_summary.json"
+    if not summary_path.is_file():
+        return {}
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    streams = summary.get(section, {}).get("active_streams", [])
+    return {
+        str(stream["id"]): stream["factor_distribution"]
+        for stream in streams
+        if stream.get("factor_distribution")
+    }
+
+
+def _factor_position_from_summary(
+    distribution: dict[str, Any] | None,
+    selected_factor: float | None,
+) -> dict[str, Any] | None:
+    if not distribution or selected_factor is None:
+        return None
+    value_counts = distribution.get("value_counts") or []
+    if value_counts:
+        expanded_values: list[float] = []
+        expanded_counts: list[int] = []
+        for item in value_counts:
+            expanded_values.append(float(item["bayes_factor"]))
+            expanded_counts.append(int(item["count"]))
+        total = int(sum(expanded_counts))
+        tied_count = sum(
+            count
+            for value, count in zip(expanded_values, expanded_counts, strict=True)
+            if math.isclose(value, selected_factor, rel_tol=1e-12, abs_tol=1e-12)
+        )
+        below = sum(
+            count
+            for value, count in zip(expanded_values, expanded_counts, strict=True)
+            if value < selected_factor - 1e-12
+        )
+        if total:
+            lower = 100.0 * below / total
+            upper = 100.0 * (below + tied_count) / total
+            return {
+                "lower_percentile": lower,
+                "upper_percentile": upper,
+                "midpoint_percentile": (lower + upper) / 2.0,
+                "tied_hypothesis_count": int(tied_count),
+                "hypothesis_count": total,
+                "exact": True,
+            }
+
+    quantiles = np.asarray(distribution.get("quantile_bayes_factors", []), dtype=float)
+    percentiles = np.asarray(distribution.get("quantile_percentages", []), dtype=float)
+    if not len(quantiles) or len(quantiles) != len(percentiles):
+        return None
+    left = int(np.searchsorted(quantiles, selected_factor, side="left"))
+    right = int(np.searchsorted(quantiles, selected_factor, side="right"))
+    lower_index = max(0, min(left - 1, len(percentiles) - 1))
+    upper_index = max(0, min(right, len(percentiles) - 1))
+    lower = float(percentiles[lower_index])
+    upper = float(percentiles[upper_index])
+    return {
+        "lower_percentile": lower,
+        "upper_percentile": upper,
+        "midpoint_percentile": (lower + upper) / 2.0,
+        "tied_hypothesis_count": None,
+        "hypothesis_count": int(distribution.get("hypothesis_count", 0)),
+        "exact": False,
+    }
 
 
 def _resolve_symbol(query: str, available: list[str], label: str) -> str:
@@ -178,6 +274,21 @@ def inspect_node_evidence(
             row.get(prefix + "continuous_negative_evidence_applied", False)
         ) if enabled else False
         raw_value, raw_label = _node_raw_value(row, definition)
+        distribution = None
+        distribution_position = None
+        bayes_factor_column = prefix + "bayes_factor"
+        if enabled and bayes_factor_column in factors.columns:
+            stream_factors = pd.to_numeric(
+                factors[bayes_factor_column], errors="coerce"
+            ).to_numpy(float)
+            distribution = evidence_factor_distribution_summary(
+                stream_factors,
+                distribution_scope="all modeled protein candidates",
+            )
+            if bayes_factor is not None:
+                distribution_position = _exact_factor_position(
+                    stream_factors, float(bayes_factor)
+                )
         if not enabled:
             note = "Disabled in this run; contribution to posterior odds was zero."
         elif eligible is False:
@@ -212,6 +323,8 @@ def inspect_node_evidence(
                 "observed": observed,
                 "fixed_absence_penalty_applied": penalty,
                 "continuous_negative_evidence_applied": continuous,
+                "factor_distribution": distribution,
+                "distribution_position": distribution_position,
                 "note": note,
             }
         )
@@ -395,6 +508,9 @@ def inspect_edge_evidence(
     unsupported_factor = float(
         config["edge_integration"].get("unsupported_bayes_factor", 0.5)
     )
+    distribution_catalog = _stream_distribution_catalog(
+        run, "edge_characterization"
+    )
     streams: list[dict[str, Any]] = []
     for stream_id, definition in definitions.items():
         state = _run_stream_state(config, "edge_streams", definition)
@@ -439,6 +555,8 @@ def inspect_edge_evidence(
             factor = float(factor if factor is not None else 1.0)
             weighted_log = float(state["weight"]) * math.log(factor)
             reconstructed_log_odds += weighted_log
+        distribution = distribution_catalog.get(stream_id) if enabled else None
+        distribution_position = _factor_position_from_summary(distribution, factor)
         if not enabled:
             note = "Disabled in this run; contribution to posterior odds was zero."
         elif definition.get("derived") and found:
@@ -473,6 +591,8 @@ def inspect_edge_evidence(
                 "absence_penalty_applied": penalty,
                 "continuous_negative_evidence": continuous_negative if enabled else None,
                 "derived": bool(definition.get("derived")),
+                "factor_distribution": distribution,
+                "distribution_position": distribution_position,
                 "note": note,
             }
         )

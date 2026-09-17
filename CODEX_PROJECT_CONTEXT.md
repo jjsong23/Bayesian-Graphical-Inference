@@ -24,7 +24,7 @@ symmetric undirected probability matrix
 ontology + OmniPath traversal constraints
         |
         v
-product-ranked loopless paths
+geometric-mean-ranked loopless paths
         |
         +--> optional temporal-order audit
         +--> merged interactive top-path network
@@ -48,7 +48,7 @@ phosphoprotein revision and therefore extend beyond that seed dynamically.
 - The common continuous-evidence transformation uses a source-specific threshold `T_q`. The GUI permits independent normalization multipliers for each applicable dataset.
 - STRING and STITCH instead use score odds relative to configurable reference scores, not the Gaussian-complement threshold kernel.
 - The historical phrase "complement of the minimum Bayes factor" refers to converting complementary tail evidence into positive likelihood/Bayes support while preserving a neutral floor. Confirm the exact implementation in `code/bayes_factors.py` before describing equations.
-- Node and edge posteriors are independent Bernoulli updates. Every protein and every edge begins at probability 0.5 by default, and posterior values are not normalized across candidates or pairs. Do not describe ranked whole-path products as calibrated biological probabilities.
+- Node and edge posteriors are independent Bernoulli updates. Every protein and every edge begins at probability 0.5 by default, and posterior values are not normalized across candidates or pairs. The primary path score is now the geometric mean of constituent edge posteriors; it is a length-normalized ranking statistic, not a calibrated biological probability.
 
 ## Node selection streams
 
@@ -73,7 +73,7 @@ each protein's prior odds independently. A protein is selected when its
 posterior is strictly greater than the configured node cutoff, which defaults
 to 0.5. There is no across-protein sum-to-one normalization.
 
-The optional `penalize_unobserved` node policy is disabled in the reproducibility default. When enabled, the engine replaces the neutral BF for each eligible nondetection with `unobserved_bayes_factor` (default 0.5) before applying the stream weight. Repeated nondetection BFs multiply the node's odds downward. Eligibility is stream-specific: non-kinases always remain neutral under kinase-activity evidence, whereas protein, RNA, phosphoprotein-response, and collecting-duct abundance streams treat all protein candidates as eligible. The engine writes eligible, observed, penalty-applied, source-BF, effective-BF, and weighted-log-BF audit columns for every active node stream. A strictly positive BF is required; posteriors can approach zero but are not made irreversibly equal to zero.
+The `penalize_unobserved` node policy is enabled in the Version 1 GUI profile. The engine replaces the neutral BF for each eligible nondetection with `unobserved_bayes_factor` (default 0.5) before applying the stream weight. Repeated nondetection BFs multiply the node's odds downward. Eligibility is stream-specific: non-kinases always remain neutral under kinase-activity evidence, whereas protein, RNA, phosphoprotein-response, and collecting-duct abundance streams treat all protein candidates as eligible. The engine writes eligible, observed, penalty-applied, source-BF, effective-BF, and weighted-log-BF audit columns for every active node stream. A strictly positive BF is required; posteriors can approach zero but are not made irreversibly equal to zero.
 
 Every node dataset also has an independent `continuous_negative_evidence` switch. When enabled, `BF=max(epsilon,(1-exp(-0.5*(x/Tq)^2))/0.5)` and eligible nondetections use `x=0`; the fixed penalty is skipped for that stream. The positive stored Tq is retained because zero-padding sparse 9,170-candidate backgrounds can make q75 equal zero. See `docs/continuous_negative_evidence.md`.
 
@@ -96,8 +96,8 @@ comparison uses its own all-source-site absolute-LFC background. Every site is
 scored against the comparison's single q75, and a protein inherits its
 strongest site-level factor; there is no adjustment for its number of detected
 sites and no accumulation across sites. The double-KO phosphoprotein-response
-stream follows the same rule. Pmod is audit-only. Both streams are disabled
-in the generic default and share dependence group
+stream follows the same rule. Pmod is audit-only. Both streams are enabled in
+the Version 1 profile and share dependence group
 `pka_subunit_ko_phosphoproteomics`. Read
 `docs/pka_subunit_ko_node_evidence.md` before changing this logic.
 
@@ -135,15 +135,15 @@ The accepted optional rule is deliberately simple:
 4. Every qualifying pair receives fixed support likelihood `0.90`, equivalent to `BF = 0.90 / 0.50 = 1.8`; every other pair receives neutral `BF = 1`.
 5. Apply the rule once. Closure-derived edges never become new anchors.
 
-There is **no scaffold-degree or “promiscuity” penalty, no anchor-excess score, no noisy-OR aggregation, and no empirical scaffold `T_q`**. Those earlier heuristics were rejected as insufficiently biologically justified. Closure is off by default and must be described as hypothesis-generating proximity/co-complex support, not proof of a direct PPI.
+There is **no scaffold-degree or “promiscuity” penalty, no anchor-excess score, no noisy-OR aggregation, and no empirical scaffold `T_q`**. Those earlier heuristics were rejected as insufficiently biologically justified. Closure is enabled in the Version 1 profile and must be described as hypothesis-generating proximity/co-complex support, not proof of a direct PPI.
 
 Validation output: `results/gui_runs/scaffold_binary_closure_validation_20260804_v2/`. At defaults, 195 scaffold-tagged proteins yielded 14,308 qualifying protein–scaffold anchors, 205,920 qualifying protein pairs, and 81,323 pairs newly raised above probability 0.5.
 
 ## Target extension and path inference
 
-`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` combines the auditable role catalog in `ontology_direction_rules.json` with mapped OmniPath directions and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by the product of allowed traversal probabilities, implemented with additive `-log(p)` costs and a hop-limited Yen/Dijkstra search.
+`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` combines the auditable role catalog in `ontology_direction_rules.json` with mapped OmniPath directions and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by geometric mean edge probability. It obtains the exact top paths within each permitted hop count using additive negative-log costs, then merges those exact-hop lists by mean negative-log edge cost. The raw product and total negative-log product remain audit columns, but neither controls the primary rank.
 
-Path intermediates are controlled by ontology-derived role classes in the GUI. The sensitivity-oriented interface exposes all current role labels and lets the user select which may propagate signals. Multi-role kinase/scaffold proteins remain eligible whenever they match any selected relay role. The separate strict scaffold override excludes every scaffold-tagged intermediate and should remain optional. Start and target nodes are endpoint exemptions.
+Path intermediates are controlled by ontology-derived role classes in the GUI. The interface exposes all current role labels and lets the user select which may propagate signals. The Version 1 profile enables receptor, receptor-regulator, ligand, kinase, phosphatase, cyclase, phosphodiesterase, phospholipase, nitric-oxide-synthase, GTPase, GTPase-regulator, kinase/phosphatase-binding, and curated second-messenger classes. Broad second-messenger-binding, generic signaling-process, signaling-regulation, and adaptor/scaffold roles are available but unchecked. Multi-role kinase/scaffold proteins remain eligible whenever they match any selected relay role. The separate strict scaffold override excludes every scaffold-tagged intermediate and should remain optional. Start and target nodes are endpoint exemptions.
 
 ## Optional temporal path validation
 
@@ -186,7 +186,7 @@ The registry drives the cards and generic factor combination. A genuinely new ra
 
 The full data/results tree is not stored in GitHub. Restore it from the dated complete-project archive described in `DATA_AND_RESULTS.md`, preserving paths.
 
-## 2026-09-09 current implementation handoff
+## 2026-09-10 current implementation handoff
 
 The registry currently contains **12 node streams and 8 edge streams**; the
 generic profile enables 4 node and 6 edge streams. The following capabilities
@@ -213,7 +213,12 @@ postdate the longer August methods summary and are part of the current code:
    neutral/disabled call, assay scope, applied BF, weight, weighted change in
    log2 odds, normalization control, and missing-data rule. The backend
    reconstructs the posterior from the displayed terms and reports any mismatch
-   with the stored posterior. The API is
+   with the stored posterior. New runs retain a compact log2(BF) distribution
+   for every active stream. Each ledger row shows the selected BF's empirical
+   percentile/tie interval (or a histogram-based estimate for a continuous edge
+   stream), and selecting the row opens a marked distribution plot. Node scopes
+   contain all modeled proteins; edge scopes contain all unique unordered graph
+   pairs. The API is
    `/api/jobs/<job_id>/evidence/node?symbol=...` or
    `/api/jobs/<job_id>/evidence/edge?node_a=...&node_b=...`. At present, the
    server must still know the completed job in its in-memory job registry; a
@@ -232,17 +237,23 @@ postdate the longer August methods summary and are part of the current code:
 
 4. **Merged predicted-network view.**
    Path runs write `top_path_network.json` and expose the same payload in the GUI
-   preview. The backend unions up to the top 50 ranked paths, collapses repeated
-   unordered relationships, preserves contributing path ranks, and marks an
-   arrow only when exactly one traversal is allowed. The browser shows Top 5,
-   Top 10, Top 25, or all available visualized paths in one nonlinear layout.
-   Node size/color and edge width/color encode posterior evidence magnitude on a
-   capped log-odds scale; green supports, red refutes, gray is near the 0.5
-   prior, and orange denotes a curated messenger or external target without a
-   node posterior. Selecting a node highlights its immediate neighborhood;
-   selecting an edge reports its exact posterior, direction status, and path
-   ranks. The latest local default validation merged 25 paths into 19 nodes and
-   38 relationships, 12 uniquely directed and 26 unresolved.
+   preview. The backend unions up to the top 50 ranked paths, defaults to
+   displaying all 50 when available, collapses repeated unordered relationships,
+   preserves contributing path ranks, and marks an arrow only when exactly one
+   traversal is allowed. The browser shows Top 5, Top 10, Top 25, Top 50, or all
+   available visualized paths in one nonlinear layout. Complete-session HTML
+   export uses the same top-50 default and freezes evidence interpretations for
+   every inspectable node and edge in that view.
+   Node and edge geometry is fixed. The live and exported networks use separate
+   monotone scales for visible node and edge posteriors: nodes use blue and
+   edges use green, and each scale maps its own minimum to the lightest color
+   and maximum to the darkest. Separate vertical color bars report both numeric
+   ranges. Orange denotes a curated messenger or external target without a
+   node posterior. Selecting a node or edge also
+   loads its per-stream evidence ledger. Selecting a ranked path highlights the
+   complete route and initially loads its lowest-probability edge. The latest
+   local default validation merged 25 paths into 19 nodes and 38 relationships,
+   12 uniquely directed and 26 unresolved.
 
 5. **Small incremental-pair performance path.**
    The SQLite cache now uses exact primary-key probes and exact pair-factor
@@ -250,8 +261,28 @@ postdate the longer August methods summary and are part of the current code:
    expansions retain the set-based cache scan. This changes query strategy, not
    scientific scoring or cache semantics.
 
-The dated implementation record is
-`docs/lab_notebook/2026-08-26_to_2026-09-09.md`.
+6. **Readable calibration output.**
+   When positive-control calibration is enabled, the result page now renders
+   separate node and edge tables. For each optimized primary stream they show
+   the starting and fitted weight together with the starting, preferred, and
+   fitted Tq/reference multiplier. The underlying calibration JSON, TSV tables,
+   and optimizer trace are unchanged and remain the definitive downloadable
+   audit.
+
+7. **Self-contained session export.**
+   Every completed run has a **Save entire session (.html)** action. The backend
+   report in `gui/session_report.py` embeds the exact submitted configuration,
+   registry snapshot, complete summary/preview payload, posterior figures,
+   merged path network, ranked paths, calibration table, and all evidence
+   inspections opened in the browser. It also embeds every run-directory file
+   in a recoverable vault; large text artifacts are internally gzip-compressed,
+   and every restored file has an audited SHA-256. `session_snapshot.json` is a
+   virtual vault artifact containing all session metadata. Export is a
+   read-only reporting operation and does not rerun or modify inference.
+
+The latest dated implementation record is
+`docs/lab_notebook/2026-09-11_complete_session_export.md`; the preceding
+multi-day record is `docs/lab_notebook/2026-08-26_to_2026-09-09.md`.
 
 ## First checks in a new Codex session
 

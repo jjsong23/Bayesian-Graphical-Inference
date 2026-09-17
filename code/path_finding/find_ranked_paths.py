@@ -5,8 +5,10 @@ An external mouse protein target is automatically added with
 ``build_target_adjacency_vector``. Edges at the neutral 0.5 baseline are
 excluded by default. Ontology rules and mapped OmniPath source-target records
 conservatively remove uniquely disallowed reverse traversals. Retained paths
-are ranked by the product of their edge probabilities, equivalently by the sum
-of ``-log(probability)`` edge costs.
+are ranked by their geometric mean edge probability. This asks for the
+strongest typical edge without automatically preferring a route solely because
+it contains fewer multiplicative terms. Raw probability products and their
+negative logarithms remain audit outputs.
 """
 
 from __future__ import annotations
@@ -87,9 +89,6 @@ DEFAULT_SIGNAL_RELAY_CLASSES = (
     "gtpase",
     "gtpase_regulator",
     "kinase_phosphatase_binding",
-    "second_messenger_binding",
-    "signaling_process",
-    "signaling_regulation",
     "second_messenger",
 )
 
@@ -128,8 +127,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--top-k",
         type=int,
-        default=25,
-        help="Maximum number of ranked paths to return (default: 25).",
+        default=50,
+        help="Maximum number of ranked paths to return (default: 50).",
     )
     parser.add_argument(
         "--max-hops",
@@ -514,37 +513,157 @@ def shortest_hop_limited_path(
 
 
 def path_cost(nodes: tuple[int, ...], probabilities: np.ndarray) -> float:
+    """Return the additive negative-log product retained for audit/search."""
     return float(
         sum(-math.log(float(probabilities[a, b])) for a, b in zip(nodes, nodes[1:]))
     )
 
 
-def k_shortest_simple_paths(
+def _exact_hop_lower_bounds(
+    adjacency: list[list[tuple[int, float, float]]],
+    target: int,
+    maximum_hops: int,
+    permitted_nodes: frozenset[int] | None,
+) -> list[np.ndarray]:
+    """Return admissible exact-hop costs that focus the simple-path search.
+
+    The dynamic program deliberately relaxes the no-repeat rule. Relaxation can
+    only make a route cheaper, so these remain valid A* lower bounds without
+    imposing a beam-search approximation.
+    """
+
+    size = len(adjacency)
+    bounds = [np.full(size, math.inf, dtype=float) for _ in range(maximum_hops + 1)]
+    bounds[0][target] = 0.0
+    for remaining in range(1, maximum_hops + 1):
+        previous = bounds[remaining - 1]
+        current = bounds[remaining]
+        for node, neighbors in enumerate(adjacency):
+            if permitted_nodes is not None and node not in permitted_nodes:
+                continue
+            best = math.inf
+            for neighbor, _, edge_cost in neighbors:
+                if permitted_nodes is not None and neighbor not in permitted_nodes:
+                    continue
+                suffix = float(previous[neighbor])
+                if math.isfinite(suffix):
+                    best = min(best, edge_cost + suffix)
+            current[node] = best
+    return bounds
+
+
+def shortest_exact_hop_simple_path(
+    adjacency: list[list[tuple[int, float, float]]],
+    start: int,
+    target: int,
+    exact_hops: int,
+    lower_bounds: list[np.ndarray],
+    *,
+    banned_nodes: frozenset[int] = frozenset(),
+    banned_transitions: frozenset[tuple[int, int]] = frozenset(),
+    permitted_nodes: frozenset[int] | None = None,
+) -> SearchPath | None:
+    """Find the least negative-log-cost simple path with exactly N edges."""
+
+    if (
+        exact_hops < 0
+        or start in banned_nodes
+        or target in banned_nodes
+        or (permitted_nodes is not None and start not in permitted_nodes)
+        or (permitted_nodes is not None and target not in permitted_nodes)
+    ):
+        return None
+    if exact_hops == 0:
+        return SearchPath(0.0, (start,)) if start == target else None
+    if start == target or not math.isfinite(float(lower_bounds[exact_hops][start])):
+        return None
+
+    counter = itertools.count()
+    heap: list[tuple[float, float, int, tuple[int, ...]]] = [
+        (float(lower_bounds[exact_hops][start]), 0.0, next(counter), (start,))
+    ]
+    best_state_cost: dict[tuple[int, int, frozenset[int]], float] = {
+        (start, 0, frozenset({start})): 0.0
+    }
+    while heap:
+        _, cost, _, path = heapq.heappop(heap)
+        node = path[-1]
+        hops = len(path) - 1
+        state = (node, hops, frozenset(path))
+        if cost > best_state_cost.get(state, math.inf) + 1e-15:
+            continue
+        if hops == exact_hops:
+            if node == target:
+                return SearchPath(cost, path)
+            continue
+        if node == target:
+            continue
+
+        next_hops = hops + 1
+        remaining = exact_hops - next_hops
+        for neighbor, _, edge_cost in adjacency[node]:
+            if (
+                neighbor in path
+                or neighbor in banned_nodes
+                or (node, neighbor) in banned_transitions
+                or (permitted_nodes is not None and neighbor not in permitted_nodes)
+                or (neighbor == target and remaining > 0)
+            ):
+                continue
+            suffix_bound = float(lower_bounds[remaining][neighbor])
+            if not math.isfinite(suffix_bound):
+                continue
+            next_path = path + (neighbor,)
+            next_cost = cost + edge_cost
+            next_state = (neighbor, next_hops, frozenset(next_path))
+            if next_cost + 1e-15 >= best_state_cost.get(next_state, math.inf):
+                continue
+            best_state_cost[next_state] = next_cost
+            heapq.heappush(
+                heap,
+                (
+                    next_cost + suffix_bound,
+                    next_cost,
+                    next(counter),
+                    next_path,
+                ),
+            )
+    return None
+
+
+def k_shortest_exact_hop_simple_paths(
     adjacency: list[list[tuple[int, float, float]]],
     probabilities: np.ndarray,
     start: int,
     target: int,
     *,
     top_k: int,
-    max_hops: int,
+    exact_hops: int,
     permitted_nodes: frozenset[int] | None = None,
 ) -> list[SearchPath]:
-    """Return hop-limited loopless paths using Yen's ranking algorithm."""
+    """Return the K strongest simple paths having exactly ``exact_hops`` edges."""
 
-    first = shortest_hop_limited_path(
+    lower_bounds = _exact_hop_lower_bounds(
+        adjacency,
+        target,
+        exact_hops,
+        permitted_nodes,
+    )
+    first = shortest_exact_hop_simple_path(
         adjacency,
         start,
         target,
-        max_hops,
+        exact_hops,
+        lower_bounds,
         permitted_nodes=permitted_nodes,
     )
     if first is None:
         return []
+
     accepted = [first]
     accepted_nodes = {first.nodes}
     candidate_heap: list[tuple[float, tuple[int, ...]]] = []
     candidate_nodes: set[tuple[int, ...]] = set()
-
     while len(accepted) < top_k:
         previous = accepted[-1].nodes
         for spur_index in range(len(previous) - 1):
@@ -555,12 +674,12 @@ def k_shortest_simple_paths(
                 if len(nodes) > spur_index and nodes[: spur_index + 1] == root:
                     banned_transitions.add((nodes[spur_index], nodes[spur_index + 1]))
 
-            remaining_hops = max_hops - spur_index
-            spur = shortest_hop_limited_path(
+            spur = shortest_exact_hop_simple_path(
                 adjacency,
                 root[-1],
                 target,
-                remaining_hops,
+                exact_hops - spur_index,
+                lower_bounds,
                 banned_nodes=frozenset(root[:-1]),
                 banned_transitions=frozenset(banned_transitions),
                 permitted_nodes=permitted_nodes,
@@ -570,7 +689,7 @@ def k_shortest_simple_paths(
             total_nodes = root[:-1] + spur.nodes
             if (
                 len(total_nodes) != len(set(total_nodes))
-                or len(total_nodes) - 1 > max_hops
+                or len(total_nodes) - 1 != exact_hops
                 or total_nodes in accepted_nodes
                 or total_nodes in candidate_nodes
             ):
@@ -589,6 +708,48 @@ def k_shortest_simple_paths(
         else:
             break
     return accepted
+
+
+def k_shortest_simple_paths(
+    adjacency: list[list[tuple[int, float, float]]],
+    probabilities: np.ndarray,
+    start: int,
+    target: int,
+    *,
+    top_k: int,
+    max_hops: int,
+    permitted_nodes: frozenset[int] | None = None,
+) -> list[SearchPath]:
+    """Return exact top-K paths by descending geometric mean edge probability.
+
+    Within one hop count, product and geometric-mean order are identical. We
+    therefore find up to K exact-hop paths for every allowed length, merge the
+    candidates, and rank the union by mean negative-log edge cost. A path below
+    rank K within its own length cannot enter the global top K, so this merge is
+    exact rather than a beam-search approximation.
+    """
+
+    candidates: list[SearchPath] = []
+    for exact_hops in range(1, max_hops + 1):
+        candidates.extend(
+            k_shortest_exact_hop_simple_paths(
+                adjacency,
+                probabilities,
+                start,
+                target,
+                top_k=top_k,
+                exact_hops=exact_hops,
+                permitted_nodes=permitted_nodes,
+            )
+        )
+    candidates.sort(
+        key=lambda path: (
+            path.cost / (len(path.nodes) - 1),
+            path.cost,
+            path.nodes,
+        )
+    )
+    return candidates[:top_k]
 
 
 def connected_component_size(
@@ -627,6 +788,8 @@ def serialize_paths(
         ]
         probability_product = math.exp(-found.cost)
         hops = len(found.nodes) - 1
+        mean_negative_log_probability = found.cost / hops if hops else 0.0
+        geometric_mean_probability = math.exp(-mean_negative_log_probability)
         path_rows.append(
             {
                 "rank": rank,
@@ -636,9 +799,9 @@ def serialize_paths(
                 "node_count": len(node_symbols),
                 "path_probability_product": probability_product,
                 "negative_log_path_probability": found.cost,
-                "geometric_mean_edge_probability": (
-                    probability_product ** (1.0 / hops) if hops else 1.0
-                ),
+                "mean_negative_log_edge_probability": mean_negative_log_probability,
+                "geometric_mean_edge_probability": geometric_mean_probability,
+                "primary_path_score": geometric_mean_probability,
                 "minimum_edge_probability": min(edge_probabilities) if edge_probabilities else 1.0,
                 "maximum_edge_probability": max(edge_probabilities) if edge_probabilities else 1.0,
                 "path_symbols": " -> ".join(node_symbols),
@@ -678,7 +841,7 @@ def find_ranked_paths(
     target: str,
     *,
     project_root: Path | str = PROJECT_DEFAULT,
-    top_k: int = 25,
+    top_k: int = 50,
     max_hops: int = 6,
     minimum_edge_probability: float = 0.5,
     signaling_intermediates_only: bool = True,
@@ -693,10 +856,10 @@ def find_ranked_paths(
 ) -> RankedPathResult:
     """Find the top simple paths between a current node and chosen target.
 
-    Paths are ranked by descending product of edge probabilities. The equivalent
-    additive search cost is the sum of ``-log(p_edge)``. By default, exact
-    neutral-baseline edges are excluded, no path may exceed six hops, and every
-    intermediate must have a mechanistic signal-relay class.
+    Paths are ranked by descending geometric mean edge probability, equivalently
+    by ascending mean ``-log(p_edge)``. By default, exact neutral-baseline edges
+    are excluded, no path may exceed six hops, and every intermediate must have
+    a mechanistic signal-relay class.
     """
 
     if top_k < 1:
@@ -869,9 +1032,12 @@ def find_ranked_paths(
             path_edges.empty
             or (path_edges["edge_probability"] > minimum_edge_probability).all()
         ),
-        "ranking_is_nonincreasing_by_probability_product": bool(
+        "ranking_is_nonincreasing_by_geometric_mean_edge_probability": bool(
             paths.empty
-            or np.all(np.diff(paths["path_probability_product"].to_numpy(float)) <= 1e-15)
+            or np.all(
+                np.diff(paths["geometric_mean_edge_probability"].to_numpy(float))
+                <= 1e-15
+            )
         ),
         "reported_products_reconstruct_from_edges": all(
             math.isclose(
@@ -880,6 +1046,19 @@ def find_ranked_paths(
                     float(probabilities[a, b])
                     for a, b in zip(path.nodes, path.nodes[1:])
                 ),
+                rel_tol=1e-12,
+                abs_tol=1e-15,
+            )
+            for path in ranked
+        ),
+        "reported_geometric_means_reconstruct_from_edges": all(
+            math.isclose(
+                math.exp(-path.cost / (len(path.nodes) - 1)),
+                math.prod(
+                    float(probabilities[a, b])
+                    for a, b in zip(path.nodes, path.nodes[1:])
+                )
+                ** (1.0 / (len(path.nodes) - 1)),
                 rel_tol=1e-12,
                 abs_tol=1e-15,
             )
@@ -939,11 +1118,9 @@ def find_ranked_paths(
             "symbol",
         ].tolist(),
         "intermediate_policy": (
-            "Sensitivity-oriented policy: internal nodes require at least one "
-            "signaling class other than adaptor_scaffold. Ligand, generic "
-            "signaling-process, kinase/phosphatase-binding, second-messenger-binding, "
-            "and catalytic signaling classes all qualify. The selected endpoints are "
-            "always permitted. "
+            "Internal nodes require at least one selected relay class: "
+            + ", ".join(sorted({str(value).strip() for value in relay_classes if str(value).strip()}))
+            + ". The selected endpoints are always permitted. "
             + (
                 "Every adaptor_scaffold-tagged internal node is excluded, including "
                 "multi-role proteins with another relay class."
@@ -957,8 +1134,8 @@ def find_ranked_paths(
         "top_k_requested": top_k,
         "paths_found": len(paths),
         "ranking_rule": (
-            "Descending product of edge probabilities; search minimizes the "
-            "equivalent sum of -log(edge_probability)."
+            "Descending geometric mean edge probability; search minimizes mean "
+            "-log(edge_probability) across each path. Raw products remain audit fields."
         ),
         "path_constraint": (
             "Simple paths following allowed ontology/OmniPath-directed traversals; no "
@@ -1063,10 +1240,9 @@ def find_ranked_paths(
                     compression="gzip",
                 )
         policy_readme = (
-            "Internal nodes are permitted through this sensitivity-oriented signaling "
-            f"class set: `{';'.join(summary['signal_relay_classes'])}`. Ligand, binding, "
-            "and generic signaling-process labels qualify. Endpoints remain allowed even "
-            "when they do not qualify as intermediates. "
+            "Internal nodes are permitted through this selected relay class set: "
+            f"`{';'.join(summary['signal_relay_classes'])}`. Endpoints remain allowed "
+            "even when they do not qualify as intermediates. "
             + (
                 "Every adaptor_scaffold-tagged internal node was excluded."
                 if exclude_any_scaffold
@@ -1080,8 +1256,9 @@ def find_ranked_paths(
 
 Paths are simple, contain at most {max_hops} edges, and use only
 edges with probability strictly greater than {minimum_edge_probability}. They
-are ranked by the product of their edge probabilities. This is equivalent to
-minimizing the sum of `-log(edge_probability)`.
+are ranked by their geometric mean edge probability. This is equivalent to
+minimizing the mean `-log(edge_probability)` across the edges in each path and
+does not automatically favor a route merely because it contains fewer edges.
 
 {"Ontology rules are applied first; mapped OmniPath source-target records add unique directions only for pairs ontology left unresolved. OmniPath cannot reopen or reverse an ontology-disallowed traversal. Remaining unresolved pairs retain both traversals." if ontology_directionality_enabled and omnipath_directionality_enabled else "Ontology rules partially orient the propagation graph. Uniquely disallowed reverse traversals are removed; unresolved pairs retain both traversals." if ontology_directionality_enabled else "Directionality was disabled, so every retained edge can be traversed both ways."}
 
@@ -1090,9 +1267,10 @@ contains one row per edge per path, with node names and signaling classes.
 `intermediate_node_eligibility.tsv` records the class-based decision for every
 matrix node. {policy_readme}
 
-The product score is a model-based ranking quantity. It should not be reported
-as a calibrated probability that the entire biological route is true because
-the edge evidence streams and adjacent edges are not necessarily independent.
+The geometric mean is a length-normalized ranking quantity describing typical
+edge strength; it is not a calibrated probability that the entire biological
+route is true. The raw product and total negative-log product are retained as
+secondary audit columns.
 """,
             encoding="utf-8",
         )
@@ -1157,7 +1335,7 @@ def main() -> int:
         print("\nTop paths:")
         print(
             result.paths[
-                ["rank", "hop_count", "path_probability_product", "path_symbols"]
+                ["rank", "hop_count", "geometric_mean_edge_probability", "path_symbols"]
             ]
             .head(10)
             .to_string(index=False)

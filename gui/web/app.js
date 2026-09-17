@@ -4,9 +4,11 @@ const state = {
   jobId: null,
   pollTimer: null,
   pathNetwork: null,
-  networkRankLimit: 10,
+  networkRankLimit: 50,
   networkLayoutSeed: 0,
   networkResizeTimer: null,
+  selectedPathRank: null,
+  inspectionHistory: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +56,84 @@ function evidenceScopeText(stream, kind) {
   return stream.derived ? "Rule not triggered" : "No retained record";
 }
 
+function evidencePercentileText(position) {
+  if (!position) return "—";
+  const lower = Number(position.lower_percentile || 0);
+  const upper = Number(position.upper_percentile || 0);
+  const prefix = position.exact ? "" : "≈ ";
+  if (Math.abs(upper - lower) > 0.11) {
+    return `${prefix}${lower.toFixed(1)}–${upper.toFixed(1)} percentile`;
+  }
+  return `${prefix}${Number(position.midpoint_percentile || 0).toFixed(1)} percentile`;
+}
+
+function renderEvidenceFactorDistribution(stream) {
+  const panel = $("evidence-stream-distribution");
+  const svg = $("evidence-stream-distribution-chart");
+  const summary = $("evidence-stream-distribution-summary");
+  const distribution = stream.factor_distribution;
+  const edges = distribution?.bin_edges_log2 || [];
+  const counts = distribution?.bin_counts || [];
+  if (!distribution || !counts.length || edges.length !== counts.length + 1) {
+    panel.classList.remove("hidden");
+    svg.classList.add("hidden");
+    svg.innerHTML = "";
+    summary.textContent = stream.enabled
+      ? "This historical run does not contain a factor distribution for this stream. Re-run the workflow to generate it."
+      : "This stream was disabled, so it contributed no Bayes-factor distribution to this run.";
+    return;
+  }
+
+  panel.classList.remove("hidden");
+  svg.classList.remove("hidden");
+  svg.innerHTML = "";
+  const width = 720;
+  const height = 164;
+  const margin = { left: 42, right: 16, top: 18, bottom: 34 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const domainMin = Number(edges[0]);
+  const domainMax = Number(edges[edges.length - 1]);
+  const x = (value) => margin.left + ((Number(value) - domainMin) / Math.max(domainMax - domainMin, 1e-12)) * plotWidth;
+  const maxLogCount = Math.max(...counts.map((count) => Math.log10(Number(count) + 1)), 1);
+  counts.forEach((count, index) => {
+    const x0 = x(edges[index]);
+    const x1 = x(edges[index + 1]);
+    const barHeight = (Math.log10(Number(count) + 1) / maxLogCount) * plotHeight;
+    const midpoint = (Number(edges[index]) + Number(edges[index + 1])) / 2;
+    const evidenceClass = midpoint < -1e-12 ? "refuting" : midpoint > 1e-12 ? "supporting" : "neutral";
+    const rect = svgElement("rect", {
+      x: (x0 + 0.5).toFixed(2),
+      y: (margin.top + plotHeight - barHeight).toFixed(2),
+      width: Math.max(0.5, x1 - x0 - 1).toFixed(2),
+      height: Math.max(0, barHeight).toFixed(2),
+      class: `evidence-factor-bar ${evidenceClass}`,
+    });
+    rect.appendChild(svgElement("title", {}, `${formatInt(count)} hypotheses in BF ${formatEvidenceNumber(2 ** Number(edges[index]))}–${formatEvidenceNumber(2 ** Number(edges[index + 1]))}`));
+    svg.appendChild(rect);
+  });
+
+  const axisY = margin.top + plotHeight;
+  svg.appendChild(svgElement("line", { x1: margin.left, y1: axisY, x2: width - margin.right, y2: axisY, class: "evidence-factor-axis" }));
+  const neutralX = x(0);
+  svg.appendChild(svgElement("line", { x1: neutralX, y1: margin.top, x2: neutralX, y2: axisY, class: "evidence-factor-neutral" }));
+  svg.appendChild(svgElement("text", { x: neutralX, y: height - 17, "text-anchor": "middle", class: "evidence-factor-axis-label" }, "BF 1 · neutral"));
+  svg.appendChild(svgElement("text", { x: margin.left, y: height - 17, "text-anchor": "start", class: "evidence-factor-axis-label" }, "Refutes ←"));
+  svg.appendChild(svgElement("text", { x: width - margin.right, y: height - 17, "text-anchor": "end", class: "evidence-factor-axis-label" }, "→ Supports"));
+
+  const factor = Number(stream.applied_bayes_factor);
+  if (Number.isFinite(factor) && factor > 0) {
+    const markerX = x(Math.max(domainMin, Math.min(domainMax, Math.log2(factor))));
+    svg.appendChild(svgElement("line", { x1: markerX, y1: margin.top - 2, x2: markerX, y2: axisY, class: "evidence-factor-selected" }));
+    svg.appendChild(svgElement("circle", { cx: markerX, cy: margin.top - 3, r: 4, class: "evidence-factor-selected-dot" }));
+  }
+
+  const position = evidencePercentileText(stream.distribution_position);
+  const scope = distribution.distribution_scope || "modeled hypotheses";
+  const exactness = stream.distribution_position?.exact ? "empirical" : "histogram-estimated";
+  summary.textContent = `Applied BF ${formatEvidenceNumber(stream.applied_bayes_factor)} is at ${position} (${exactness}) among ${formatInt(distribution.hypothesis_count)} ${scope}. Refuting: ${formatInt(distribution.refuting_count)}; neutral: ${formatInt(distribution.neutral_count)}; supporting: ${formatInt(distribution.supporting_count)}.`;
+}
+
 function renderEvidenceInspection(payload) {
   const result = $("evidence-inspector-result");
   const body = $("evidence-ledger-body");
@@ -78,6 +158,7 @@ function renderEvidenceInspection(payload) {
     ? `Arithmetic check passed: stored ${formatEvidenceNumber(payload.stored_posterior_probability)}; reconstructed ${formatEvidenceNumber(payload.reconstructed_posterior_probability)} from the displayed contributions.`
     : `Arithmetic warning: stored ${formatEvidenceNumber(payload.stored_posterior_probability)}; reconstructed ${formatEvidenceNumber(payload.reconstructed_posterior_probability)} (absolute difference ${formatEvidenceNumber(difference)}).`;
 
+  let initialDetail = null;
   payload.streams.forEach((stream) => {
     const row = document.createElement("tr");
     row.className = `evidence-row evidence-${stream.status}`;
@@ -89,6 +170,7 @@ function renderEvidenceInspection(payload) {
       formatEvidenceNumber(stream.applied_bayes_factor),
       formatEvidenceNumber(stream.weight),
       formatEvidenceNumber(stream.weighted_log2_odds_contribution),
+      evidencePercentileText(stream.distribution_position),
     ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
@@ -119,8 +201,10 @@ function renderEvidenceInspection(payload) {
       }
       if (stream.dependence_group) parts.push(`Shared-source group: ${stream.dependence_group}.`);
       $("evidence-stream-detail").textContent = `${stream.label}: ${parts.filter(Boolean).join(" ")}`;
+      renderEvidenceFactorDistribution(stream);
       body.querySelectorAll("tr").forEach((candidate) => candidate.classList.toggle("selected", candidate === row));
     };
+    if (!initialDetail && stream.enabled) initialDetail = showDetail;
     row.addEventListener("click", showDetail);
     row.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -130,9 +214,21 @@ function renderEvidenceInspection(payload) {
     });
     body.appendChild(row);
   });
-  $("evidence-stream-detail").textContent = "Select a stream row for its normalization and missing-data explanation.";
+  $("evidence-stream-detail").textContent = "Select a stream row for its normalization, model weight, and score-distribution position.";
   $("evidence-inspector-message").textContent = `${payload.streams.filter((stream) => stream.enabled).length} enabled streams evaluated for ${hypothesis}.`;
   result.classList.remove("hidden");
+  if (initialDetail) initialDetail();
+}
+
+function rememberEvidenceInspection(payload) {
+  const key = payload.kind === "node"
+    ? `node:${String(payload.symbol || "").toLowerCase()}`
+    : `edge:${[payload.node_a, payload.node_b].map((value) => String(value || "").toLowerCase()).sort().join("|")}`;
+  const snapshot = JSON.parse(JSON.stringify(payload));
+  const existing = state.inspectionHistory.findIndex((item) => item.key === key);
+  if (existing >= 0) state.inspectionHistory.splice(existing, 1);
+  state.inspectionHistory.push({ key, inspected_at: new Date().toISOString(), ...snapshot });
+  if (state.inspectionHistory.length > 100) state.inspectionHistory.shift();
 }
 
 async function inspectEvidence(kind) {
@@ -153,6 +249,7 @@ async function inspectEvidence(kind) {
     const response = await fetch(`/api/jobs/${state.jobId}/evidence/${kind}?${params.toString()}`, { cache: "no-store" });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Unable to inspect evidence");
+    rememberEvidenceInspection(payload);
     renderEvidenceInspection(payload);
   } catch (error) {
     $("evidence-inspector-result").classList.add("hidden");
@@ -256,14 +353,58 @@ function networkEvidenceClass(probability, available = true) {
   return "neutral";
 }
 
-function networkEvidenceStrength(probability, available = true) {
+function observedProbabilityScale(values) {
+  const probabilities = values
+    .map(Number)
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.max(0, Math.min(1, value)));
+  if (!probabilities.length) return null;
+  const minimum = Math.min(...probabilities);
+  const maximum = Math.max(...probabilities);
+  return {
+    minimum,
+    maximum,
+    span: maximum - minimum,
+    count: probabilities.length,
+  };
+}
+
+function networkEvidenceStrength(probability, available = true, observedScale = null) {
   if (!available || probability === null || probability === undefined) return 0.22;
-  const bounded = Math.max(1e-9, Math.min(1 - 1e-9, Number(probability)));
-  const absoluteLogOdds = Math.abs(Math.log(bounded / (1 - bounded)));
-  // A log-odds scale preserves visible differences among highly supported
-  // relationships (whose posteriors may all round to 1.000) while still
-  // mapping the neutral 0.5 posterior to zero visual strength.
-  return Math.min(1, Math.log1p(absoluteLogOdds) / Math.log1p(12));
+  const value = Math.max(0, Math.min(1, Number(probability)));
+  if (!observedScale) return value;
+  const { minimum, maximum, span } = observedScale;
+  if (span <= 1e-15) return 0.5;
+  return Math.max(0, Math.min(1, (value - minimum) / (maximum - minimum)));
+}
+
+function networkEvidenceColor(probability, available = true, observedScale = null, palette = "edge") {
+  if (!available || probability === null || probability === undefined) return "var(--orange)";
+  const strength = networkEvidenceStrength(probability, true, observedScale);
+  const darkPercent = Math.round(100 * strength);
+  return `color-mix(in srgb, var(--network-${palette}-low) ${100 - darkPercent}%, var(--network-${palette}-high) ${darkPercent}%)`;
+}
+
+function networkScaleGradient(scale, palette) {
+  if (!scale) return "var(--network-neutral)";
+  if (scale.span <= 1e-15) return networkEvidenceColor(scale.minimum, true, scale, palette);
+  return `linear-gradient(to top, var(--network-${palette}-low), var(--network-${palette}-high))`;
+}
+
+function updatePathNetworkColorScale(kind, scale) {
+  const gradient = $(`path-network-${kind}-color-gradient`);
+  const maximum = $(`path-network-${kind}-color-maximum`);
+  const midpoint = $(`path-network-${kind}-color-midpoint`);
+  const minimum = $(`path-network-${kind}-color-minimum`);
+  if (!gradient || !maximum || !midpoint || !minimum) return;
+  gradient.style.background = networkScaleGradient(scale, kind);
+  if (!scale) {
+    maximum.textContent = midpoint.textContent = minimum.textContent = "—";
+    return;
+  }
+  maximum.textContent = formatEvidenceNumber(scale.maximum);
+  midpoint.textContent = formatEvidenceNumber((scale.minimum + scale.maximum) / 2);
+  minimum.textContent = formatEvidenceNumber(scale.minimum);
 }
 
 function pathRankText(ranks) {
@@ -301,8 +442,7 @@ function layoutPathNetwork(nodes, edges, width, height, seed) {
   const usableWidth = Math.max(width - 2 * marginX, 120);
   const usableHeight = Math.max(height - 2 * marginY, 180);
   nodes.forEach((node) => {
-    const strength = networkEvidenceStrength(node.posterior_probability, node.posterior_available);
-    node.radius = node.posterior_available ? 8 + 8 * strength : 9;
+    node.radius = node.is_start || node.is_target ? 11 : 10;
     node.targetX = marginX + Math.max(0, Math.min(1, node.pathPosition)) * usableWidth;
     const hash = networkHash(`${node.id}:${seed}`);
     node.x = node.targetX + ((hash % 1000) / 999 - 0.5) * Math.min(42, usableWidth * 0.09);
@@ -400,6 +540,43 @@ function setPathNetworkSelection(detail, nodeIds, edgeIds = []) {
   $("path-network-detail").textContent = detail;
 }
 
+function clearRankedPathSelection() {
+  state.selectedPathRank = null;
+  $("paths-body").querySelectorAll("tr").forEach((row) => row.classList.remove("selected"));
+}
+
+function selectRankedPath(path, row) {
+  const network = state.pathNetwork;
+  const rank = Number(path.rank);
+  if (!network || !Number.isFinite(rank)) return;
+  state.selectedPathRank = rank;
+  const limitSelect = $("path-network-limit");
+  const availableLimits = Array.from(limitSelect.options).map((option) => Number(option.value));
+  const selectedLimit = availableLimits.find((value) => value >= rank) || Math.max(...availableLimits, rank);
+  if (selectedLimit !== state.networkRankLimit) {
+    state.networkRankLimit = selectedLimit;
+    limitSelect.value = String(selectedLimit);
+    drawPathNetwork();
+  }
+  const nodes = (network.nodes || []).filter((node) => (node.path_ranks || []).map(Number).includes(rank));
+  const edges = (network.edges || []).filter((edge) => (edge.path_ranks || []).map(Number).includes(rank));
+  setPathNetworkSelection(
+    `Path ${rank}: ${path.path_symbols} · geometric-mean edge score ${formatScore(path.geometric_mean_edge_probability ?? path.path_probability_product)}. Its lowest-probability edge is loaded below; select any highlighted node or edge to inspect another component.`,
+    nodes.map((node) => node.id),
+    edges.map((edge) => edge.id),
+  );
+  $("paths-body").querySelectorAll("tr").forEach((candidate) => candidate.classList.toggle("selected", candidate === row));
+  const bottleneck = edges.reduce(
+    (lowest, edge) => (!lowest || Number(edge.edge_probability) < Number(lowest.edge_probability) ? edge : lowest),
+    null,
+  );
+  if (bottleneck) {
+    $("edge-evidence-node-a").value = bottleneck.node_a;
+    $("edge-evidence-node-b").value = bottleneck.node_b;
+    inspectEvidence("edge");
+  }
+}
+
 function clearPathNetworkSelection(nodeCount, edgeCount, pathCount) {
   const svg = $("path-network-svg");
   svg.querySelectorAll(".network-dimmed, .network-highlighted").forEach((element) => {
@@ -414,6 +591,16 @@ function drawPathNetwork() {
   if (!network || !(network.nodes || []).length) return;
   const rankLimit = Math.min(state.networkRankLimit, Number(network.visualized_path_count || 0));
   const visible = visiblePathNetwork(network, rankLimit);
+  const nodeScale = observedProbabilityScale(
+    visible.nodes
+      .filter((node) => node.posterior_available)
+      .map((node) => node.posterior_probability),
+  );
+  const edgeScale = observedProbabilityScale(
+    visible.edges.map((edge) => edge.edge_probability),
+  );
+  updatePathNetworkColorScale("node", nodeScale);
+  updatePathNetworkColorScale("edge", edgeScale);
   const width = Math.max(320, Math.round(svg.parentElement.getBoundingClientRect().width || 640));
   const height = Math.max(430, Math.min(620, 350 + visible.nodes.length * 4.5));
   svg.innerHTML = "";
@@ -421,20 +608,6 @@ function drawPathNetwork() {
   svg.setAttribute("height", String(height));
 
   const defs = svgElement("defs");
-  ["supporting", "refuting", "neutral"].forEach((evidenceClass) => {
-    const marker = svgElement("marker", {
-      id: `path-network-arrow-${evidenceClass}`,
-      viewBox: "0 0 8 8",
-      refX: 7,
-      refY: 4,
-      markerWidth: 9,
-      markerHeight: 9,
-      markerUnits: "userSpaceOnUse",
-      orient: "auto-start-reverse",
-    });
-    marker.appendChild(svgElement("path", { d: "M 0 0 L 8 4 L 0 8 z", class: `network-arrow ${evidenceClass}` }));
-    defs.appendChild(marker);
-  });
   svg.appendChild(defs);
 
   const positions = layoutPathNetwork(
@@ -462,10 +635,26 @@ function drawPathNetwork() {
     const y1 = source.y + (dy / distance) * sourceOffset;
     const x2 = target.x - (dx / distance) * targetOffset;
     const y2 = target.y - (dy / distance) * targetOffset;
-    const strength = networkEvidenceStrength(edge.edge_probability);
     const evidenceClass = networkEvidenceClass(edge.edge_probability);
-    const strokeWidth = 0.9 + 5.1 * strength;
-    const opacity = 0.3 + 0.68 * strength;
+    const evidenceColor = networkEvidenceColor(edge.edge_probability, true, edgeScale, "edge");
+    const strokeWidth = 2.6;
+    const opacity = 0.94;
+    let markerId = null;
+    if (directed) {
+      markerId = `path-network-arrow-${networkHash(edge.id)}`;
+      const marker = svgElement("marker", {
+        id: markerId,
+        viewBox: "0 0 8 8",
+        refX: 7,
+        refY: 4,
+        markerWidth: 9,
+        markerHeight: 9,
+        markerUnits: "userSpaceOnUse",
+        orient: "auto-start-reverse",
+      });
+      marker.appendChild(svgElement("path", { d: "M 0 0 L 8 4 L 0 8 z", style: `fill:${evidenceColor}` }));
+      defs.appendChild(marker);
+    }
     const pathData = `M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`;
     const visiblePath = svgElement("path", {
       d: pathData,
@@ -474,11 +663,12 @@ function drawPathNetwork() {
       "data-node-a": edge.node_a,
       "data-node-b": edge.node_b,
       "stroke-width": strokeWidth.toFixed(2),
+      style: `stroke:${evidenceColor}`,
       opacity: opacity.toFixed(3),
       tabindex: 0,
       role: "button",
       "aria-label": `${edge.node_a} to ${edge.node_b}, edge posterior ${formatEvidenceNumber(edge.edge_probability)}`,
-      ...(directed ? { "marker-end": `url(#path-network-arrow-${evidenceClass})` } : {}),
+      ...(directed ? { "marker-end": `url(#${markerId})` } : {}),
     });
     const directionText = directed
       ? `constrained ${edge.source} → ${edge.target}`
@@ -489,7 +679,11 @@ function drawPathNetwork() {
     visiblePath.appendChild(svgElement("title", {}, detail));
     const selectEdge = (event) => {
       event.stopPropagation();
+      clearRankedPathSelection();
       setPathNetworkSelection(detail, [edge.node_a, edge.node_b], [edge.id]);
+      $("edge-evidence-node-a").value = edge.node_a;
+      $("edge-evidence-node-b").value = edge.node_b;
+      inspectEvidence("edge");
     };
     visiblePath.addEventListener("click", selectEdge);
     visiblePath.addEventListener("keydown", (event) => {
@@ -519,11 +713,12 @@ function drawPathNetwork() {
     });
     group.appendChild(svgElement("circle", { r: Math.max(22, node.radius + 7), class: "network-node-hit" }));
     const evidenceClass = networkEvidenceClass(node.posterior_probability, node.posterior_available);
-    const strength = networkEvidenceStrength(node.posterior_probability, node.posterior_available);
+    const evidenceColor = networkEvidenceColor(node.posterior_probability, node.posterior_available, nodeScale, "node");
     const circle = svgElement("circle", {
       r: node.radius.toFixed(2),
       class: `network-node ${evidenceClass}`,
-      "fill-opacity": node.posterior_available ? (0.34 + 0.64 * strength).toFixed(3) : "0.55",
+      style: `fill:${evidenceColor}`,
+      "fill-opacity": node.posterior_available ? "0.96" : "0.6",
     });
     group.appendChild(circle);
     if (node.is_start || node.is_target) {
@@ -543,6 +738,7 @@ function drawPathNetwork() {
     group.appendChild(svgElement("title", {}, detail));
     const selectNode = (event) => {
       event.stopPropagation();
+      clearRankedPathSelection();
       const incident = visible.edges.filter((edge) => edge.node_a === node.id || edge.node_b === node.id);
       const neighbors = new Set([node.id]);
       incident.forEach((edge) => {
@@ -550,6 +746,13 @@ function drawPathNetwork() {
         neighbors.add(edge.node_b);
       });
       setPathNetworkSelection(detail, [...neighbors], incident.map((edge) => edge.id));
+      if (node.posterior_available) {
+        $("node-evidence-symbol").value = node.id;
+        inspectEvidence("node");
+      } else {
+        $("evidence-inspector-result").classList.add("hidden");
+        $("evidence-inspector-message").textContent = `${node.label} is a curated messenger or external endpoint and has no Bayesian node-selection ledger.`;
+      }
     };
     group.addEventListener("click", selectNode);
     group.addEventListener("keydown", (event) => {
@@ -560,7 +763,10 @@ function drawPathNetwork() {
     });
     nodeLayer.appendChild(group);
   });
-  svg.addEventListener("click", () => clearPathNetworkSelection(visible.nodes.length, visible.edges.length, rankLimit));
+  svg.addEventListener("click", () => {
+    clearRankedPathSelection();
+    clearPathNetworkSelection(visible.nodes.length, visible.edges.length, rankLimit);
+  });
   clearPathNetworkSelection(visible.nodes.length, visible.edges.length, rankLimit);
 }
 
@@ -571,7 +777,7 @@ function renderPathNetwork(network) {
   section.classList.toggle("hidden", !available || !(network?.nodes || []).length);
   if (!available || !(network?.nodes || []).length) return;
   const limitSelect = $("path-network-limit");
-  const choices = [...new Set([Math.min(5, available), Math.min(10, available), Math.min(25, available), available])]
+  const choices = [...new Set([Math.min(5, available), Math.min(10, available), Math.min(25, available), Math.min(50, available), available])]
     .filter((value) => value > 0)
     .sort((left, right) => left - right);
   limitSelect.innerHTML = "";
@@ -581,7 +787,7 @@ function renderPathNetwork(network) {
     option.textContent = `Top ${value}`;
     limitSelect.appendChild(option);
   });
-  state.networkRankLimit = Math.min(10, available);
+  state.networkRankLimit = Math.min(50, available);
   limitSelect.value = String(state.networkRankLimit);
   state.networkLayoutSeed = 0;
   drawPathNetwork();
@@ -895,6 +1101,69 @@ function updateJob(job) {
   $("cancel-job-button").textContent = job.status === "cancelling" ? "Cancelling…" : "Cancel analysis";
 }
 
+function calibrationStreamLabel(stage, streamId) {
+  const definitions = state.registry?.[`${stage}_streams`] || [];
+  return definitions.find((stream) => stream.id === streamId)?.label || streamId.replaceAll("_", " ");
+}
+
+function renderCalibrationParameterStage(stage, fit) {
+  const article = $(`${stage}-calibration-parameters`);
+  const body = $(`${stage}-calibration-parameters-body`);
+  body.innerHTML = "";
+  if (!fit?.parameters?.length) {
+    article.classList.add("hidden");
+    return false;
+  }
+  article.classList.remove("hidden");
+  const grouped = new Map();
+  fit.parameters.forEach((parameter) => {
+    if (!grouped.has(parameter.stream_id)) grouped.set(parameter.stream_id, {});
+    grouped.get(parameter.stream_id)[parameter.parameter] = parameter;
+  });
+  grouped.forEach((parameters, streamId) => {
+    const weight = parameters.weight;
+    const scale = parameters.tq_multiplier;
+    const row = document.createElement("tr");
+    const cells = [
+      calibrationStreamLabel(stage, streamId),
+      formatEvidenceNumber(weight?.current),
+      formatEvidenceNumber(weight?.fitted),
+      formatEvidenceNumber(scale?.current),
+      formatEvidenceNumber(scale?.preferred),
+      formatEvidenceNumber(scale?.fitted),
+    ];
+    cells.forEach((value, index) => {
+      const cell = document.createElement(index === 0 ? "th" : "td");
+      if (index === 0) cell.scope = "row";
+      cell.textContent = value;
+      if (index === 2 && weight) {
+        const delta = Number(weight.fitted) - Number(weight.current);
+        cell.className = delta > 1e-9 ? "calibration-increase" : delta < -1e-9 ? "calibration-decrease" : "calibration-unchanged";
+        cell.title = `Allowed weight range ${formatEvidenceNumber(weight.lower_bound)}–${formatEvidenceNumber(weight.upper_bound)}; regularization preference ${formatEvidenceNumber(weight.preferred)}.`;
+      }
+      if (index === 5 && scale) {
+        const delta = Number(scale.fitted) - Number(scale.current);
+        cell.className = delta > 1e-9 ? "calibration-increase" : delta < -1e-9 ? "calibration-decrease" : "calibration-unchanged";
+        cell.title = `Allowed multiplier range ${formatEvidenceNumber(scale.lower_bound)}–${formatEvidenceNumber(scale.upper_bound)}; optimization used ${scale.optimization_scale || "linear"} scale.`;
+      }
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  });
+  return true;
+}
+
+function renderCalibrationParameters(calibration) {
+  const section = $("calibration-parameters");
+  if (!calibration?.enabled) {
+    section.classList.add("hidden");
+    return;
+  }
+  const nodeVisible = renderCalibrationParameterStage("node", calibration.node);
+  const edgeVisible = renderCalibrationParameterStage("edge", calibration.edge);
+  section.classList.toggle("hidden", !nodeVisible && !edgeVisible);
+}
+
 function renderResult(job) {
   const preview = job.preview || { metrics: {}, top_paths: [], files: [], warnings: [] };
   $("evidence-inspector-result").classList.add("hidden");
@@ -907,6 +1176,7 @@ function renderResult(job) {
   renderPathNetwork(preview.path_network);
   const calibration = preview.calibration;
   $("calibration-result").classList.toggle("hidden", !calibration?.enabled);
+  renderCalibrationParameters(calibration);
   if (calibration?.enabled) {
     const fits = [calibration.node, calibration.edge].filter(Boolean);
     const targetCount = fits.reduce((total, fit) => total + Number(fit.target_count || 0), 0);
@@ -951,10 +1221,19 @@ function renderResult(job) {
   } else {
     preview.top_paths.forEach((path) => {
       const row = document.createElement("tr");
+      row.className = "path-row-selectable";
+      row.tabIndex = 0;
       const temporalCells = temporalExecuted
         ? `<td>${formatInt(path.temporal_n_scored)}</td><td class="score">${formatProbability(path.temporal_kendall_tau_mean)} [${formatProbability(path.temporal_kendall_tau_low)}, ${formatProbability(path.temporal_kendall_tau_high)}]</td>`
         : "";
-      row.innerHTML = `<td>${path.rank}</td><td class="route">${path.path_symbols}</td><td>${path.hop_count}</td><td class="score">${formatScore(path.path_probability_product)}</td>${temporalCells}`;
+      row.innerHTML = `<td>${path.rank}</td><td class="route">${path.path_symbols}</td><td>${path.hop_count}</td><td class="score">${formatScore(path.geometric_mean_edge_probability ?? path.path_probability_product)}</td>${temporalCells}`;
+      row.addEventListener("click", () => selectRankedPath(path, row));
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectRankedPath(path, row);
+        }
+      });
       body.appendChild(row);
     });
   }
@@ -970,7 +1249,53 @@ function renderResult(job) {
     link.setAttribute("download", file);
     downloads.appendChild(link);
   });
+  $("save-session-html").disabled = false;
+  $("session-export-link").classList.add("hidden");
+  $("session-export-status").textContent = "The export will preserve this run and every node/edge inspection opened during the current browser session.";
   showPanel("result-state");
+}
+
+async function saveEntireSession() {
+  if (!state.jobId) return;
+  const button = $("save-session-html");
+  const status = $("session-export-status");
+  button.disabled = true;
+  button.textContent = "Building complete HTML…";
+  status.textContent = "Freezing the visible network's interpretation ledgers, then compressing and embedding every run file. This may take a little while.";
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/session-report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        inspection_history: state.inspectionHistory,
+        client_state: {
+          exported_at: new Date().toISOString(),
+          visible_path_rank_limit: state.networkRankLimit,
+          selected_path_rank: state.selectedPathRank,
+        },
+      }),
+    });
+    const report = await response.json();
+    if (!response.ok) throw new Error(report.error || "Unable to create the session report");
+    const link = document.createElement("a");
+    link.href = report.url;
+    link.download = report.file;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    const repeatLink = $("session-export-link");
+    repeatLink.href = report.url;
+    repeatLink.download = report.file;
+    repeatLink.textContent = `Download ${report.file} again`;
+    repeatLink.classList.remove("hidden");
+    const reportSize = `${(Number(report.report_bytes || 0) / (1024 * 1024)).toFixed(1)} MB`;
+    status.textContent = `${report.file} is ready (${reportSize}; ${formatInt(report.embedded_file_count)} embedded artifacts and ${formatInt(report.interpretation_hypothesis_count)} offline evidence interpretations).`;
+  } catch (error) {
+    status.textContent = String(error?.message || error);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Save entire session (.html)";
+  }
 }
 
 async function pollJob() {
@@ -1027,6 +1352,7 @@ async function startRun(event) {
   event.preventDefault();
   $("run-button").disabled = true;
   state.jobId = null;
+  state.inspectionHistory = [];
   $("evidence-inspector-result").classList.add("hidden");
   $("cancel-job-button").disabled = true;
   $("cancel-job-button").textContent = "Cancel analysis";
@@ -1105,6 +1431,7 @@ $("edge-evidence-form").addEventListener("submit", (event) => {
   inspectEvidence("edge");
 });
 $("cancel-job-button").addEventListener("click", cancelRun);
+$("save-session-html").addEventListener("click", saveEntireSession);
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
 $("calibration-enabled").addEventListener("change", (event) => setCalibrationControls(event.target.checked));
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));

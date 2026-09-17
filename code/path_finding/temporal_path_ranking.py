@@ -821,7 +821,10 @@ def rank_paths_replicate(
             "temporal_soft_precedence",
         ]
         ascending = [False, False, False]
-        if "path_probability_product" in ranked.columns:
+        if "geometric_mean_edge_probability" in ranked.columns:
+            order_columns.append("geometric_mean_edge_probability")
+            ascending.append(False)
+        elif "path_probability_product" in ranked.columns:
             order_columns.append("path_probability_product")
             ascending.append(False)
         ordered_index = ranked.loc[informative].sort_values(

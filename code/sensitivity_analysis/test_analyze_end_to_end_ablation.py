@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import unittest
 
 import analyze_end_to_end_ablation as ablation
@@ -27,8 +28,11 @@ class AllStreamAblationConfigurationTests(unittest.TestCase):
         )
 
     def test_optional_node_gets_a_matched_add_one_context(self) -> None:
+        supplied = copy.deepcopy(self.supplied)
+        supplied["node_streams"]["collecting_duct_rna_imcd"]["enabled"] = False
+        supplied["node_streams"]["collecting_duct_rna_ccd"]["enabled"] = False
         context_config, context = ablation.focal_context_configuration(
-            self.supplied,
+            supplied,
             self.registry,
             stage="node",
             stream_id="collecting_duct_rna_imcd",

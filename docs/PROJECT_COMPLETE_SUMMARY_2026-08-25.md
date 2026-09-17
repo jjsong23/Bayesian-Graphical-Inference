@@ -447,11 +447,13 @@ streams. It appends this vector as a symmetric row and column to the adjacency
 matrix. The target can be an endpoint but is not automatically allowed as an
 internal signaling relay.
 
-Path search ranks loopless paths using edge probabilities. The primary path
-score is the product of the traversed edge probabilities; equivalently, the
-negative logarithms of the edge probabilities form additive path costs. The GUI
-exposes the start node, target, maximum hops, minimum usable edge probability,
-and number of paths to report.
+Path search ranks loopless paths using edge probabilities. Since 2026-09-17,
+the primary path score is the geometric mean of traversed edge probabilities;
+equivalently, paths are ordered by mean negative-log edge probability. This
+removes the raw product's automatic path-length scaling. Raw products and total
+negative-log products remain audit fields. The GUI exposes the start node,
+target, maximum hops, minimum usable edge probability, and number of paths to
+report.
 
 Only selectable signaling-role classes may act as intermediates. Multi-role
 kinase/scaffold proteins remain allowed when they have any propagating role.
@@ -459,9 +461,9 @@ Only proteins whose permitted role is exclusively scaffold/adaptor are excluded
 under the default policy. The user can select which ontology classes qualify as
 signal relays.
 
-Whole-path products are ranking scores, not calibrated probabilities that the
-complete biological pathway is correct. Paths are hypotheses supported by the
-current graph assumptions.
+Geometric-mean path scores are length-normalized ranking statistics, not
+calibrated probabilities that the complete biological pathway is correct.
+Paths are hypotheses supported by the current graph assumptions.
 
 ## 10. Ontology-based partial directionality
 

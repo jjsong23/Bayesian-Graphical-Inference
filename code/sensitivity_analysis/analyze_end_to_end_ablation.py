@@ -234,9 +234,9 @@ def path_map(paths: pd.DataFrame) -> dict[str, dict[str, float | int]]:
     return {
         str(row.path_symbols): {
             "rank": int(row.rank),
-            "score": float(row.path_probability_product),
+            "score": float(row.geometric_mean_edge_probability),
         }
-        for row in paths[["path_symbols", "rank", "path_probability_product"]].itertuples(index=False)
+        for row in paths[["path_symbols", "rank", "geometric_mean_edge_probability"]].itertuples(index=False)
     }
 
 
@@ -637,10 +637,10 @@ def compare_snapshots(
         "ablated_top_path": reduced_top_route,
         "top_path_changed": bool(full_top_route != reduced_top_route),
         "full_top_path_score": (
-            float(full.paths.iloc[0]["path_probability_product"]) if len(full.paths) else math.nan
+            float(full.paths.iloc[0]["geometric_mean_edge_probability"]) if len(full.paths) else math.nan
         ),
         "ablated_top_path_score": (
-            float(reduced.paths.iloc[0]["path_probability_product"]) if len(reduced.paths) else math.nan
+            float(reduced.paths.iloc[0]["geometric_mean_edge_probability"]) if len(reduced.paths) else math.nan
         ),
         "full_top_path_rank_after_ablation": original_top_rank,
         "common_path_mean_absolute_score_shift": (
