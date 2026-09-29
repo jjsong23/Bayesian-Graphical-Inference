@@ -12,6 +12,8 @@
 - Reduced each network overview to four basic descriptors: size, edge count,
   density, and connected components (or returned-path count for the path
   union).
+- Removed the duplicate top-10 metric-card grids; each section now uses one
+  metric dropdown and one top-100 ranking table.
 - Retained backend support for advanced metrics in historical configurations
   and retained full TSV audit tables, while removing those measures from new
   defaults and the ordinary interface.

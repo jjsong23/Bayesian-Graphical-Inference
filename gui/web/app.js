@@ -1802,23 +1802,6 @@ function renderFullGraphNodeRanking(statistics, metricId) {
   });
 }
 
-function renderMetricOverview(statistics, containerId, allowedMetrics) {
-  const container = $(containerId);
-  container.innerHTML = "";
-  const available = visibleNetworkMetrics(statistics, allowedMetrics);
-  available.forEach((metric, metricIndex) => {
-    const rows = (statistics?.top_nodes_by_metric?.[metric.id] || []).slice(0, 10);
-    if (!rows.length) return;
-    const details = document.createElement("details");
-    details.className = "metric-overview-card";
-    if (metricIndex < 4) details.open = true;
-    details.innerHTML = `<summary>${escapeHtml(metric.label)}</summary><ol>${rows.map((row) => (
-      `<li><strong>${escapeHtml(row.symbol)}</strong><span class="metric-value">${formatEvidenceNumber(row.value)}</span></li>`
-    )).join("")}</ol>`;
-    container.appendChild(details);
-  });
-}
-
 function renderFullGraphStatistics(statistics) {
   const section = $("full-graph-statistics-result");
   if (!statistics?.summary) {
@@ -1853,7 +1836,6 @@ function renderFullGraphStatistics(statistics) {
     renderFullGraphNodeRanking(statistics, "");
   }
   select.onchange = () => renderFullGraphNodeRanking(statistics, select.value);
-  renderMetricOverview(statistics, "full-graph-metric-panels", FULL_GRAPH_PRESENTATION_METRICS);
   const approximations = [];
   if (summary.clustering_is_approximate) approximations.push(`clustering (${formatInt(summary.clustering_neighbor_pair_samples_per_node)} neighbor pairs/node)`);
   if (summary.betweenness_is_approximate) approximations.push(`betweenness (${formatInt(summary.betweenness_approximation_source_count)} sources)`);
@@ -1913,7 +1895,6 @@ function renderFoundPathStatistics(statistics) {
     renderFoundPathNodeRanking(statistics, "");
   }
   select.onchange = () => renderFoundPathNodeRanking(statistics, select.value);
-  renderMetricOverview(statistics, "found-path-metric-panels", PATH_UNION_PRESENTATION_METRICS);
 }
 
 function renderResult(job) {

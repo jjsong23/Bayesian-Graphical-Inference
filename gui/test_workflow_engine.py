@@ -345,9 +345,9 @@ class WorkflowEngineTests(unittest.TestCase):
             "robustness",
         ):
             self.assertNotIn(f'value="{legacy_metric}"', html)
-        self.assertIn("Four interpretable node measures", html)
-        self.assertIn("Five interpretable path-network measures", html)
-        self.assertIn("intermediate traversal count", html)
+        self.assertNotIn("metric-overview-grid", html)
+        self.assertNotIn("renderMetricOverview", javascript)
+        self.assertIn("Intermediate traversal count", html)
         self.assertIn("function renderFullGraphStatistics", javascript)
         self.assertIn("function renderFoundPathStatistics", javascript)
         self.assertIn("found_path_union_statistics", javascript)

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Configure and run the graphical Bayesian signaling workflow." />
     <title>Graphical Bayesian Inference</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260929-compact-stats" />
   </head>
   <body>
     <header class="topbar">
@@ -397,11 +397,6 @@
                 <tbody id="full-graph-node-rankings"></tbody>
               </table>
             </div>
-            <div>
-              <h4>Four interpretable node measures</h4>
-              <p class="muted">The ten leading nodes for degree, weighted degree, clustering, and betweenness. Use the selector above for the full top-100 ranking.</p>
-              <div id="full-graph-metric-panels" class="metric-overview-grid"></div>
-            </div>
             <p class="scientific-note">All node-level values are saved in <strong>full_graph_node_statistics.tsv.gz</strong>. Rankings describe this thresholded inferred graph and can change with evidence settings or the edge cutoff. Centrality is a structural descriptor, not proof that a node is causal or essential.</p>
           </section>
           <section id="found-path-statistics-result" class="full-graph-statistics-result hidden" aria-labelledby="found-path-statistics-result-title">
@@ -423,12 +418,7 @@
                 <tbody id="found-path-node-rankings"></tbody>
               </table>
             </div>
-            <div>
-              <h4>Five interpretable path-network measures</h4>
-              <p class="muted">The ten leading nodes by path participation, intermediate traversal count, degree, weighted degree, and betweenness. Traversal count excludes the fixed start and target positions. Use the selector above for the full top-100 ranking.</p>
-              <div id="found-path-metric-panels" class="metric-overview-grid"></div>
-            </div>
-            <p class="scientific-note">This graph contains only transitions that occur in the paths returned by the current search. It does not add other posterior-supported edges between those nodes. “All” therefore means all returned paths and remains limited by Top paths, maximum hops, edge cutoff, and directionality settings. Complete node-level values are saved in <strong>found_path_union_node_statistics.tsv.gz</strong>.</p>
+            <p class="scientific-note">Choose a measure from the dropdown to see its full top-100 ranking. Intermediate traversal count excludes appearances as the fixed start or target. This graph contains only transitions that occur in the paths returned by the current search; it does not add other posterior-supported edges between those nodes. “All” therefore means all returned paths and remains limited by Top paths, maximum hops, edge cutoff, and directionality settings. Complete node-level values are saved in <strong>found_path_union_node_statistics.tsv.gz</strong>.</p>
           </section>
           <section id="directionality-result" class="directionality-result hidden" aria-labelledby="directionality-result-title">
             <div>
@@ -679,6 +669,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20260925-azure-openai-endpoint" defer></script>
+    <script src="/app.js?v=20260929-compact-stats" defer></script>
   </body>
 </html>
