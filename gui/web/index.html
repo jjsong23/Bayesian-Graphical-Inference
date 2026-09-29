@@ -130,7 +130,7 @@
             <span class="stage-number">03</span>
             <div>
               <h2 id="graph-statistics-title">Describe the full graph</h2>
-              <p>Compute network statistics without drawing the complete graph.</p>
+              <p>Summarize the network with a few familiar statistics.</p>
             </div>
             <label class="switch" title="Enable full-graph statistics">
               <input id="graph-statistics-enabled" type="checkbox" />
@@ -147,18 +147,12 @@
             <fieldset class="ontology-selector">
               <legend>Statistics to compute</legend>
               <div class="ontology-grid graph-statistics-grid">
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="degree_strength" /><span><strong>Degree + strength</strong><small>Neighbors and summed edge posterior</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="clustering" /><span><strong>Clustering</strong><small>Local triangles and weighted clustering</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="betweenness" /><span><strong>Betweenness</strong><small>Bridges on reliable shortest routes</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="closeness_harmonic" /><span><strong>Closeness + harmonic</strong><small>Proximity to the rest of the graph</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="eigenvector_pagerank" /><span><strong>Eigenvector + PageRank</strong><small>Connection to other central nodes</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="coreness" /><span><strong>Coreness</strong><small>Membership in densely connected cores</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="connectivity" /><span><strong>Connectivity impact</strong><small>Components, articulation, removal impact</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="communities" /><span><strong>Communities</strong><small>Probability-weighted modules</small></span></label>
-                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="robustness" /><span><strong>Robustness</strong><small>Random versus degree-targeted removal</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="degree_strength" /><span><strong>Degree + weighted degree</strong><small>Number of neighbors and summed edge posterior</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="clustering" /><span><strong>Clustering coefficient</strong><small>How often a node's neighbors connect to one another</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="betweenness" /><span><strong>Betweenness centrality</strong><small>How often a node bridges supported routes</small></span></label>
               </div>
             </fieldset>
-            <p class="scientific-note">The full graph is an undirected unique-pair graph containing every selected node and every edge whose posterior is strictly above this cutoff. Edge posterior remains a weight; weighted shortest-path statistics use reliability distance −ln(p). These are descriptive features of the inferred graph, not additional Bayesian evidence and not proof of causality.</p>
+            <p class="scientific-note">The full graph is an undirected unique-pair graph containing every selected node and every edge whose posterior is strictly above this cutoff. The four reported node measures are degree, posterior-weighted degree, clustering coefficient, and betweenness centrality. They describe the inferred graph; they are not additional Bayesian evidence or proof of causality.</p>
           </div>
         </section>
 
@@ -404,8 +398,8 @@
               </table>
             </div>
             <div>
-              <h4>All node measures at a glance</h4>
-              <p class="muted">The ten leading nodes for every computed measure. Use the selector above for the full top-100 ranking.</p>
+              <h4>Four interpretable node measures</h4>
+              <p class="muted">The ten leading nodes for degree, weighted degree, clustering, and betweenness. Use the selector above for the full top-100 ranking.</p>
               <div id="full-graph-metric-panels" class="metric-overview-grid"></div>
             </div>
             <p class="scientific-note">All node-level values are saved in <strong>full_graph_node_statistics.tsv.gz</strong>. Rankings describe this thresholded inferred graph and can change with evidence settings or the edge cutoff. Centrality is a structural descriptor, not proof that a node is causal or essential.</p>
@@ -430,8 +424,8 @@
               </table>
             </div>
             <div>
-              <h4>All returned-path measures at a glance</h4>
-              <p class="muted">The ten leading nodes for every computed measure. Use the selector above for the full top-100 ranking.</p>
+              <h4>Five interpretable path-network measures</h4>
+              <p class="muted">The ten leading nodes by path participation, intermediate traversal count, degree, weighted degree, and betweenness. Traversal count excludes the fixed start and target positions. Use the selector above for the full top-100 ranking.</p>
               <div id="found-path-metric-panels" class="metric-overview-grid"></div>
             </div>
             <p class="scientific-note">This graph contains only transitions that occur in the paths returned by the current search. It does not add other posterior-supported edges between those nodes. “All” therefore means all returned paths and remains limited by Top paths, maximum hops, edge cutoff, and directionality settings. Complete node-level values are saved in <strong>found_path_union_node_statistics.tsv.gz</strong>.</p>

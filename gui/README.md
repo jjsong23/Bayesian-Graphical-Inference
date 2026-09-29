@@ -141,12 +141,11 @@ server**.
    from collapsing onto one line while preserving the overall path ordering.
 
 4. **Describe the full graph (enabled by default).** Threshold all unique undirected
-   pairs at a separate user-selected cutoff and compute degree, posterior
-   strength, clustering, centralities, coreness, components,
-   articulation/removal impact, communities, modularity, shortest-path
-   summaries, and node-removal robustness. The live GUI shows a compact summary,
-   up to 100 nodes per selected ranking, and top-10 panels for every computed
-   measure; complete values are written to
+   pairs at a separate user-selected cutoff. The ordinary interface uses four
+   familiar node measures: degree, weighted degree (sum of incident edge
+   posteriors), clustering coefficient, and betweenness centrality. Its network
+   overview reports nodes, edges, density, and connected components. The live
+   GUI and saved HTML show up to 100 nodes per ranking; complete values are written to
    `full_graph_node_statistics.tsv.gz`. This descriptive stage does not feed
    evidence back into the Bayesian graph.
 
@@ -154,7 +153,9 @@ server**.
    computes node statistics on the exact union of every returned path. Only
    traversed path edges are used—no additional edge from the full posterior
    graph is filled in. The live results and saved session HTML expose sortable
-   rankings, and the full tables are saved as
+   rankings for returned-path participation, internal traversal count, degree,
+   weighted degree, and betweenness. Internal traversal counts only paths in
+   which the node is between the start and target. The full tables are saved as
    `found_path_union_node_statistics.tsv.gz` and
    `found_path_union_statistics_summary.json`. The result remains conditioned
    on the configured Top paths limit and all path-search constraints.

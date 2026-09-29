@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 from full_graph_statistics import (
+    FULL_GRAPH_PRESENTATION_METRICS,
+    PATH_UNION_PRESENTATION_METRICS,
     build_threshold_graph,
     compute_full_graph_statistics,
     compute_path_union_node_statistics,
@@ -68,9 +70,17 @@ class FullGraphStatisticsTests(unittest.TestCase):
         self.assertEqual(summary["connected_component_count"], 1)
         self.assertEqual(summary["largest_component_diameter_unweighted"], 2)
         self.assertEqual(len(robustness), 4)
-        preview = top_node_statistics(nodes, limit=2)
+        preview = top_node_statistics(
+            nodes,
+            limit=2,
+            metrics=FULL_GRAPH_PRESENTATION_METRICS,
+        )
         self.assertIn("degree", preview["top_nodes_by_metric"])
         self.assertEqual(preview["top_nodes_by_metric"]["degree"][0]["symbol"], "C")
+        self.assertEqual(
+            [item["id"] for item in preview["available_metrics"]],
+            list(FULL_GRAPH_PRESENTATION_METRICS),
+        )
 
     def test_path_union_uses_only_edges_that_occur_in_returned_paths(self) -> None:
         paths = pd.DataFrame(
@@ -112,6 +122,15 @@ class FullGraphStatisticsTests(unittest.TestCase):
         self.assertEqual(int(by_symbol.at["A", "degree"]), 2)
         self.assertAlmostEqual(
             float(by_symbol.at["A", "path_participation_fraction"]), 1.0
+        )
+        preview = top_node_statistics(
+            nodes,
+            limit=2,
+            metrics=PATH_UNION_PRESENTATION_METRICS,
+        )
+        self.assertEqual(
+            [item["id"] for item in preview["available_metrics"]],
+            list(PATH_UNION_PRESENTATION_METRICS),
         )
 
 

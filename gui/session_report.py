@@ -25,6 +25,21 @@ from typing import Any, Iterable
 REPORT_PREFIX = "complete_session_"
 REPORT_SCHEMA_VERSION = 4
 
+FULL_GRAPH_PRESENTATION_METRICS = (
+    "degree",
+    "posterior_strength",
+    "local_clustering_coefficient",
+    "betweenness_centrality",
+)
+
+PATH_UNION_PRESENTATION_METRICS = (
+    "path_participation_count",
+    "internal_path_count",
+    "degree",
+    "posterior_strength",
+    "betweenness_centrality",
+)
+
 
 def _escape(value: Any) -> str:
     return html.escape(str(value), quote=True)
@@ -459,33 +474,35 @@ def _graph_statistics_html(
     if not statistics or not statistics.get("summary"):
         return f"<p>{_escape(empty_message)}</p>"
     summary = statistics["summary"]
-    fields = (
-        ("Nodes", "node_count"),
-        ("Edges", "edge_count"),
-        ("Density", "density"),
-        ("Components", "connected_component_count"),
-        ("Largest component", "largest_component_node_count"),
-        ("Isolates", "isolate_count"),
-        ("Mean degree", "average_degree"),
-        ("Median degree", "median_degree"),
-        ("Maximum degree", "maximum_degree"),
-        ("Mean posterior strength", "average_posterior_strength"),
-        ("Mean clustering", "average_clustering_coefficient"),
-        ("Weighted mean clustering", "weighted_average_clustering_coefficient"),
-        ("Transitivity", "transitivity"),
-        ("Degree assortativity", "degree_assortativity"),
-        ("Diameter", "largest_component_diameter_unweighted"),
-        ("Mean path length", "largest_component_average_shortest_path_length_unweighted"),
-        ("Communities", "community_count"),
-        ("Weighted modularity", "probability_weighted_modularity"),
-        ("Articulation points", "articulation_point_count"),
-    )
+    is_path_union = preferred_metric == "path_participation_count"
+    if is_path_union:
+        fields = (
+            ("Returned paths", "returned_path_count"),
+            ("Unique nodes", "node_count"),
+            ("Unique undirected edges", "unique_undirected_path_edge_count"),
+            ("Density", "density"),
+        )
+        presentation_metrics = set(PATH_UNION_PRESENTATION_METRICS)
+        measures_heading = "Five interpretable path-network measures"
+    else:
+        fields = (
+            ("Nodes", "node_count"),
+            ("Edges", "edge_count"),
+            ("Density", "density"),
+            ("Components", "connected_component_count"),
+        )
+        presentation_metrics = set(FULL_GRAPH_PRESENTATION_METRICS)
+        measures_heading = "Four interpretable node measures"
     cards = "".join(
         f"<div><dt>{_escape(label)}</dt><dd>{_number(summary.get(key), 8)}</dd></div>"
         for label, key in fields
         if summary.get(key) is not None
     )
-    available = statistics.get("available_metrics") or []
+    available = [
+        item
+        for item in (statistics.get("available_metrics") or [])
+        if item.get("id") in presentation_metrics
+    ]
     metric_id = preferred_metric if any(item.get("id") == preferred_metric for item in available) else (
         available[0].get("id") if available else None
     )
@@ -507,14 +524,6 @@ def _graph_statistics_html(
     if summary.get("betweenness_is_approximate"):
         approximation_notes.append(
             f"betweenness used {_number(summary.get('betweenness_approximation_source_count'), 0)} sources"
-        )
-    if summary.get("distance_centrality_is_approximate"):
-        approximation_notes.append(
-            f"closeness/harmonic used {_number(summary.get('distance_centrality_landmark_count'), 0)} landmarks across components"
-        )
-    if summary.get("shortest_path_is_approximate"):
-        approximation_notes.append(
-            f"path length used {_number(summary.get('shortest_path_landmark_count'), 0)} landmarks and diameter is a lower bound"
         )
     approximation_html = (
         '<p class="caption"><strong>Large-graph approximations:</strong> '
@@ -548,7 +557,7 @@ def _graph_statistics_html(
         '<div class="table-scroll"><table><thead><tr><th>Rank</th><th>Node</th><th>Name</th><th>Value</th></tr></thead><tbody>'
         + rows
         + "</tbody></table></div>"
-        + "<h3>Every computed node measure</h3>"
+        + f"<h3>{_escape(measures_heading)}</h3>"
         + "".join(metric_panels)
         + "<p class=\"caption\">The embedded file vault contains the complete per-node statistics table.</p>"
     )

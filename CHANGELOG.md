@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-29 — Simplified network statistics
+
+- Reduced the default full-graph calculation to degree/weighted degree,
+  clustering coefficient, and betweenness centrality.
+- Limited the live GUI and saved-session HTML to four familiar node rankings:
+  degree, weighted degree, clustering coefficient, and betweenness. The
+  returned-path graph substitutes returned-path participation for clustering
+  and additionally reports the number of paths that traverse each node as an
+  internal intermediate.
+- Reduced each network overview to four basic descriptors: size, edge count,
+  density, and connected components (or returned-path count for the path
+  union).
+- Retained backend support for advanced metrics in historical configurations
+  and retained full TSV audit tables, while removing those measures from new
+  defaults and the ordinary interface.
+
 ## 2026-09-24 — Repaired the default Prkaca-to-Aqp2 run and weight inputs
 
 - Restored the biologically intended default path orientation: selected

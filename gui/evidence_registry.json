@@ -738,13 +738,7 @@
     "graph_statistics_metrics": [
       "degree_strength",
       "clustering",
-      "betweenness",
-      "closeness_harmonic",
-      "eigenvector_pagerank",
-      "coreness",
-      "connectivity",
-      "communities",
-      "robustness"
+      "betweenness"
     ],
     "ontology_directionality_enabled": true,
     "omnipath_directionality_enabled": true,

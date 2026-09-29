@@ -21,7 +21,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 import pandas as pd
 
 from workflow_engine import (
+    FULL_GRAPH_PRESENTATION_METRICS,
     GUI_RANKING_LIMIT,
+    PATH_UNION_PRESENTATION_METRICS,
     PROJECT_ROOT,
     WorkflowCancelled,
     default_configuration,
@@ -369,6 +371,7 @@ def _rebuild_completed_preview(
         summary_key: str,
         table_name: str,
         *,
+        presentation_metrics: tuple[str, ...],
         robustness_name: str | None = None,
     ) -> dict[str, Any] | None:
         statistics_summary = summary.get(summary_key)
@@ -376,7 +379,11 @@ def _rebuild_completed_preview(
             return None
         node_statistics = read_table(table_name)
         rankings = (
-            top_node_statistics(node_statistics, limit=GUI_RANKING_LIMIT)
+            top_node_statistics(
+                node_statistics,
+                limit=GUI_RANKING_LIMIT,
+                metrics=presentation_metrics,
+            )
             if not node_statistics.empty
             else {
                 "available_metrics": [],
@@ -429,11 +436,13 @@ def _rebuild_completed_preview(
         "full_graph_statistics": statistics_preview(
             "full_graph_statistics",
             "full_graph_node_statistics.tsv.gz",
+            presentation_metrics=FULL_GRAPH_PRESENTATION_METRICS,
             robustness_name="full_graph_robustness.tsv",
         ),
         "found_path_union_statistics": statistics_preview(
             "found_path_union_statistics",
             "found_path_union_node_statistics.tsv.gz",
+            presentation_metrics=PATH_UNION_PRESENTATION_METRICS,
         ),
         "probability_distributions": {
             "nodes": node_summary.get("probability_distribution"),

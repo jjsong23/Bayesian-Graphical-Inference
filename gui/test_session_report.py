@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import server
-from session_report import _probability_color, build_session_report
+from session_report import _graph_statistics_html, _probability_color, build_session_report
 
 
 class SessionReportTests(unittest.TestCase):
@@ -49,6 +49,39 @@ class SessionReportTests(unittest.TestCase):
             _probability_color(0.99, observed_range=observed, palette="node"),
             "#173f66",
         )
+
+    def test_graph_statistics_report_hides_legacy_advanced_metrics(self) -> None:
+        statistics = {
+            "summary": {
+                "graph_definition": "Test graph.",
+                "node_count": 4,
+                "edge_count": 3,
+                "density": 0.5,
+                "connected_component_count": 1,
+            },
+            "available_metrics": [
+                {"id": "degree", "label": "Degree"},
+                {"id": "posterior_strength", "label": "Weighted degree"},
+                {"id": "local_clustering_coefficient", "label": "Clustering"},
+                {"id": "betweenness_centrality", "label": "Betweenness"},
+                {"id": "pagerank", "label": "PageRank"},
+            ],
+            "top_nodes_by_metric": {
+                metric: [{"symbol": "A", "name": "Alpha", "value": 1.0}]
+                for metric in (
+                    "degree",
+                    "posterior_strength",
+                    "local_clustering_coefficient",
+                    "betweenness_centrality",
+                    "pagerank",
+                )
+            },
+        }
+        document = _graph_statistics_html(statistics)
+        self.assertIn("Four interpretable node measures", document)
+        self.assertIn("Weighted degree", document)
+        self.assertNotIn("PageRank", document)
+        self.assertNotIn("Every computed node measure", document)
 
     def test_report_is_standalone_and_restores_exact_files(self) -> None:
         configuration = {"node_integration": {"prior_probability": 0.5}}

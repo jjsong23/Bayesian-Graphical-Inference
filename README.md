@@ -84,26 +84,26 @@ two mutually exclusive HPA variants are never selected together by default.
 The default-enabled **Describe the full graph** stage makes one undirected unique-pair
 graph from all selected nodes. An edge exists only when its posterior is
 strictly greater than the user-selected graph-statistics cutoff. It exports
-`full_graph_node_statistics.tsv.gz`, `full_graph_statistics_summary.json`, and,
-when selected, `full_graph_robustness.tsv`. Available measures include degree,
-posterior strength, clustering, reliability-weighted centralities, coreness,
-components, articulation/removal impact, communities/modularity, and
-random-versus-degree-targeted node-removal robustness. Reliability-weighted
-shortest paths use distance `-ln(edge posterior)`. These statistics describe
-the inferred thresholded graph and do not update Bayesian probabilities.
-Large dense graphs use explicitly labeled deterministic sampling/landmark
-approximations for costly triangle and distance measures. The GUI and saved
-HTML show up to 100 ranked nodes for every measure plus compact all-metric
-panels; the TSV retains every node.
+`full_graph_node_statistics.tsv.gz` and
+`full_graph_statistics_summary.json`. New runs deliberately focus on four
+familiar node measures: degree, weighted degree (the sum of incident edge
+posteriors), clustering coefficient, and betweenness centrality. The overview
+shows only node count, edge count, density, and connected components. These
+statistics describe the inferred thresholded graph and do not update Bayesian
+probabilities. The GUI and saved HTML show up to 100 ranked nodes for each of
+the four measures; the TSV retains every node. Historical configurations that
+request the former advanced measures remain readable for compatibility.
 
 After pathfinding, the workbench also computes node statistics for the exact
 union of every path returned by the search. Only edges that actually occur in
 those paths are included; other posterior-supported edges between the same
-nodes are not added. Alongside degree, strength, clustering, centrality,
-coreness, connectivity, and community measures, this table reports how many
-returned paths contain each node, how often it is an intermediate, its mean
-position, directed in/out degree and strength, and the scores of paths in which
-it participates. Results are saved as
+nodes are not added. This table reports how many returned paths contain each
+node alongside compact structural measures. The ordinary
+interface ranks nodes by path participation, intermediate traversal count,
+degree, weighted degree, and betweenness. Traversal count includes only paths
+where the node is internal, not a fixed endpoint; the TSV also retains the
+detailed path-use audit columns. Results
+are saved as
 `found_path_union_node_statistics.tsv.gz` and
 `found_path_union_statistics_summary.json`. “All found paths” means all paths
 returned under the configured Top paths, maximum hops, cutoff, and direction

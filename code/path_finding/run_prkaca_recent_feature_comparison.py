@@ -33,7 +33,11 @@ from workflow_engine import (  # noqa: E402
     run_workflow,
     top_node_statistics,
 )
-from full_graph_statistics import GUI_RANKING_LIMIT  # noqa: E402
+from full_graph_statistics import (  # noqa: E402
+    FULL_GRAPH_PRESENTATION_METRICS,
+    GUI_RANKING_LIMIT,
+    PATH_UNION_PRESENTATION_METRICS,
+)
 from server import _materialize_export_interpretations  # noqa: E402
 from session_report import build_session_report  # noqa: E402
 
@@ -62,7 +66,8 @@ def build_configuration(target: str, include_nodes: bool) -> dict[str, Any]:
 
     # Compute both the thresholded full-graph statistics and the exact union of
     # all returned paths. Large-graph triangle/distance measures use the
-    # deterministic approximations documented in their output summaries.
+    # deterministic approximations documented in their output summaries. The
+    # live/report preview intentionally exposes only the compact canonical set.
     config["graph_statistics"]["enabled"] = True
     config["path"].update(
         {
@@ -234,7 +239,9 @@ def load_completed_preview(run_directory: Path) -> tuple[dict[str, Any], dict[st
             if not full_graph_nodes.empty:
                 full_graph_preview.update(
                     top_node_statistics(
-                        full_graph_nodes, limit=GUI_RANKING_LIMIT
+                        full_graph_nodes,
+                        limit=GUI_RANKING_LIMIT,
+                        metrics=FULL_GRAPH_PRESENTATION_METRICS,
                     )
                 )
         if full_graph_robustness_path.is_file():
@@ -256,7 +263,11 @@ def load_completed_preview(run_directory: Path) -> tuple[dict[str, Any], dict[st
             path_union_nodes = pd.read_csv(path_union_nodes_path, sep="\t")
             if not path_union_nodes.empty:
                 path_union_preview.update(
-                    top_node_statistics(path_union_nodes, limit=GUI_RANKING_LIMIT)
+                    top_node_statistics(
+                        path_union_nodes,
+                        limit=GUI_RANKING_LIMIT,
+                        metrics=PATH_UNION_PRESENTATION_METRICS,
+                    )
                 )
     preview = {
         "metrics": {

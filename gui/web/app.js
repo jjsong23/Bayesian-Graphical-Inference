@@ -1768,6 +1768,25 @@ function renderCalibrationParameters(calibration) {
   section.classList.toggle("hidden", !nodeVisible && !edgeVisible);
 }
 
+const FULL_GRAPH_PRESENTATION_METRICS = new Set([
+  "degree",
+  "posterior_strength",
+  "local_clustering_coefficient",
+  "betweenness_centrality",
+]);
+
+const PATH_UNION_PRESENTATION_METRICS = new Set([
+  "path_participation_count",
+  "internal_path_count",
+  "degree",
+  "posterior_strength",
+  "betweenness_centrality",
+]);
+
+function visibleNetworkMetrics(statistics, allowedMetrics) {
+  return (statistics?.available_metrics || []).filter((metric) => allowedMetrics.has(metric.id));
+}
+
 function renderFullGraphNodeRanking(statistics, metricId) {
   const body = $("full-graph-node-rankings");
   body.innerHTML = "";
@@ -1783,10 +1802,10 @@ function renderFullGraphNodeRanking(statistics, metricId) {
   });
 }
 
-function renderMetricOverview(statistics, containerId) {
+function renderMetricOverview(statistics, containerId, allowedMetrics) {
   const container = $(containerId);
   container.innerHTML = "";
-  const available = statistics?.available_metrics || [];
+  const available = visibleNetworkMetrics(statistics, allowedMetrics);
   available.forEach((metric, metricIndex) => {
     const rows = (statistics?.top_nodes_by_metric?.[metric.id] || []).slice(0, 10);
     if (!rows.length) return;
@@ -1814,28 +1833,13 @@ function renderFullGraphStatistics(statistics) {
     ["Edges", summary.edge_count],
     ["Density", summary.density],
     ["Components", summary.connected_component_count],
-    ["Largest component", summary.largest_component_node_count],
-    ["Isolates", summary.isolate_count],
-    ["Mean degree", summary.average_degree],
-    ["Median degree", summary.median_degree],
-    ["Maximum degree", summary.maximum_degree],
-    ["Mean posterior strength", summary.average_posterior_strength],
-    ["Mean clustering", summary.average_clustering_coefficient],
-    ["Weighted mean clustering", summary.weighted_average_clustering_coefficient],
-    ["Transitivity", summary.transitivity],
-    ["Degree assortativity", summary.degree_assortativity],
-    ["Diameter (largest component)", summary.largest_component_diameter_unweighted],
-    ["Mean path length (largest component)", summary.largest_component_average_shortest_path_length_unweighted],
-    ["Communities", summary.community_count],
-    ["Weighted modularity", summary.probability_weighted_modularity],
-    ["Articulation points", summary.articulation_point_count],
   ].filter(([, value]) => value !== null && value !== undefined);
   $("full-graph-summary").innerHTML = fields.map(([label, value]) => (
     `<div><dt>${escapeHtml(label)}</dt><dd>${Number.isInteger(Number(value)) ? formatInt(value) : formatEvidenceNumber(value)}</dd></div>`
   )).join("");
   const select = $("full-graph-metric");
   select.innerHTML = "";
-  (statistics.available_metrics || []).forEach((metric) => {
+  visibleNetworkMetrics(statistics, FULL_GRAPH_PRESENTATION_METRICS).forEach((metric) => {
     const option = document.createElement("option");
     option.value = metric.id;
     option.textContent = metric.label;
@@ -1849,12 +1853,10 @@ function renderFullGraphStatistics(statistics) {
     renderFullGraphNodeRanking(statistics, "");
   }
   select.onchange = () => renderFullGraphNodeRanking(statistics, select.value);
-  renderMetricOverview(statistics, "full-graph-metric-panels");
+  renderMetricOverview(statistics, "full-graph-metric-panels", FULL_GRAPH_PRESENTATION_METRICS);
   const approximations = [];
   if (summary.clustering_is_approximate) approximations.push(`clustering (${formatInt(summary.clustering_neighbor_pair_samples_per_node)} neighbor pairs/node)`);
   if (summary.betweenness_is_approximate) approximations.push(`betweenness (${formatInt(summary.betweenness_approximation_source_count)} sources)`);
-  if (summary.distance_centrality_is_approximate) approximations.push(`closeness/harmonic (${formatInt(summary.distance_centrality_landmark_count)} landmarks across components)`);
-  if (summary.shortest_path_is_approximate) approximations.push(`path length and diameter (${formatInt(summary.shortest_path_landmark_count)} landmarks; diameter is a lower bound)`);
   if (approximations.length) {
     $("full-graph-statistics-definition").textContent += ` · deterministic approximations: ${approximations.join(", ")}`;
   }
@@ -1888,29 +1890,14 @@ function renderFoundPathStatistics(statistics) {
     ["Returned paths", summary.returned_path_count],
     ["Unique nodes", summary.unique_node_count ?? summary.node_count],
     ["Unique undirected edges", summary.unique_undirected_path_edge_count ?? summary.edge_count],
-    ["Directed transitions", summary.directed_transition_count],
-    ["Bidirectional pairs", summary.bidirectional_pair_count],
     ["Density", summary.density],
-    ["Components", summary.connected_component_count],
-    ["Mean degree", summary.average_degree],
-    ["Median degree", summary.median_degree],
-    ["Maximum degree", summary.maximum_degree],
-    ["Mean posterior strength", summary.average_posterior_strength],
-    ["Mean clustering", summary.average_clustering_coefficient],
-    ["Weighted mean clustering", summary.weighted_average_clustering_coefficient],
-    ["Transitivity", summary.transitivity],
-    ["Degree assortativity", summary.degree_assortativity],
-    ["Diameter", summary.largest_component_diameter_unweighted],
-    ["Mean path length", summary.largest_component_average_shortest_path_length_unweighted],
-    ["Communities", summary.community_count],
-    ["Articulation points", summary.articulation_point_count],
   ].filter(([, value]) => value !== null && value !== undefined);
   $("found-path-summary").innerHTML = fields.map(([label, value]) => (
     `<div><dt>${escapeHtml(label)}</dt><dd>${Number.isInteger(Number(value)) ? formatInt(value) : formatEvidenceNumber(value)}</dd></div>`
   )).join("");
   const select = $("found-path-metric");
   select.innerHTML = "";
-  (statistics.available_metrics || []).forEach((metric) => {
+  visibleNetworkMetrics(statistics, PATH_UNION_PRESENTATION_METRICS).forEach((metric) => {
     const option = document.createElement("option");
     option.value = metric.id;
     option.textContent = metric.label;
@@ -1926,7 +1913,7 @@ function renderFoundPathStatistics(statistics) {
     renderFoundPathNodeRanking(statistics, "");
   }
   select.onchange = () => renderFoundPathNodeRanking(statistics, select.value);
-  renderMetricOverview(statistics, "found-path-metric-panels");
+  renderMetricOverview(statistics, "found-path-metric-panels", PATH_UNION_PRESENTATION_METRICS);
 }
 
 function renderResult(job) {

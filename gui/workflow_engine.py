@@ -76,7 +76,10 @@ from parameter_calibration import (  # noqa: E402
     bounded_powell_positive_calibration,
 )
 from full_graph_statistics import (  # noqa: E402
+    DEFAULT_METRIC_GROUPS,
+    FULL_GRAPH_PRESENTATION_METRICS,
     GUI_RANKING_LIMIT,
+    PATH_UNION_PRESENTATION_METRICS,
     SUPPORTED_METRICS as SUPPORTED_GRAPH_STATISTICS,
     compute_full_graph_statistics,
     compute_path_union_node_statistics,
@@ -444,7 +447,7 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             ),
             "metrics": list(
                 defaults.get(
-                    "graph_statistics_metrics", SUPPORTED_GRAPH_STATISTICS
+                    "graph_statistics_metrics", DEFAULT_METRIC_GROUPS
                 )
             ),
         },
@@ -4906,7 +4909,9 @@ def run_workflow(
             graph_statistics_preview = {
                 "summary": graph_statistics_summary,
                 **top_node_statistics(
-                    graph_node_statistics, limit=GUI_RANKING_LIMIT
+                    graph_node_statistics,
+                    limit=GUI_RANKING_LIMIT,
+                    metrics=FULL_GRAPH_PRESENTATION_METRICS,
                 ),
                 "robustness": (
                     json.loads(graph_robustness.to_json(orient="records"))
@@ -5044,7 +5049,9 @@ def run_workflow(
                 "summary": path_union_statistics_summary,
                 **(
                     top_node_statistics(
-                        path_union_node_statistics, limit=GUI_RANKING_LIMIT
+                        path_union_node_statistics,
+                        limit=GUI_RANKING_LIMIT,
+                        metrics=PATH_UNION_PRESENTATION_METRICS,
                     )
                     if not path_union_node_statistics.empty
                     else {

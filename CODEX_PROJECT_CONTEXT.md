@@ -185,7 +185,7 @@ Validation output: `results/gui_runs/scaffold_binary_closure_validation_20260804
 
 `code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` combines the auditable role catalog in `ontology_direction_rules.json` with mapped OmniPath directions and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by geometric mean edge probability by default. Optional node-aware ranking adds the negative-log posterior of each internal node, so the bounded primary score is the geometric mean of `m` edge posteriors and `m-1` internal-node posteriors. Endpoints are excluded. It obtains exact top paths within each permitted hop count, then merges those exact-hop lists by mean negative-log component cost. Raw edge products and edge-only geometric means remain audit columns.
 
-`code/graph_analysis/full_graph_statistics.py` implements the default-enabled descriptive full-graph stage. It thresholds the symmetric posterior matrix into one unique undirected graph and computes selected node measures (degree/strength, clustering, reliability-weighted betweenness/closeness/harmonic centrality, eigenvector centrality/PageRank, coreness, component and articulation/removal impact, community membership) plus global size, density, component, path-length, clustering, assortativity, modularity, and robustness summaries. It never modifies node or edge inference. Weighted shortest-path measures use `-ln(p_edge)` and exact-posterior-one edges receive a tiny positive numerical distance because weighted shortest-path algorithms require positive distances. Above 500 nodes, costly triangle and distance measures use explicitly labeled deterministic approximations; the summary records every sample/landmark count and labels sampled diameter as a lower bound. GUI and saved-session previews retain the top 100 nodes for every computed measure.
+`code/graph_analysis/full_graph_statistics.py` implements the default-enabled descriptive full-graph stage. It thresholds the symmetric posterior matrix into one unique undirected graph. New defaults deliberately compute and present only four familiar node measures: degree, weighted degree/posterior strength, local clustering coefficient, and posterior-weighted betweenness centrality. The ordinary overview is limited to nodes, edges, density, and connected components. It never modifies node or edge inference. Above 500 nodes, clustering and betweenness use explicitly labeled deterministic approximations. GUI and saved-session previews retain the top 100 nodes for each of these four measures. The backend still accepts advanced metric groups from historical saved configurations, but they are not exposed by the ordinary GUI.
 
 The same module also computes node statistics for the exact union of every
 path returned by a pathfinding run. That narrower graph contains only
@@ -193,7 +193,9 @@ transitions present in `ranked_path_edges.tsv`; it never fills in other edges
 from the complete posterior matrix. In addition to the structural measures,
 the export records path participation/internal-use counts, associated path
 scores, mean position, directed in/out degree and strength, and directed
-betweenness. The GUI and session report expose sortable rankings, while the
+betweenness. The GUI and session report intentionally expose only returned-path
+participation, internal traversal count, degree, weighted degree, and
+betweenness rankings, while the
 complete data are written to `found_path_union_node_statistics.tsv.gz` and
 `found_path_union_statistics_summary.json`.
 

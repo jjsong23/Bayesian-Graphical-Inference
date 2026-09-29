@@ -334,6 +334,9 @@ class WorkflowEngineTests(unittest.TestCase):
             "degree_strength",
             "clustering",
             "betweenness",
+        ):
+            self.assertIn(f'value="{metric}"', html)
+        for legacy_metric in (
             "closeness_harmonic",
             "eigenvector_pagerank",
             "coreness",
@@ -341,7 +344,10 @@ class WorkflowEngineTests(unittest.TestCase):
             "communities",
             "robustness",
         ):
-            self.assertIn(f'value="{metric}"', html)
+            self.assertNotIn(f'value="{legacy_metric}"', html)
+        self.assertIn("Four interpretable node measures", html)
+        self.assertIn("Five interpretable path-network measures", html)
+        self.assertIn("intermediate traversal count", html)
         self.assertIn("function renderFullGraphStatistics", javascript)
         self.assertIn("function renderFoundPathStatistics", javascript)
         self.assertIn("found_path_union_statistics", javascript)
@@ -349,6 +355,10 @@ class WorkflowEngineTests(unittest.TestCase):
 
     def test_graph_statistics_configuration_is_optional_and_validated(self) -> None:
         supplied = default_configuration(self.registry)
+        self.assertEqual(
+            supplied["graph_statistics"]["metrics"],
+            ["degree_strength", "clustering", "betweenness"],
+        )
         supplied["graph_statistics"].update(
             {
                 "enabled": True,

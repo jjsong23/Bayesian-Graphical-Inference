@@ -35,14 +35,38 @@ SUPPORTED_METRICS = (
     "robustness",
 )
 
+# The backend continues to understand older advanced configurations, but new
+# runs and reports deliberately surface only a compact set of familiar,
+# readily interpretable measures.
+DEFAULT_METRIC_GROUPS = (
+    "degree_strength",
+    "clustering",
+    "betweenness",
+)
+
+FULL_GRAPH_PRESENTATION_METRICS = (
+    "degree",
+    "posterior_strength",
+    "local_clustering_coefficient",
+    "betweenness_centrality",
+)
+
+PATH_UNION_PRESENTATION_METRICS = (
+    "path_participation_count",
+    "internal_path_count",
+    "degree",
+    "posterior_strength",
+    "betweenness_centrality",
+)
+
 METRIC_LABELS = {
     "degree": "Degree (number of supported neighbors)",
     "degree_fraction": "Degree fraction",
-    "posterior_strength": "Posterior strength (sum of incident edge probabilities)",
+    "posterior_strength": "Weighted degree (sum of incident edge posteriors)",
     "mean_incident_edge_probability": "Mean incident edge probability",
     "local_clustering_coefficient": "Local clustering coefficient",
     "weighted_clustering_coefficient": "Probability-weighted clustering coefficient",
-    "betweenness_centrality": "Reliability-weighted betweenness centrality (seeded approximation above 500 nodes)",
+    "betweenness_centrality": "Betweenness centrality (posterior-weighted routes)",
     "closeness_centrality": "Reliability-weighted closeness centrality",
     "harmonic_centrality": "Reliability-weighted harmonic centrality",
     "eigenvector_centrality": "Probability-weighted eigenvector centrality",
@@ -54,7 +78,7 @@ METRIC_LABELS = {
     "community_size": "Community size",
     "path_participation_count": "Returned paths containing node",
     "path_participation_fraction": "Fraction of returned paths containing node",
-    "internal_path_count": "Returned paths using node as an intermediate",
+    "internal_path_count": "Returned paths traversing through node (intermediate only)",
     "best_path_rank": "Best path rank containing node (lower is better)",
     "best_path_score": "Best path score containing node",
     "mean_path_score": "Mean score of paths containing node",
@@ -67,9 +91,7 @@ METRIC_LABELS = {
     "directed_path_betweenness_centrality": "Directed betweenness in returned-path union",
 }
 
-PATH_UNION_METRICS = tuple(
-    metric for metric in SUPPORTED_METRICS if metric != "robustness"
-)
+PATH_UNION_METRICS = DEFAULT_METRIC_GROUPS
 
 GUI_RANKING_LIMIT = 100
 LARGE_GRAPH_NODE_THRESHOLD = 500
@@ -934,11 +956,18 @@ def top_node_statistics(
     frame: pd.DataFrame,
     *,
     limit: int = GUI_RANKING_LIMIT,
+    metrics: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Build a compact GUI payload of top nodes for every numeric measure."""
+    """Build a compact GUI payload for the requested numeric measures.
+
+    Passing an explicit presentation list keeps the live GUI and standalone
+    reports focused while preserving compatibility with richer historical
+    tables.  ``None`` retains the older all-numeric behavior for callers that
+    explicitly need it.
+    """
 
     excluded = {"component_id", "community_id"}
-    candidates = [
+    numeric_candidates = [
         column
         for column in frame.columns
         if column not in excluded
@@ -948,6 +977,11 @@ def top_node_statistics(
             or pd.api.types.is_bool_dtype(frame[column])
         )
     ]
+    if metrics is None:
+        candidates = numeric_candidates
+    else:
+        allowed = set(numeric_candidates)
+        candidates = [str(metric) for metric in metrics if str(metric) in allowed]
     rankings: dict[str, list[dict[str, Any]]] = {}
     for column in candidates:
         lower_is_better = column in {"best_path_rank"}
