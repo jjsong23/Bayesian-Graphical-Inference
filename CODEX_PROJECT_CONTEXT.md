@@ -6,6 +6,16 @@ Read this file before changing the project. It is the canonical short handoff fo
 
 Construct an auditable Bayesian graph of renal collecting-duct/principal-cell signaling participants, estimate undirected association probabilities between them from selectable evidence streams, and rank plausible signal-propagating paths from a user-selected start node to a target such as Aqp2.
 
+The Version 1 evidence inspector has a deterministic source-provenance layer for
+STRING, OmniPath, BioGRID, and closure evidence. It also has an optional,
+explicitly requested web-search literature interpreter that audits every unique
+node and edge in the currently displayed top-path union in bounded batches,
+then produces a pathway-level synthesis. The API key can be supplied in a
+session-only GUI password field and must never be persisted. This interpreter
+is downstream commentary and must never be treated as a Bayesian evidence
+stream or allowed to modify graph scores. See
+`docs/database_traceback_and_literature_interpreter.md`.
+
 ## Current architecture
 
 ```text
@@ -47,8 +57,12 @@ phosphoprotein revision and therefore extend beyond that seed dynamically.
 - For a probability prior `p`, integration is performed in odds space: `posterior_odds = prior_odds * product(BF_i ** weight_i)`, then converted back to probability.
 - The common continuous-evidence transformation uses a source-specific threshold `T_q`. The GUI permits independent normalization multipliers for each applicable dataset.
 - STRING and STITCH instead use score odds relative to configurable reference scores, not the Gaussian-complement threshold kernel.
+- STRING's default evidence weight is 0.25, so its effective contribution is
+  `BF_STRING^0.25`. This power-likelihood stabilization preserves the raw score
+  and BF while preventing the broad combined stream from dominating edge odds.
+  Do not silently restore weight 1; see `docs/string_evidence_stabilization.md`.
 - The historical phrase "complement of the minimum Bayes factor" refers to converting complementary tail evidence into positive likelihood/Bayes support while preserving a neutral floor. Confirm the exact implementation in `code/bayes_factors.py` before describing equations.
-- Node and edge posteriors are independent Bernoulli updates. Every protein and every edge begins at probability 0.5 by default, and posterior values are not normalized across candidates or pairs. The primary path score is now the geometric mean of constituent edge posteriors; it is a length-normalized ranking statistic, not a calibrated biological probability.
+- Node and edge posteriors are independent Bernoulli updates. Every protein and every edge begins at probability 0.5 by default, and posterior values are not normalized across candidates or pairs. The default primary path score is the geometric mean of constituent edge posteriors. An explicit optional mode also includes internal-node posteriors in the geometric mean; both are length-normalized ranking statistics, not calibrated probabilities that an entire pathway is correct.
 
 ## Node selection streams
 
@@ -105,7 +119,7 @@ The canonical symbol field is `symbol`; duplicate symbols were removed when the 
 
 ## Edge characterization streams
 
-Bayesian edge characterization remains **undirected and symmetric**. An unordered biological pair is represented once in pair tables and mirrored across the edge-probability matrix; self-edges are excluded. Path inference has a separate conservative propagation-direction layer. Versioned ontology-role rules are applied first. Mapped OmniPath mouse core source-target records can uniquely orient a pair only when ontology left it unresolved; they cannot reopen or reverse an ontology-disallowed traversal. A bidirectional OmniPath record leaves an unresolved pair traversable both ways. The allowed traversal keeps the original undirected edge probability, so directionality does not re-estimate edge existence. Activation/inhibition sign remains audit metadata and is not used to score or orient a path.
+Bayesian edge characterization remains **undirected and symmetric**. An unordered biological pair is represented once in pair tables and mirrored across the edge-probability matrix; self-edges are excluded. Path inference has a separate conservative propagation-direction layer. Versioned ontology-role rules are applied first. Supporting KinasePredictor records preserve their explicit `kinase -> substrate` role and can orient a pair that ontology left unresolved. Mapped OmniPath mouse core source-target records can uniquely orient only pairs left unresolved by both earlier layers. A later source cannot reopen or reverse an earlier disallowed traversal; disagreements remain in the audit. Bidirectional evidence leaves an unresolved pair traversable both ways. The allowed traversal keeps the original undirected edge probability and the disallowed reverse is zero in the propagation matrix, so directionality does not re-estimate edge existence. This blocks a linear path from crossing a resolved fork or collider backwards. Activation/inhibition sign remains audit metadata and is not used to score or orient a path.
 
 Selectable streams include:
 
@@ -113,15 +127,43 @@ Selectable streams include:
 - observed-phosphosite-restricted KinasePredictor kinase–protein support;
 - STRING protein association;
 - Human Protein Atlas localization (primary or high-confidence alternative);
+- optional presence-only IMCD basal and dDAVP nucleus/cytoplasm co-detection;
 - OmniPath interactions, collapsed to undirected support;
 - STITCH and curated secondary-messenger associations; and
 - optional scaffold-mediated binary closure.
 
-The optional `penalize_unsupported` edge policy is disabled in the reproducibility default. When enabled, a pair that is eligible for an active source but lacks a non-neutral source record receives `unsupported_bayes_factor` (default 0.5) before the stream weight is applied. Scope is source-specific: both proteins must have the relevant localization profiles for mpkCCD/HPA; KinasePredictor requires a kinase and a protein with an observed scorable phosphosite; STRING requires two mapped proteins; OmniPath considers protein–protein pairs; and STITCH considers curated-messenger-to-mapped-protein pairs. Scaffold closure has no negative-absence rule. The update remains symmetric and is also applied to eligible external-target edges. Database absence is an optional modeling assumption, not proof that a biological interaction is impossible.
+The optional `penalize_unsupported` edge policy is disabled in the reproducibility default. When enabled, a pair that is eligible for an active source but lacks a non-neutral source record receives `unsupported_bayes_factor` (default 0.5) before the stream weight is applied. Scope is source-specific: both proteins must have the relevant localization profiles for mpkCCD/HPA or the condition-specific IMCD presence profile; KinasePredictor requires a kinase and a protein with an observed scorable phosphosite; STRING requires two mapped proteins; OmniPath considers protein–protein pairs; and STITCH considers curated-messenger-to-mapped-protein pairs. Scaffold closure has no negative-absence rule. The update remains symmetric and is also applied to eligible external-target edges. Database absence is an optional modeling assumption, not proof that a biological interaction is impossible.
 
-Every primary edge dataset also has an independent continuous-negative switch. It retains measured low factors below 1 and fills eligible no-record pairs with the numerical floor; out-of-scope pairs stay neutral. It is implemented for internal, incrementally cached, calibration, and external-target edges. Scaffold closure remains positive-only.
+The IMCD basal and dDAVP streams use the same binary rule independently: two proteins support an edge if they are both detected in cytoplasm or both detected in nucleus in that condition. Rat identifiers are harmonized to mouse through Ensembl release 116 orthology. The default support likelihood 0.75 corresponds to BF 1.5 and is editable as `Support L`; there is no Tq because the source score is binary. Both streams are enabled by default and share the dependence group `imcd_compartment_fractionation`; their approximately 98%-dense pair catalogs remain correlated and weakly discriminative, which must be considered when interpreting the resulting posterior.
+
+Every primary edge dataset also has an independent continuous-negative switch. It retains measured low factors below 1 and fills eligible no-record pairs with the numerical floor; pairs whose absence cannot be scored fairly stay neutral. It is implemented for internal, incrementally cached, calibration, and external-target edges. Scaffold closure remains positive-only.
 
 Localization compatibility/adjacency matrices for mpkCCD, HPA, and COMPARTMENTS are stored with the archived data so a scientist can validate every assumed compartment relationship. COMPARTMENTS is used in the dedicated colocalization/AlphaFold candidate-filtering workflow. Experimental PPI tiers assembled from STRING, BioGRID, and IntAct support the prior-knowledge filter used before structural prediction.
+
+The BioGRID 5.0.261 audit is built by
+`code/experimental_ppi/biogrid_ppi_counts.py` and documented in
+`docs/biogrid_ppi_evidence.md`. It separates direct-binding and co-complex
+assays, preserves cross-species and excluded-system records in audits, and
+exports pair-level Parquet and compressed TSV catalogs. It is an active
+positive-only edge stream: direct/contact and co-complex records both receive
+the same explicit expert BF 5, and overlapping tiers are counted once rather
+than multiplied. Native mouse records are used directly; human (including HuRI)
+and rat records use the audited orthology maps. An absent BioGRID record is
+always neutral.
+
+`biogrid_shared_partner_closure` is a separate one-pass derived stream. Two
+protein nodes qualify when each has a reported direct/contact or co-complex
+relationship to the same third protein, even when that partner lies outside
+the selected graph. The default likelihood is 0.90 (BF 1.8). Partner degree and
+support count do not change the factor, inferred edges never become anchors,
+and exact incident anchors plus pair support counts are retained for audit.
+An endpoint pair already reported by BioGRID is excluded from closure, so the
+reported-interaction and closure BFs are never multiplied for the same pair. In
+the current 871-protein universe this sensitivity-oriented rule yields 303,286
+closure pairs, so it must be reported as dense dependent proximity evidence,
+not independent direct-PPI proof. It is enabled by default under the current
+all-edge-evidence profile; its dependence label and separate ledger entry make
+the second BioGRID-derived contribution explicit.
 
 The incremental raw-pair cache is `data/edge_characterization/incremental_edge_cache/edge_pair_cache.sqlite3`. It is a performance cache, not the only scientific record: each run also writes explicit configuration and audit outputs.
 
@@ -141,7 +183,27 @@ Validation output: `results/gui_runs/scaffold_binary_closure_validation_20260804
 
 ## Target extension and path inference
 
-`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` combines the auditable role catalog in `ontology_direction_rules.json` with mapped OmniPath directions and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by geometric mean edge probability. It obtains the exact top paths within each permitted hop count using additive negative-log costs, then merges those exact-hop lists by mean negative-log edge cost. The raw product and total negative-log product remain audit columns, but neither controls the primary rank.
+`code/path_finding/build_target_adjacency_vector.py` characterizes an external mouse protein against all active nodes and appends a symmetric row and column while preserving the existing matrix. `code/path_finding/ontology_directionality.py` combines the auditable role catalog in `ontology_direction_rules.json` with mapped OmniPath directions and emits a partially directed propagation matrix without changing allowed edge probabilities. `code/path_finding/find_ranked_paths.py` ranks loopless paths by geometric mean edge probability by default. Optional node-aware ranking adds the negative-log posterior of each internal node, so the bounded primary score is the geometric mean of `m` edge posteriors and `m-1` internal-node posteriors. Endpoints are excluded. It obtains exact top paths within each permitted hop count, then merges those exact-hop lists by mean negative-log component cost. Raw edge products and edge-only geometric means remain audit columns.
+
+`code/graph_analysis/full_graph_statistics.py` implements the default-enabled descriptive full-graph stage. It thresholds the symmetric posterior matrix into one unique undirected graph and computes selected node measures (degree/strength, clustering, reliability-weighted betweenness/closeness/harmonic centrality, eigenvector centrality/PageRank, coreness, component and articulation/removal impact, community membership) plus global size, density, component, path-length, clustering, assortativity, modularity, and robustness summaries. It never modifies node or edge inference. Weighted shortest-path measures use `-ln(p_edge)` and exact-posterior-one edges receive a tiny positive numerical distance because weighted shortest-path algorithms require positive distances. Above 500 nodes, costly triangle and distance measures use explicitly labeled deterministic approximations; the summary records every sample/landmark count and labels sampled diameter as a lower bound. GUI and saved-session previews retain the top 100 nodes for every computed measure.
+
+The same module also computes node statistics for the exact union of every
+path returned by a pathfinding run. That narrower graph contains only
+transitions present in `ranked_path_edges.tsv`; it never fills in other edges
+from the complete posterior matrix. In addition to the structural measures,
+the export records path participation/internal-use counts, associated path
+scores, mean position, directed in/out degree and strength, and directed
+betweenness. The GUI and session report expose sortable rankings, while the
+complete data are written to `found_path_union_node_statistics.tsv.gz` and
+`found_path_union_statistics_summary.json`.
+
+`code/sensitivity_analysis/analyze_evidence_redundancy.py` screens for stream
+dependency that remains after conditioning each pair on all other evidence.
+It retains neutral rows to avoid collider/Berkson bias, stratifies edge pairs
+by endpoint types, and combines residual log-BF correlation, support phi,
+signed-call mutual information, conditional co-support, and registry
+dependence groups. Flags are review prompts rather than automatic evidence
+exclusions. See `docs/evidence_redundancy_audit.md`.
 
 Path intermediates are controlled by ontology-derived role classes in the GUI. The interface exposes all current role labels and lets the user select which may propagate signals. The Version 1 profile enables receptor, receptor-regulator, ligand, kinase, phosphatase, cyclase, phosphodiesterase, phospholipase, nitric-oxide-synthase, GTPase, GTPase-regulator, kinase/phosphatase-binding, and curated second-messenger classes. Broad second-messenger-binding, generic signaling-process, signaling-regulation, and adaptor/scaffold roles are available but unchecked. Multi-role kinase/scaffold proteins remain eligible whenever they match any selected relay role. The separate strict scaffold override excludes every scaffold-tagged intermediate and should remain optional. Start and target nodes are endpoint exemptions.
 
@@ -188,8 +250,8 @@ The full data/results tree is not stored in GitHub. Restore it from the dated co
 
 ## 2026-09-10 current implementation handoff
 
-The registry currently contains **12 node streams and 8 edge streams**; the
-generic profile enables 4 node and 6 edge streams. The following capabilities
+The registry currently contains **12 node streams and 12 edge streams**; the
+generic profile enables all 12 node streams and 8 edge streams. The following capabilities
 postdate the longer August methods summary and are part of the current code:
 
 1. **Tq-aware end-to-end ablation.**
@@ -210,7 +272,8 @@ postdate the longer August methods summary and are part of the current code:
 2. **Per-hypothesis evidence inspection.**
    A completed GUI run can inspect one node or one unordered edge. The ledger
    shows every registered stream—including disabled ones—its support/refute/
-   neutral/disabled call, assay scope, applied BF, weight, weighted change in
+   neutral/disabled call, retained-record status, negative-evidence scope,
+   applied BF, weight, weighted change in
    log2 odds, normalization control, and missing-data rule. The backend
    reconstructs the posterior from the displayed terms and reports any mismatch
    with the stored posterior. New runs retain a compact log2(BF) distribution
@@ -224,16 +287,19 @@ postdate the longer August methods summary and are part of the current code:
    server must still know the completed job in its in-memory job registry; a
    server restart preserves run files but not inspector access to that old job.
 
-3. **Ontology plus OmniPath directionality.**
+3. **Ontology, KinasePredictor, and OmniPath directionality.**
    Directionality is enabled by default for path search, and OmniPath direction
-   use has a separate enabled-by-default checkbox beneath it. Ontology has
-   precedence. OmniPath adds a disallowed reverse traversal only for an
-   ontology-unresolved, uniquely directed pair. Every run writes the propagation
-   matrix, complete edge audit, rules, class-pair catalog, and mapped OmniPath
-   direction evidence. The validated default run oriented 35,061 of 224,434
-   supported unique edges (15.6%): 33,720 by ontology only, 813 by OmniPath only,
-   and 528 by both. These are traversal constraints, not new edge probabilities
-   and not activation/inhibition calls.
+   use has a separate enabled-by-default checkbox beneath it. The precedence is
+   ontology, then supporting KinasePredictor `kinase -> substrate` records, then
+   OmniPath. Each later layer orients only pairs left unresolved by earlier
+   layers. A uniquely disallowed reverse traversal is set to zero, excluding
+   paths that would cross resolved forks or colliders backwards. Every run
+   writes the propagation matrix, complete edge audit, rules, class-pair
+   catalog, and applied KinasePredictor/OmniPath direction evidence. The earlier
+   validated run oriented 35,061 of 224,434 supported unique edges before the
+   KinasePredictor direction layer was added; do not report that count as current
+   combined coverage. These are traversal constraints, not new edge
+   probabilities and not activation/inhibition calls.
 
 4. **Merged predicted-network view.**
    Path runs write `top_path_network.json` and expose the same payload in the GUI

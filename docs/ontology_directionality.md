@@ -1,4 +1,4 @@
-# Ontology- and OmniPath-based partial directionality
+# Ontology-, KinasePredictor-, and OmniPath-based partial directionality
 
 ## Scope
 
@@ -9,16 +9,41 @@ allowed as `A -> B`, `B -> A`, or both. A uniquely disallowed reverse traversal
 is stored as zero in the propagation matrix; the allowed traversal retains
 exactly `p`.
 
-Two independently auditable sources contribute direction: the ontology-role
-rules below and mapped source-target records from the raw mouse OmniPath core
-post-translational interaction table. OmniPath direction use has its own GUI
-checkbox under the master directionality control and is enabled by default.
+Three independently auditable sources contribute direction: the ontology-role
+rules below, positively supporting kinase-to-substrate records retained from
+KinasePredictor, and mapped source-target records from the raw mouse OmniPath
+core post-translational interaction table. OmniPath direction use has its own
+GUI checkbox under the master directionality control and is enabled by default.
 
 The rules are role heuristics, not causal facts entailed by Gene Ontology. In
 particular, the kinase/phosphatase-binding rule is an explicit project policy
 requested for sensitivity-oriented path inference. It should be revisited when
 directed curated interactions, substrate evidence, and biochemical sign are
 integrated.
+
+## KinasePredictor direction policy
+
+KinasePredictor continues to contribute to the symmetric hypothesis that an
+edge exists. Its site-level records also preserve two biological roles that an
+undirected pair does not: `kinase_node` and `target_protein`. For every enabled
+run, the code recomputes the site Bayes factors using that run's
+KinasePredictor Tq/reference multiplier and negative-evidence mode. Site log
+Bayes factors are summed separately for each ordered kinase-target pair. An
+ordered relationship is direction-supporting only when both its combined Bayes
+factor and the stream's complete undirected pair Bayes factor are greater than
+one.
+
+For a uniquely supported relationship `K -> S`, the propagation matrix retains
+the undirected posterior for `K -> S` and sets `S -> K` to zero. If supported
+records occur in both directions, KinasePredictor alone leaves the pair
+bidirectional. Disabling the KinasePredictor edge stream, or assigning it zero
+weight, also disables this direction source. Static predictions and dynamically
+cached predictions for newly selected nodes use the same rule.
+
+The zero is a traversal constraint, not a new negative Bayes factor and not a
+claim that the physical association is absent. It prevents a linear path from
+crossing a resolved fork (`A <- B -> C`) from A to C or a resolved collider
+(`A -> B <- C`) from A to C by walking against a phosphorylation arrow.
 
 ## Active rule catalog
 
@@ -60,22 +85,23 @@ not change the edge probability or path score.
 
 Every class label on both endpoints is considered. A unique ontology
 orientation is applied first because these are the established project
-constraints. OmniPath then uniquely orients only pairs that ontology left
-unresolved. Enabling OmniPath can therefore add disallowed reverse traversals,
-but it cannot reopen or reverse an ontology-disallowed traversal.
+constraints. KinasePredictor then uniquely orients pairs that ontology left
+unresolved. OmniPath finally uniquely orients only pairs left unresolved by
+both earlier layers. Each later source can therefore add a disallowed reverse
+traversal, but it cannot reopen or reverse an earlier restriction.
 
-If OmniPath uniquely agrees with an ontology orientation, that agreement is
-recorded. If it uniquely disagrees, the ontology orientation remains in force
-and the disagreement is explicitly audited. Opposing ontology rules remain
-unresolved unless a unique OmniPath direction resolves them. Bidirectional
-OmniPath records do not orient an otherwise unresolved pair. If neither source
+Agreements and disagreements among ontology, KinasePredictor, and OmniPath are
+recorded. If a later source uniquely disagrees, the earlier orientation remains
+in force and the disagreement is explicitly audited. Opposing ontology rules
+remain unresolved unless a unique later direction source resolves them.
+Bidirectional records do not orient an otherwise unresolved pair. If no source
 supplies direction, the result is `unresolved_no_direction_evidence`; if
 direction evidence remains bidirectional, it is
 `unresolved_conflicting_directions`. Both traversals remain available in those
 unresolved cases.
 
 Every run writes the exact JSON rules, a complete table of all unordered class
-pairs, the mapped OmniPath direction table, a pair-level combined
-directionality audit, and the partially directed propagation matrix. This makes
-the policy independently reviewable and allows rules to be added without
-changing Bayesian edge probabilities.
+pairs, the applied KinasePredictor direction table, the mapped OmniPath
+direction table, a pair-level combined directionality audit, and the partially
+directed propagation matrix. This makes the policy independently reviewable
+and allows rules to be added without changing Bayesian edge probabilities.

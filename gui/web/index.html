@@ -85,7 +85,7 @@
             </label>
             <label>
               <span>Selection cutoff</span>
-              <input id="node-cutoff" type="number" min="0" max="1" step="0.01" />
+                  <input id="node-cutoff" type="number" min="0" max="1" step="any" inputmode="decimal" />
             </label>
           </div>
           <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The objective default assigns prior probability 0.50 to every protein; weighted Bayes factors update its odds without normalization across proteins. Two negative-evidence mechanisms are available. The stage-wide fixed rule assigns one configured BF below 1 to each eligible nondetection. Alternatively, “Allow continuous negative evidence” can be enabled on individual datasets: it supersedes the fixed rule for that dataset, removes the historical 0.5 likelihood floor, scores weak observed values below BF=1, and represents eligible nondetections as x=0 (limited by the continuous-mode BF floor). Tq stays the positive empirical scale; zeros are evaluated against it rather than used to create a potentially zero Tq. Out-of-scope nodes remain neutral—for example, non-kinases in the kinase-activity stream. A protein is selected when its posterior is strictly above the selection cutoff. Tq × scales each dataset's stored empirical threshold. Newly selected candidates beyond the validated 891-node seed are inserted after their missing unordered pairs are characterized and cached. Kinase activity and phosphoprotein response share the PKA-KO phosphoproteomic source. The CCD/OMCD/IMCD streams are separately selectable, but the three streams within each assay share one experimental source; all six collecting-duct streams are enabled in the Version 1 profile.</p>
@@ -119,15 +119,52 @@
             </label>
             <label>
               <span>Output cutoff</span>
-              <input id="edge-cutoff" type="number" min="0" max="1" step="0.01" />
+                  <input id="edge-cutoff" type="number" min="0" max="1" step="any" inputmode="decimal" />
             </label>
           </div>
           <p class="scientific-note">Localization and motif streams scale their node- or site-specific Tq values. STRING and STITCH use Ref × because their normalizations use reference odds. The stage-wide fixed negative-evidence rule applies one selected BF below 1 when a source could assess both endpoints but has no relationship. The per-dataset continuous alternative supersedes that rule for its dataset, retains low measured similarities, motif scores, curation effort, STRING scores, and STITCH scores as BF&lt;1, and treats eligible no-record pairs as x=0 at the numerical floor. Missing assay coverage stays neutral. Scaffold closure remains positive-only because failure to share a strong scaffold is not an independent quantitative observation. Cached raw evidence is rescored when controls change.</p>
         </section>
 
-        <section class="stage" aria-labelledby="path-title">
+        <section class="stage" aria-labelledby="graph-statistics-title">
           <div class="stage-heading path-heading">
             <span class="stage-number">03</span>
+            <div>
+              <h2 id="graph-statistics-title">Describe the full graph</h2>
+              <p>Compute network statistics without drawing the complete graph.</p>
+            </div>
+            <label class="switch" title="Enable full-graph statistics">
+              <input id="graph-statistics-enabled" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+          <div id="graph-statistics-controls">
+            <div class="parameter-grid">
+              <label>
+                <span>Graph edge cutoff</span>
+                  <input id="graph-statistics-cutoff" type="number" min="0" max="0.999999" step="any" inputmode="decimal" />
+              </label>
+            </div>
+            <fieldset class="ontology-selector">
+              <legend>Statistics to compute</legend>
+              <div class="ontology-grid graph-statistics-grid">
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="degree_strength" /><span><strong>Degree + strength</strong><small>Neighbors and summed edge posterior</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="clustering" /><span><strong>Clustering</strong><small>Local triangles and weighted clustering</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="betweenness" /><span><strong>Betweenness</strong><small>Bridges on reliable shortest routes</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="closeness_harmonic" /><span><strong>Closeness + harmonic</strong><small>Proximity to the rest of the graph</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="eigenvector_pagerank" /><span><strong>Eigenvector + PageRank</strong><small>Connection to other central nodes</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="coreness" /><span><strong>Coreness</strong><small>Membership in densely connected cores</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="connectivity" /><span><strong>Connectivity impact</strong><small>Components, articulation, removal impact</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="communities" /><span><strong>Communities</strong><small>Probability-weighted modules</small></span></label>
+                <label class="ontology-option"><input class="graph-statistic" type="checkbox" value="robustness" /><span><strong>Robustness</strong><small>Random versus degree-targeted removal</small></span></label>
+              </div>
+            </fieldset>
+            <p class="scientific-note">The full graph is an undirected unique-pair graph containing every selected node and every edge whose posterior is strictly above this cutoff. Edge posterior remains a weight; weighted shortest-path statistics use reliability distance −ln(p). These are descriptive features of the inferred graph, not additional Bayesian evidence and not proof of causality.</p>
+          </div>
+        </section>
+
+        <section class="stage" aria-labelledby="path-title">
+          <div class="stage-heading path-heading">
+            <span class="stage-number">04</span>
             <div>
               <h2 id="path-title">Find paths</h2>
               <p>Extend the graph to a target and rank supported routes.</p>
@@ -149,7 +186,7 @@
               </label>
               <label>
                 <span>Top paths</span>
-                <input id="path-top-k" type="number" min="1" max="500" step="1" />
+                  <input id="path-top-k" type="number" min="1" max="2000" step="1" />
               </label>
               <label>
                 <span>Maximum hops</span>
@@ -157,13 +194,13 @@
               </label>
               <label>
                 <span>Path edge cutoff</span>
-                <input id="path-cutoff" type="number" min="0" max="0.999999" step="0.01" />
+                  <input id="path-cutoff" type="number" min="0" max="0.999999" step="any" inputmode="decimal" />
               </label>
             </div>
             <div class="path-rules">
               <label class="check-field">
                 <input id="ontology-directionality" type="checkbox" />
-                <span>Apply conservative directionality</span>
+                <span>Apply ontology + KinasePredictor directionality</span>
               </label>
               <label class="check-field">
                 <input id="omnipath-directionality" type="checkbox" />
@@ -177,6 +214,10 @@
                 <input id="exclude-multirole-scaffolds" type="checkbox" />
                 <span>Also exclude multi-role kinase/scaffolds</span>
               </label>
+              <label class="check-field">
+                <input id="path-include-node-probabilities" type="checkbox" />
+                <span>Include internal-node probabilities in path score</span>
+              </label>
             </div>
             <fieldset id="ontology-selector" class="ontology-selector">
               <legend>Allowed intermediate ontology roles</legend>
@@ -187,13 +228,13 @@
               <p>Select which node annotations qualify a protein or molecule to relay a path.</p>
               <div id="path-ontology-classes" class="ontology-grid"></div>
             </fieldset>
-            <p class="scientific-note">The directionality layer applies the established ontology-role restrictions first. OmniPath source→target records can add a unique direction only where ontology left a pair unresolved; they cannot reopen or reverse an ontology-disallowed traversal. Bidirectional OmniPath evidence leaves an otherwise unresolved pair traversable both ways, and source disagreements are audited. This changes path traversal, not the Bayesian edge probability or activation/inhibition sign. The Version 1 relay default includes receptor, receptor-regulator, ligand, catalytic, GTPase-regulator, kinase/phosphatase-binding, and curated second-messenger roles. Broad second-messenger-binding, generic signaling-process, signaling-regulation, and adaptor/scaffold roles are available but off by default. Endpoints are always exempt. Up to 500 paths can be requested.</p>
+            <p class="scientific-note">The default primary score is the geometric mean of edge posteriors. The optional node-aware score uses the geometric mean of every edge posterior and every internal-node posterior; fixed query endpoints are excluded, and curated/unscored molecules contribute a neutral multiplicative value of 1 rather than being treated as negative evidence. The directionality layer applies established ontology-role restrictions first. For edges positively supported by the selected KinasePredictor stream, the predicted kinase→substrate relationship is applied next. OmniPath source→target records can add a unique direction only where both earlier layers left a pair unresolved. Later sources cannot reopen or reverse an earlier disallowed traversal; disagreements and bidirectional records are audited. A disallowed reverse traversal is set to zero for path search, so a proposed linear route cannot pass through a fork or collider by walking against an established arrow. This changes path traversal, not the Bayesian edge probability or activation/inhibition sign. Endpoints are always exempt. Up to 2,000 exact ranked paths can be requested.</p>
           </div>
         </section>
 
         <section class="stage" aria-labelledby="temporal-title">
           <div class="stage-heading path-heading">
-            <span class="stage-number">04</span>
+            <span class="stage-number">05</span>
             <div>
               <h2 id="temporal-title">Validate temporal order</h2>
               <p>Compare proposed path order with the dDAVP phosphoproteomic time course.</p>
@@ -343,9 +384,61 @@
             </div>
             <p class="distribution-note">Each bar is a fixed-width posterior-probability bin. Bar height uses log<sub>10</sub>(count + 1) so large neutral-prior peaks do not obscure smaller supported tails. The dashed orange line marks the configured output cutoff.</p>
           </section>
+          <section id="full-graph-statistics-result" class="full-graph-statistics-result hidden" aria-labelledby="full-graph-statistics-result-title">
+            <div class="table-heading">
+              <div>
+                <p class="eyebrow">Complete selected graph</p>
+                <h3 id="full-graph-statistics-result-title">Network statistics</h3>
+              </div>
+              <span id="full-graph-statistics-definition">Thresholded undirected graph</span>
+            </div>
+            <dl id="full-graph-summary" class="full-graph-summary"></dl>
+            <div class="table-heading graph-ranking-heading">
+              <h4>Top nodes by</h4>
+              <select id="full-graph-metric" aria-label="Node statistic to rank"></select>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Rank</th><th>Node</th><th>Name</th><th>Value</th></tr></thead>
+                <tbody id="full-graph-node-rankings"></tbody>
+              </table>
+            </div>
+            <div>
+              <h4>All node measures at a glance</h4>
+              <p class="muted">The ten leading nodes for every computed measure. Use the selector above for the full top-100 ranking.</p>
+              <div id="full-graph-metric-panels" class="metric-overview-grid"></div>
+            </div>
+            <p class="scientific-note">All node-level values are saved in <strong>full_graph_node_statistics.tsv.gz</strong>. Rankings describe this thresholded inferred graph and can change with evidence settings or the edge cutoff. Centrality is a structural descriptor, not proof that a node is causal or essential.</p>
+          </section>
+          <section id="found-path-statistics-result" class="full-graph-statistics-result hidden" aria-labelledby="found-path-statistics-result-title">
+            <div class="table-heading">
+              <div>
+                <p class="eyebrow">Exact union of all returned paths</p>
+                <h3 id="found-path-statistics-result-title">Found-path node statistics</h3>
+              </div>
+              <span id="found-path-statistics-definition">Returned path edges only</span>
+            </div>
+            <dl id="found-path-summary" class="full-graph-summary"></dl>
+            <div class="table-heading graph-ranking-heading">
+              <h4>Top path-union nodes by</h4>
+              <select id="found-path-metric" aria-label="Returned-path node statistic to rank"></select>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Rank</th><th>Node</th><th>Name</th><th>Value</th></tr></thead>
+                <tbody id="found-path-node-rankings"></tbody>
+              </table>
+            </div>
+            <div>
+              <h4>All returned-path measures at a glance</h4>
+              <p class="muted">The ten leading nodes for every computed measure. Use the selector above for the full top-100 ranking.</p>
+              <div id="found-path-metric-panels" class="metric-overview-grid"></div>
+            </div>
+            <p class="scientific-note">This graph contains only transitions that occur in the paths returned by the current search. It does not add other posterior-supported edges between those nodes. “All” therefore means all returned paths and remains limited by Top paths, maximum hops, edge cutoff, and directionality settings. Complete node-level values are saved in <strong>found_path_union_node_statistics.tsv.gz</strong>.</p>
+          </section>
           <section id="directionality-result" class="directionality-result hidden" aria-labelledby="directionality-result-title">
             <div>
-              <p class="eyebrow">Ontology + OmniPath directionality</p>
+              <p class="eyebrow">Ontology + KinasePredictor + OmniPath directionality</p>
               <h3 id="directionality-result-title"><strong id="oriented-edge-count">—</strong> supported edges uniquely oriented</h3>
               <p id="directionality-result-detail"></p>
             </div>
@@ -371,7 +464,7 @@
                 <button id="path-network-relayout" type="button" class="secondary-button">Re-layout</button>
               </div>
             </div>
-            <p class="path-network-note">Nodes and edges use separate monotone posterior scales because their probability ranges differ. Within each mark type, the visible minimum is lightest and the visible maximum is darkest. Exact probabilities remain available by selecting a mark.</p>
+            <p class="path-network-note">Nodes and edges use separate monotone posterior scales because their probability ranges differ. Within each mark type, the visible minimum is lightest and the visible maximum is darkest. Tier lanes and curved edge routing separate relationships that would otherwise overlap. Exact probabilities remain available by selecting a mark.</p>
             <div class="path-network-visual">
               <div class="path-network-canvas">
                 <svg id="path-network-svg" role="img" aria-labelledby="path-network-title path-network-description">
@@ -413,11 +506,57 @@
             </div>
             <p id="path-network-detail" class="path-network-detail" aria-live="polite"></p>
           </section>
+          <section id="network-literature-interpreter" class="literature-interpreter network-literature-interpreter" aria-labelledby="literature-interpreter-title">
+            <div class="literature-interpreter-heading">
+              <div>
+                <span class="eyebrow">Optional whole-network web research</span>
+                <h3 id="literature-interpreter-title">Audit every node and edge in the displayed pathway network</h3>
+              </div>
+              <span id="literature-interpreter-availability" class="trace-status">Session key required</span>
+            </div>
+            <p class="literature-intro">The reasoning model researches every unique node and relationship in the currently displayed top-path union, compares each with the requested biological context, and synthesizes the network as a whole. It receives frozen evidence ledgers and database tracebacks but cannot change Bayes factors, posteriors, graph membership, directions, or path ranks.</p>
+            <div class="literature-security-box">
+              <label for="literature-api-key"><span>OpenAI / Azure API key</span><input id="literature-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Session only — never saved" /></label>
+              <button id="literature-key-visibility" type="button" class="secondary-button" aria-pressed="false">Show key</button>
+              <p>The key stays in this browser field, is sent once in a request header, and is held only in worker memory. It is excluded from configuration, run files, logs, caches, Git, and exported HTML. Leave blank to use the server's <code>OPENAI_API_KEY</code>, if configured.</p>
+            </div>
+            <div class="literature-context-grid">
+              <label class="literature-endpoint-field"><span>API base URL</span><input id="literature-api-base-url" type="url" autocomplete="off" spellcheck="false" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1 or your Azure /openai/v1 URL" /></label>
+              <label><span>Cell type / tissue context</span><input id="literature-cell-type" type="text" value="collecting duct principal cells across CCD, OMCD, and IMCD" /></label>
+              <label><span>Signaling purpose</span><input id="literature-purpose" type="text" value="vasopressin-regulated AQP2 signaling and water transport" /></label>
+              <label><span>Model</span><input id="literature-model" type="text" value="gpt-5.5" /></label>
+              <label><span>Reasoning</span><select id="literature-reasoning"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option><option value="xhigh">Extra high</option></select></label>
+            </div>
+            <p id="literature-endpoint-preview" class="literature-endpoint-preview">Requests will be sent to the endpoint shown above.</p>
+            <p class="scientific-note">For Azure OpenAI, paste the deployment base URL ending in <code>/openai/v1</code> above and enter the Azure deployment name—not the underlying model family—in the Model field. The application appends <code>/responses</code>.</p>
+            <div class="network-literature-scope">
+              <div><span>Displayed paths</span><strong id="literature-path-count">—</strong></div>
+              <div><span>Unique nodes</span><strong id="literature-node-count">—</strong></div>
+              <div><span>Unique edges</span><strong id="literature-edge-count">—</strong></div>
+              <div><span>Estimated search batches</span><strong id="literature-batch-count">—</strong></div>
+            </div>
+            <div class="literature-actions">
+              <button id="research-pathway-network" type="button" class="primary-button" disabled>Research the displayed network</button>
+              <button id="cancel-network-literature" type="button" class="secondary-button hidden">Cancel research</button>
+              <label class="inline-check"><input id="literature-force-refresh" type="checkbox" /> Ignore cached audit</label>
+            </div>
+            <p class="scientific-note">This can make multiple paid API calls: hypotheses are researched in batches of six, followed by one network synthesis call. The exact node, edge, and estimated batch counts are shown above before submission.</p>
+            <div id="literature-progress" class="literature-progress hidden"><div><i id="literature-progress-bar"></i></div><span id="literature-progress-label">Queued</span></div>
+            <p id="literature-status" class="muted">Complete a path-finding run to define the network scope.</p>
+            <div id="literature-result" class="literature-result hidden">
+              <div class="literature-network-summary">
+                <div><span class="eyebrow">Pathway-level synthesis</span><h4 id="literature-network-takeaway">—</h4></div>
+                <span id="literature-network-model" class="trace-status">—</span>
+              </div>
+              <div id="literature-classification-counts" class="literature-classification-counts"></div>
+              <p id="literature-item-count" class="literature-selection-instruction">—</p>
+            </div>
+          </section>
           <section id="evidence-inspector" class="evidence-inspector" aria-labelledby="evidence-inspector-title">
             <div class="table-heading evidence-inspector-heading">
               <div>
                 <p class="eyebrow">Evidence transparency</p>
-                <h3 id="evidence-inspector-title">Inspect one hypothesis</h3>
+                <h3 id="evidence-inspector-title">Interpret one node or edge</h3>
               </div>
               <span>Exact run settings</span>
             </div>
@@ -449,12 +588,45 @@
                 <div><span>Decision</span><strong id="evidence-summary-decision">—</strong></div>
               </div>
               <div id="evidence-reconciliation" class="evidence-reconciliation"></div>
+              <section id="evidence-literature-interpretation" class="selected-literature-panel hidden" aria-labelledby="selected-literature-title">
+                <div class="selected-literature-heading">
+                  <div>
+                    <span class="eyebrow">Literature interpretation</span>
+                    <h4 id="selected-literature-title">Selected node or edge</h4>
+                  </div>
+                  <span id="selected-literature-model" class="trace-status">—</span>
+                </div>
+                <div class="selected-literature-summary">
+                  <div><span>Classification</span><strong id="selected-literature-classification">—</strong></div>
+                  <div><span>Confidence</span><strong id="selected-literature-confidence">—</strong></div>
+                  <div><span>Biological context</span><strong id="selected-literature-context">—</strong></div>
+                </div>
+                <p id="selected-literature-takeaway" class="selected-literature-takeaway">—</p>
+                <div class="selected-literature-table-wrap">
+                  <table class="selected-literature-table">
+                    <thead><tr><th>Interpretive dimension</th><th>Assessment</th></tr></thead>
+                    <tbody id="selected-literature-assessment-body"></tbody>
+                  </table>
+                </div>
+                <div id="selected-literature-claims" class="selected-literature-claims hidden">
+                  <h5>Literature findings across contexts</h5>
+                  <div class="selected-literature-table-wrap">
+                    <table class="selected-literature-table">
+                      <thead><tr><th>Scope</th><th>Biological context</th><th>Support</th><th>Finding</th><th>Sources</th></tr></thead>
+                      <tbody id="selected-literature-claims-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div id="selected-literature-sources" class="trace-links"></div>
+                <p class="scientific-note">This literature summary is downstream commentary. It never changes the Bayes factors, posterior, graph membership, directionality, or path rank. “No report found” is not proof that no report exists.</p>
+              </section>
               <div class="evidence-ledger-wrap">
                 <table class="evidence-ledger">
-                  <thead><tr><th>Evidence stream</th><th>Call</th><th>Observed / scope</th><th>BF</th><th>Weight</th><th>Δ log₂ odds</th><th>BF percentile</th></tr></thead>
+                  <thead><tr><th>Evidence stream</th><th>Call</th><th>Record / negative scope</th><th>BF</th><th>Weight</th><th>Δ log₂ odds</th><th>BF percentile</th></tr></thead>
                   <tbody id="evidence-ledger-body"></tbody>
                 </table>
               </div>
+              <p class="scientific-note"><strong>Record versus negative scope:</strong> a retained record supplies direct quantitative or curated evidence for this hypothesis. Negative scope asks a different question: if no record had been found, was the source capable of evaluating the hypothesis well enough to lower its odds? A positive record can therefore support a hypothesis even when absence would not have been scorable.</p>
               <p id="evidence-stream-detail" class="evidence-stream-detail">Select a stream row for its normalization, model weight, and score-distribution position.</p>
               <div id="evidence-stream-distribution" class="evidence-stream-distribution hidden">
                 <div class="evidence-stream-distribution-heading">
@@ -464,9 +636,24 @@
                 <svg id="evidence-stream-distribution-chart" viewBox="0 0 720 164" role="img" aria-label="Distribution of applied Bayes factors for the selected evidence stream"></svg>
                 <p id="evidence-stream-distribution-summary"></p>
               </div>
+              <div id="database-trace" class="database-trace hidden">
+                <div class="database-trace-heading">
+                  <div>
+                    <span class="eyebrow">Source provenance</span>
+                    <h4 id="database-trace-title">Database-native traceback</h4>
+                  </div>
+                  <span id="database-trace-status" class="trace-status">—</span>
+                </div>
+                <p id="database-trace-summary"></p>
+                <div id="database-trace-derivation" class="trace-derivation"></div>
+                <div id="database-trace-factors" class="trace-factors"></div>
+                <div id="database-trace-records" class="trace-records"></div>
+                <div id="database-trace-links" class="trace-links"></div>
+                <p class="scientific-note">The traceback displays records from the frozen database files used by this run. It explains the source score but never changes the stored Bayes factor or posterior.</p>
+              </div>
             </div>
           </section>
-          <div class="table-heading"><h3>Most likely paths</h3><span>Geometric-mean edge score</span></div>
+          <div class="table-heading"><h3>Most likely paths</h3><span id="path-score-label">Geometric-mean edge score</span></div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Rank</th><th>Route</th><th>Hops</th><th>Score</th><th class="temporal-column hidden">Temporal nodes</th><th class="temporal-column hidden">Temporal τ [95% interval]</th></tr></thead>
@@ -498,6 +685,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20260917-separate-node-edge-scales" defer></script>
+    <script src="/app.js?v=20260925-azure-openai-endpoint" defer></script>
   </body>
 </html>

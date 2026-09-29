@@ -5,6 +5,7 @@ openpyxl
 Pillow
 networkx
 obonet
+pyarrow
 
 # Optional: only needed to launch the archived original KinasePredictor GUI.
 # PyQt5

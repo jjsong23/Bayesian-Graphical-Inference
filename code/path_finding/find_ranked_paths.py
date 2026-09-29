@@ -3,12 +3,14 @@
 
 An external mouse protein target is automatically added with
 ``build_target_adjacency_vector``. Edges at the neutral 0.5 baseline are
-excluded by default. Ontology rules and mapped OmniPath source-target records
+excluded by default. Ontology rules, supporting KinasePredictor
+kinase-to-substrate records, and mapped OmniPath source-target records
 conservatively remove uniquely disallowed reverse traversals. Retained paths
-are ranked by their geometric mean edge probability. This asks for the
-strongest typical edge without automatically preferring a route solely because
-it contains fewer multiplicative terms. Raw probability products and their
-negative logarithms remain audit outputs.
+are ranked by their geometric mean edge probability by default. An explicit
+option can include every internal node posterior in the same geometric mean.
+The fixed query endpoints are excluded from that node term, which also avoids
+penalizing an external target with no node-selection measurement. Raw products
+and negative logarithms remain audit outputs.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from build_target_adjacency_vector import (
 from ontology_directionality import (
     RULE_CATALOG_PATH,
     apply_ontology_directionality,
+    build_kinase_predictor_direction_evidence,
     build_omnipath_direction_evidence,
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
@@ -57,6 +60,10 @@ OMNIPATH_DIRECTION_RAW_RELATIVE = Path(
     "data/edge_characterization/omnipath/2026-07-30/raw/"
     "omnipath_mouse_core_post_translational.tsv"
 )
+KINASE_PREDICTIONS_RELATIVE = Path(
+    "results/edge_characterization/localization_kinase_predictor/"
+    "observed_phosphosite_top10_predictions.tsv.gz"
+)
 
 # These aliases are intentionally narrow. They make the motivating PKA example
 # convenient without attempting an unreliable general natural-language gene
@@ -75,6 +82,56 @@ CURATED_START_ALIASES = {
     "pka beta": "Prkacb",
     "pkacb": "Prkacb",
 }
+
+
+def load_supported_kinase_directions(
+    project: Path,
+    symbols: list[str],
+    target_symbol: str,
+) -> pd.DataFrame:
+    """Load positive KinasePredictor records for standalone path searches."""
+    base = pd.read_csv(project / KINASE_PREDICTIONS_RELATIVE, sep="\t")
+    used = base["used_for_undirected_edge"]
+    if used.dtype != bool:
+        used = used.astype(str).str.casefold().eq("true")
+    base = base.loc[used].copy()
+    base["site_bayes_factor"] = pd.to_numeric(
+        base["site_bayes_factor"], errors="coerce"
+    )
+    base = base.loc[base["site_bayes_factor"].gt(1.0)].rename(
+        columns={"target_site": "site"}
+    )
+    tables = [
+        base.reindex(
+            columns=["kinase_node", "target_protein", "site", "predictor_label"]
+        )
+    ]
+    extension_path = (
+        project
+        / "results/path_finding/target_extensions"
+        / safe_name(target_symbol)
+        / "target_kinase_predictions.tsv"
+    )
+    if extension_path.is_file():
+        extension = pd.read_csv(extension_path, sep="\t")
+        extension["site_bayes_factor"] = pd.to_numeric(
+            extension["site_bayes_factor"], errors="coerce"
+        )
+        extension = extension.loc[extension["site_bayes_factor"].gt(1.0)].rename(
+            columns={"target_symbol": "target_protein", "target_site": "site"}
+        )
+        tables.append(
+            extension.reindex(
+                columns=["kinase_node", "target_protein", "site", "predictor_label"]
+            )
+        )
+    records = pd.concat(tables, ignore_index=True)
+    selected = set(symbols)
+    records = records.loc[
+        records["kinase_node"].astype(str).isin(selected)
+        & records["target_protein"].astype(str).isin(selected)
+    ]
+    return build_kinase_predictor_direction_evidence(records, symbols)
 
 DEFAULT_SIGNAL_RELAY_CLASSES = (
     "receptor",
@@ -143,6 +200,14 @@ def parse_args() -> argparse.Namespace:
         help="Retain edges strictly above this value (default: 0.5).",
     )
     parser.add_argument(
+        "--include-node-probabilities",
+        action="store_true",
+        help=(
+            "Rank by the geometric mean of edge posteriors and internal-node "
+            "posteriors instead of edge posteriors alone."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -174,12 +239,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-ontology-directionality",
         action="store_true",
-        help="Retain both traversals for every edge and reproduce undirected path search.",
+        help=(
+            "Disable ontology, KinasePredictor, and OmniPath traversal constraints "
+            "and reproduce undirected path search."
+        ),
     )
     parser.add_argument(
         "--disable-omnipath-directionality",
         action="store_true",
-        help="Use ontology rules but ignore mapped OmniPath source-target directions.",
+        help=(
+            "Use ontology and KinasePredictor directions but ignore mapped OmniPath "
+            "source-target directions."
+        ),
     )
     return parser.parse_args()
 
@@ -512,11 +583,27 @@ def shortest_hop_limited_path(
     return None
 
 
-def path_cost(nodes: tuple[int, ...], probabilities: np.ndarray) -> float:
-    """Return the additive negative-log product retained for audit/search."""
-    return float(
-        sum(-math.log(float(probabilities[a, b])) for a, b in zip(nodes, nodes[1:]))
+def path_cost(
+    nodes: tuple[int, ...],
+    probabilities: np.ndarray,
+    node_probabilities: np.ndarray | None = None,
+) -> float:
+    """Return the additive negative-log product used for path ranking.
+
+    When node probabilities are supplied, each internal node contributes once.
+    The two fixed query endpoints never contribute.
+    """
+
+    cost = sum(
+        -math.log(float(probabilities[a, b]))
+        for a, b in zip(nodes, nodes[1:])
     )
+    if node_probabilities is not None:
+        cost += sum(
+            -math.log(max(float(node_probabilities[node]), np.finfo(float).tiny))
+            for node in nodes[1:-1]
+        )
+    return float(cost)
 
 
 def _exact_hop_lower_bounds(
@@ -524,6 +611,7 @@ def _exact_hop_lower_bounds(
     target: int,
     maximum_hops: int,
     permitted_nodes: frozenset[int] | None,
+    node_probabilities: np.ndarray | None = None,
 ) -> list[np.ndarray]:
     """Return admissible exact-hop costs that focus the simple-path search.
 
@@ -547,7 +635,17 @@ def _exact_hop_lower_bounds(
                     continue
                 suffix = float(previous[neighbor])
                 if math.isfinite(suffix):
-                    best = min(best, edge_cost + suffix)
+                    node_cost = (
+                        -math.log(
+                            max(
+                                float(node_probabilities[neighbor]),
+                                np.finfo(float).tiny,
+                            )
+                        )
+                        if node_probabilities is not None and neighbor != target
+                        else 0.0
+                    )
+                    best = min(best, edge_cost + node_cost + suffix)
             current[node] = best
     return bounds
 
@@ -562,6 +660,7 @@ def shortest_exact_hop_simple_path(
     banned_nodes: frozenset[int] = frozenset(),
     banned_transitions: frozenset[tuple[int, int]] = frozenset(),
     permitted_nodes: frozenset[int] | None = None,
+    node_probabilities: np.ndarray | None = None,
 ) -> SearchPath | None:
     """Find the least negative-log-cost simple path with exactly N edges."""
 
@@ -614,7 +713,14 @@ def shortest_exact_hop_simple_path(
             if not math.isfinite(suffix_bound):
                 continue
             next_path = path + (neighbor,)
-            next_cost = cost + edge_cost
+            node_cost = (
+                -math.log(
+                    max(float(node_probabilities[neighbor]), np.finfo(float).tiny)
+                )
+                if node_probabilities is not None and neighbor != target
+                else 0.0
+            )
+            next_cost = cost + edge_cost + node_cost
             next_state = (neighbor, next_hops, frozenset(next_path))
             if next_cost + 1e-15 >= best_state_cost.get(next_state, math.inf):
                 continue
@@ -640,6 +746,7 @@ def k_shortest_exact_hop_simple_paths(
     top_k: int,
     exact_hops: int,
     permitted_nodes: frozenset[int] | None = None,
+    node_probabilities: np.ndarray | None = None,
 ) -> list[SearchPath]:
     """Return the K strongest simple paths having exactly ``exact_hops`` edges."""
 
@@ -648,6 +755,7 @@ def k_shortest_exact_hop_simple_paths(
         target,
         exact_hops,
         permitted_nodes,
+        node_probabilities,
     )
     first = shortest_exact_hop_simple_path(
         adjacency,
@@ -656,6 +764,7 @@ def k_shortest_exact_hop_simple_paths(
         exact_hops,
         lower_bounds,
         permitted_nodes=permitted_nodes,
+        node_probabilities=node_probabilities,
     )
     if first is None:
         return []
@@ -683,6 +792,7 @@ def k_shortest_exact_hop_simple_paths(
                 banned_nodes=frozenset(root[:-1]),
                 banned_transitions=frozenset(banned_transitions),
                 permitted_nodes=permitted_nodes,
+                node_probabilities=node_probabilities,
             )
             if spur is None:
                 continue
@@ -694,7 +804,11 @@ def k_shortest_exact_hop_simple_paths(
                 or total_nodes in candidate_nodes
             ):
                 continue
-            total_cost = path_cost(total_nodes, probabilities)
+            total_cost = path_cost(
+                total_nodes,
+                probabilities,
+                node_probabilities,
+            )
             heapq.heappush(candidate_heap, (total_cost, total_nodes))
             candidate_nodes.add(total_nodes)
 
@@ -719,14 +833,14 @@ def k_shortest_simple_paths(
     top_k: int,
     max_hops: int,
     permitted_nodes: frozenset[int] | None = None,
+    node_probabilities: np.ndarray | None = None,
 ) -> list[SearchPath]:
-    """Return exact top-K paths by descending geometric mean edge probability.
+    """Return exact top-K paths by descending geometric-mean primary score.
 
-    Within one hop count, product and geometric-mean order are identical. We
-    therefore find up to K exact-hop paths for every allowed length, merge the
-    candidates, and rank the union by mean negative-log edge cost. A path below
-    rank K within its own length cannot enter the global top K, so this merge is
-    exact rather than a beam-search approximation.
+    When node probabilities are present, every internal node adds one term.
+    Within one hop count the number of terms is fixed, so product and
+    geometric-mean order remain identical. We merge exact per-length candidates
+    rather than using a beam-search approximation.
     """
 
     candidates: list[SearchPath] = []
@@ -740,11 +854,16 @@ def k_shortest_simple_paths(
                 top_k=top_k,
                 exact_hops=exact_hops,
                 permitted_nodes=permitted_nodes,
+                node_probabilities=node_probabilities,
             )
         )
     candidates.sort(
         key=lambda path: (
-            path.cost / (len(path.nodes) - 1),
+            path.cost
+            / (
+                (len(path.nodes) - 1)
+                + ((len(path.nodes) - 2) if node_probabilities is not None else 0)
+            ),
             path.cost,
             path.nodes,
         )
@@ -775,6 +894,7 @@ def serialize_paths(
     ranked: Iterable[SearchPath],
     matrix: pd.DataFrame,
     metadata: pd.DataFrame,
+    node_probabilities: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     symbols = matrix.index.astype(str).tolist()
     values = matrix.to_numpy(dtype=float)
@@ -786,10 +906,26 @@ def serialize_paths(
         edge_probabilities = [
             float(values[a, b]) for a, b in zip(found.nodes, found.nodes[1:])
         ]
-        probability_product = math.exp(-found.cost)
         hops = len(found.nodes) - 1
-        mean_negative_log_probability = found.cost / hops if hops else 0.0
+        probability_product = math.prod(edge_probabilities)
+        edge_negative_log_probability = -math.log(probability_product)
+        mean_negative_log_probability = (
+            edge_negative_log_probability / hops if hops else 0.0
+        )
         geometric_mean_probability = math.exp(-mean_negative_log_probability)
+        internal_node_probabilities = (
+            [float(node_probabilities[index]) for index in found.nodes[1:-1]]
+            if node_probabilities is not None
+            else []
+        )
+        node_probability_product = math.prod(internal_node_probabilities)
+        combined_probability_product = probability_product * node_probability_product
+        primary_component_count = hops + len(internal_node_probabilities)
+        primary_score = (
+            combined_probability_product ** (1.0 / primary_component_count)
+            if primary_component_count
+            else 1.0
+        )
         path_rows.append(
             {
                 "rank": rank,
@@ -798,10 +934,15 @@ def serialize_paths(
                 "hop_count": hops,
                 "node_count": len(node_symbols),
                 "path_probability_product": probability_product,
-                "negative_log_path_probability": found.cost,
+                "negative_log_path_probability": edge_negative_log_probability,
                 "mean_negative_log_edge_probability": mean_negative_log_probability,
                 "geometric_mean_edge_probability": geometric_mean_probability,
-                "primary_path_score": geometric_mean_probability,
+                "internal_node_probability_product": node_probability_product,
+                "combined_node_edge_probability_product": combined_probability_product,
+                "primary_score_component_count": primary_component_count,
+                "geometric_mean_node_edge_probability": primary_score,
+                "node_probabilities_included": node_probabilities is not None,
+                "primary_path_score": primary_score,
                 "minimum_edge_probability": min(edge_probabilities) if edge_probabilities else 1.0,
                 "maximum_edge_probability": max(edge_probabilities) if edge_probabilities else 1.0,
                 "path_symbols": " -> ".join(node_symbols),
@@ -811,6 +952,9 @@ def serialize_paths(
                     for symbol in node_symbols[1:-1]
                 ),
                 "edge_probabilities": ";".join(f"{value:.9g}" for value in edge_probabilities),
+                "internal_node_probabilities": ";".join(
+                    f"{value:.9g}" for value in internal_node_probabilities
+                ),
             }
         )
         for step, (source_index, target_index, probability) in enumerate(
@@ -836,6 +980,50 @@ def serialize_paths(
     return pd.DataFrame(path_rows), pd.DataFrame(edge_rows)
 
 
+def path_node_probability_vector(
+    metadata: pd.DataFrame,
+    symbols: list[str],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Return aligned node posteriors for path scoring.
+
+    Selected proteins normally carry ``gui_posterior``. Curated molecules and
+    endpoints without an inferential node score receive 1.0: their inclusion is
+    curated or fixed by the query, so missing measurement is not converted into
+    negative evidence. The audit reports exactly how many such values were used.
+    """
+
+    indexed = metadata.drop_duplicates("symbol").set_index("symbol", drop=False)
+    values: list[float] = []
+    measured = 0
+    curated_or_unscored = 0
+    for symbol in symbols:
+        value = math.nan
+        if symbol in indexed.index and "gui_posterior" in indexed.columns:
+            value = pd.to_numeric(
+                pd.Series([indexed.at[symbol, "gui_posterior"]]), errors="coerce"
+            ).iloc[0]
+        if pd.notna(value):
+            probability = float(value)
+            measured += 1
+        else:
+            probability = 1.0
+            curated_or_unscored += 1
+        if not 0.0 < probability <= 1.0:
+            raise ValueError(
+                f"node posterior for {symbol} must lie in (0, 1], got {probability}"
+            )
+        values.append(probability)
+    return np.asarray(values, dtype=float), {
+        "measured_node_probability_count": measured,
+        "curated_or_unscored_probability_one_count": curated_or_unscored,
+        "endpoint_node_probabilities_excluded": True,
+        "missing_node_probability_policy": (
+            "Use 1.0 for curated/unscored nodes so missing measurement is neutral "
+            "in the component product."
+        ),
+    }
+
+
 def find_ranked_paths(
     start: str,
     target: str,
@@ -844,6 +1032,7 @@ def find_ranked_paths(
     top_k: int = 50,
     max_hops: int = 6,
     minimum_edge_probability: float = 0.5,
+    include_node_probabilities: bool = False,
     signaling_intermediates_only: bool = True,
     relay_classes: Iterable[str] = DEFAULT_SIGNAL_RELAY_CLASSES,
     exclude_any_scaffold: bool = False,
@@ -856,10 +1045,11 @@ def find_ranked_paths(
 ) -> RankedPathResult:
     """Find the top simple paths between a current node and chosen target.
 
-    Paths are ranked by descending geometric mean edge probability, equivalently
-    by ascending mean ``-log(p_edge)``. By default, exact neutral-baseline edges
-    are excluded, no path may exceed six hops, and every intermediate must have
-    a mechanistic signal-relay class.
+    The default primary score is the geometric mean edge posterior. When node
+    probabilities are enabled, internal-node posteriors enter the same
+    geometric mean. Exact neutral-baseline edges are excluded by default, no
+    path may exceed six hops, and every intermediate must have a mechanistic
+    signal-relay class.
     """
 
     if top_k < 1:
@@ -919,11 +1109,17 @@ def find_ranked_paths(
     directionality_summary: dict[str, Any] | None = None
     directionality_catalog: dict[str, Any] | None = None
     omnipath_direction_evidence = pd.DataFrame()
+    kinase_direction_evidence = pd.DataFrame()
     if ontology_directionality_enabled:
         directionality_catalog = load_direction_rule_catalog(RULE_CATALOG_PATH)
         directionality_class_catalog = build_complete_class_pair_catalog(
             directionality_catalog,
             directionality_catalog["ontology_classes"],
+        )
+        kinase_direction_evidence = load_supported_kinase_directions(
+            project,
+            symbols,
+            target_symbol,
         )
         if omnipath_directionality_enabled:
             omnipath_direction_path = project / OMNIPATH_DIRECTION_RAW_RELATIVE
@@ -958,12 +1154,16 @@ def find_ranked_paths(
                 if omnipath_directionality_enabled
                 else None
             ),
+            kinase_predictor_directions=kinase_direction_evidence,
         )
         directionality_summary["omnipath_direction_source"] = (
             str(OMNIPATH_DIRECTION_RAW_RELATIVE)
             if omnipath_directionality_enabled
             else None
         )
+        directionality_summary["kinase_predictor_direction_source"] = str(
+            KINASE_PREDICTIONS_RELATIVE
+        ) if not kinase_direction_evidence.empty else None
 
     eligibility = build_intermediate_eligibility(
         metadata,
@@ -989,6 +1189,13 @@ def find_ranked_paths(
     symbol_to_index = {symbol: index for index, symbol in enumerate(symbols)}
     start_index = symbol_to_index[start_symbol]
     target_index = symbol_to_index[target_symbol]
+    node_probability_values: np.ndarray | None = None
+    node_probability_audit: dict[str, Any] | None = None
+    if include_node_probabilities:
+        node_probability_values, node_probability_audit = path_node_probability_vector(
+            metadata,
+            symbols,
+        )
     ranked = k_shortest_simple_paths(
         adjacency,
         propagation_matrix.to_numpy(dtype=float),
@@ -997,9 +1204,15 @@ def find_ranked_paths(
         top_k=top_k,
         max_hops=max_hops,
         permitted_nodes=permitted_nodes,
+        node_probabilities=node_probability_values,
     )
 
-    paths, path_edges = serialize_paths(ranked, propagation_matrix, metadata)
+    paths, path_edges = serialize_paths(
+        ranked,
+        propagation_matrix,
+        metadata,
+        node_probability_values,
+    )
 
     probabilities = propagation_matrix.to_numpy(dtype=float)
     retained_search_edge_count = sum(
@@ -1032,16 +1245,16 @@ def find_ranked_paths(
             path_edges.empty
             or (path_edges["edge_probability"] > minimum_edge_probability).all()
         ),
-        "ranking_is_nonincreasing_by_geometric_mean_edge_probability": bool(
+        "ranking_is_nonincreasing_by_primary_path_score": bool(
             paths.empty
             or np.all(
-                np.diff(paths["geometric_mean_edge_probability"].to_numpy(float))
+                np.diff(paths["primary_path_score"].to_numpy(float))
                 <= 1e-15
             )
         ),
         "reported_products_reconstruct_from_edges": all(
             math.isclose(
-                math.exp(-path.cost),
+                float(row.path_probability_product),
                 math.prod(
                     float(probabilities[a, b])
                     for a, b in zip(path.nodes, path.nodes[1:])
@@ -1049,11 +1262,11 @@ def find_ranked_paths(
                 rel_tol=1e-12,
                 abs_tol=1e-15,
             )
-            for path in ranked
+            for path, row in zip(ranked, paths.itertuples(index=False))
         ),
         "reported_geometric_means_reconstruct_from_edges": all(
             math.isclose(
-                math.exp(-path.cost / (len(path.nodes) - 1)),
+                float(row.geometric_mean_edge_probability),
                 math.prod(
                     float(probabilities[a, b])
                     for a, b in zip(path.nodes, path.nodes[1:])
@@ -1062,7 +1275,26 @@ def find_ranked_paths(
                 rel_tol=1e-12,
                 abs_tol=1e-15,
             )
-            for path in ranked
+            for path, row in zip(ranked, paths.itertuples(index=False))
+        ),
+        "reported_primary_scores_reconstruct": all(
+            math.isclose(
+                float(row.primary_path_score),
+                math.exp(
+                    -path.cost
+                    / (
+                        (len(path.nodes) - 1)
+                        + (
+                            (len(path.nodes) - 2)
+                            if node_probability_values is not None
+                            else 0
+                        )
+                    )
+                ),
+                rel_tol=1e-12,
+                abs_tol=1e-15,
+            )
+            for path, row in zip(ranked, paths.itertuples(index=False))
         ),
     }
     if not all(validation.values()):
@@ -1132,14 +1364,21 @@ def find_ranked_paths(
         ),
         "maximum_hops": max_hops,
         "top_k_requested": top_k,
+        "node_probabilities_included_in_primary_score": bool(
+            include_node_probabilities
+        ),
+        "node_probability_scoring_audit": node_probability_audit,
         "paths_found": len(paths),
         "ranking_rule": (
-            "Descending geometric mean edge probability; search minimizes mean "
-            "-log(edge_probability) across each path. Raw products remain audit fields."
+            "Descending geometric mean of edge posteriors and internal-node "
+            "posteriors; endpoints are fixed and excluded."
+            if include_node_probabilities
+            else "Descending geometric mean edge posterior."
         ),
         "path_constraint": (
-            "Simple paths following allowed ontology/OmniPath-directed traversals; no "
-            "node may repeat within a path. Unresolved edges retain both traversals."
+            "Simple paths following allowed ontology/KinasePredictor/OmniPath-directed "
+            "traversals; no node may repeat within a path. Unresolved edges retain "
+            "both traversals."
             if ontology_directionality_enabled
             else "Simple undirected paths only; no node may repeat within a path."
         ),
@@ -1208,6 +1447,9 @@ def find_ranked_paths(
         class_catalog_path = resolved_output / "ontology_class_pair_catalog.tsv"
         rules_path = resolved_output / "ontology_direction_rules.json"
         omnipath_direction_path = resolved_output / "omnipath_direction_evidence.tsv.gz"
+        kinase_direction_path = (
+            resolved_output / "kinase_predictor_direction_evidence.tsv.gz"
+        )
         paths.to_csv(paths_path, sep="\t", index=False, float_format="%.12g")
         path_edges.to_csv(edges_path, sep="\t", index=False, float_format="%.12g")
         eligibility.to_csv(eligibility_path, sep="\t", index=False)
@@ -1232,6 +1474,13 @@ def find_ranked_paths(
                 + "\n",
                 encoding="utf-8",
             )
+            if not kinase_direction_evidence.empty:
+                kinase_direction_evidence.to_csv(
+                    kinase_direction_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                )
             if omnipath_directionality_enabled:
                 omnipath_direction_evidence.to_csv(
                     omnipath_direction_path,
@@ -1260,7 +1509,7 @@ are ranked by their geometric mean edge probability. This is equivalent to
 minimizing the mean `-log(edge_probability)` across the edges in each path and
 does not automatically favor a route merely because it contains fewer edges.
 
-{"Ontology rules are applied first; mapped OmniPath source-target records add unique directions only for pairs ontology left unresolved. OmniPath cannot reopen or reverse an ontology-disallowed traversal. Remaining unresolved pairs retain both traversals." if ontology_directionality_enabled and omnipath_directionality_enabled else "Ontology rules partially orient the propagation graph. Uniquely disallowed reverse traversals are removed; unresolved pairs retain both traversals." if ontology_directionality_enabled else "Directionality was disabled, so every retained edge can be traversed both ways."}
+{"Ontology rules are applied first; supporting KinasePredictor kinase-to-substrate records orient pairs left unresolved by ontology; mapped OmniPath source-target records orient pairs left unresolved by both earlier layers. Later sources cannot reopen or reverse an earlier disallowed traversal. Remaining unresolved pairs retain both traversals." if ontology_directionality_enabled and omnipath_directionality_enabled else "Ontology rules are applied first and supporting KinasePredictor kinase-to-substrate records orient pairs left unresolved by ontology. Uniquely disallowed reverse traversals are removed; unresolved pairs retain both traversals." if ontology_directionality_enabled else "Directionality was disabled, so every retained edge can be traversed both ways."}
 
 `ranked_paths.tsv` contains one row per complete path. `ranked_path_edges.tsv`
 contains one row per edge per path, with node names and signaling classes.
@@ -1285,6 +1534,15 @@ secondary audit columns.
                     directionality_audit_path.name: sha256_file(directionality_audit_path),
                     class_catalog_path.name: sha256_file(class_catalog_path),
                     rules_path.name: sha256_file(rules_path),
+                    **(
+                        {
+                            kinase_direction_path.name: sha256_file(
+                                kinase_direction_path
+                            )
+                        }
+                        if not kinase_direction_evidence.empty
+                        else {}
+                    ),
                     **(
                         {
                             omnipath_direction_path.name: sha256_file(
@@ -1321,6 +1579,7 @@ def main() -> int:
         top_k=args.top_k,
         max_hops=args.max_hops,
         minimum_edge_probability=args.minimum_edge_probability,
+        include_node_probabilities=args.include_node_probabilities,
         signaling_intermediates_only=not args.allow_all_intermediates,
         exclude_any_scaffold=args.exclude_any_scaffold,
         ontology_directionality_enabled=not args.disable_ontology_directionality,
@@ -1335,7 +1594,7 @@ def main() -> int:
         print("\nTop paths:")
         print(
             result.paths[
-                ["rank", "hop_count", "geometric_mean_edge_probability", "path_symbols"]
+                ["rank", "hop_count", "primary_path_score", "path_symbols"]
             ]
             .head(10)
             .to_string(index=False)

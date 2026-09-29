@@ -126,6 +126,12 @@ class EvidenceInspectorTests(unittest.TestCase):
             "evidence-ledger-body",
             "evidence-stream-distribution-chart",
             "evidence-stream-distribution-summary",
+            "database-trace",
+            "network-literature-interpreter",
+            "literature-api-key",
+            "research-pathway-network",
+            "literature-cell-type",
+            "literature-purpose",
         ):
             self.assertIn(f'id="{control}"', html)
         self.assertIn("async function inspectEvidence(kind)", javascript)
@@ -133,6 +139,9 @@ class EvidenceInspectorTests(unittest.TestCase):
         self.assertIn("reconciliation_absolute_difference", javascript)
         self.assertIn("factor_distribution", javascript)
         self.assertIn("distribution_position", javascript)
+        self.assertIn("renderDatabaseTrace", javascript)
+        self.assertIn("researchPathwayNetwork", javascript)
+        self.assertIn("pollNetworkLiterature", javascript)
 
 
 if __name__ == "__main__":

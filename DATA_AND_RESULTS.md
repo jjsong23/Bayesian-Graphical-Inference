@@ -23,13 +23,16 @@ The archive is a point-in-time research record. Do not overwrite an older archiv
 - `data/edge_characterization/`: edge evidence, raw-source downloads, compatibility tables, factor catalogs, the mapped OmniPath direction source, and the incremental unordered-pair cache.
 - `data/colocalization/`: localization profiles and scientist-reviewable compartment compatibility matrices.
 - `data/experimental_ppi/`: STRING/BioGRID/IntAct-derived prior-support resources and evidence tiers.
+- `data/edge_characterization/biogrid/<build>/`: generated BioGRID direct-binding/co-complex pair catalog, mouse/human/rat-to-graph mapping, normalized incident-partner anchors, validation checks, and provenance. `mapped_graph_physical_pairs.tsv.gz` drives the reported-pair stream and `graph_incident_physical_anchors.tsv.gz` reconstructs shared-partner closure. The large generated files are excluded from Git with the rest of `data/`.
 - `data/phospho_data_original.xlsx`: raw 1/2/5/15-minute dDAVP/vehicle replicate phosphoproteomics used only by the optional temporal path-validation stage.
 - `results/`: versioned node, edge, colocalization, AlphaFold-candidate, path, and GUI-run outputs.
 - `outputs/`: auxiliary generated output files.
 
 ## External sources represented
 
-The working data tree includes derived or downloaded material from resources such as Gene Ontology, UniProt, Human Protein Atlas, STRING, STITCH, OmniPath, COMPARTMENTS, BioGRID, IntAct, PhosphoSitePlus-derived site annotations where available, KinasePredictor, mpkCCD localization/proteomics, principal-cell RNA sequencing, and the PKA-knockout phosphoproteomic study data supplied for this project.
+The working data tree includes derived or downloaded material from resources such as Gene Ontology, UniProt, Human Protein Atlas, STRING, STITCH, OmniPath, COMPARTMENTS, BioGRID, IntAct, the NHLBI rat IMCD cytoplasmic and nuclear proteomes, PhosphoSitePlus-derived site annotations where available, KinasePredictor, mpkCCD localization/proteomics, principal-cell RNA sequencing, and the PKA-knockout phosphoproteomic study data supplied for this project.
+
+The IMCD source workbooks, mapping audits, binary node profiles, and pair catalog live under `data/edge_characterization/imcd_compartment_presence/`. Their two GUI factor catalogs are `results/backend_bayes_factor_catalogs/edge_factors_891/imcd_basal_compartment_presence_bf_gt1.tsv.gz` and `imcd_ddavp_compartment_presence_bf_gt1.tsv.gz`. Rebuild them with `python code/edge_characterization/integrate_imcd_compartment_presence.py`.
 
 This file is an inventory, not a redistribution license. Before public sharing, verify the current terms, required citations, and redistribution permissions for every external source. In particular, keep restricted datasets in controlled OneDrive storage if their terms do not permit GitHub redistribution.
 

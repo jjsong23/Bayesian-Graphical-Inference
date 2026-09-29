@@ -94,6 +94,35 @@ class RankedPathTests(unittest.TestCase):
         self.assertEqual([item.nodes for item in observed], [(0, 1, 2), (0, 2)])
         self.assertLess(0.90 * 0.90, 0.85)
 
+    def test_optional_internal_node_probability_changes_primary_rank(self) -> None:
+        values = np.zeros((3, 3), dtype=float)
+        values[0, 2] = values[2, 0] = 0.85
+        values[0, 1] = values[1, 0] = 0.95
+        values[1, 2] = values[2, 1] = 0.95
+        matrix = pd.DataFrame(values, index=["A", "B", "T"], columns=["A", "B", "T"])
+        adjacency, _ = build_adjacency(matrix, 0.5)
+        edge_only = k_shortest_simple_paths(
+            adjacency,
+            values,
+            0,
+            2,
+            top_k=2,
+            max_hops=2,
+        )
+        node_aware = k_shortest_simple_paths(
+            adjacency,
+            values,
+            0,
+            2,
+            top_k=2,
+            max_hops=2,
+            node_probabilities=np.asarray([0.1, 0.6, 0.1]),
+        )
+        self.assertEqual(edge_only[0].nodes, (0, 1, 2))
+        self.assertEqual(node_aware[0].nodes, (0, 2))
+        self.assertAlmostEqual(math.exp(-node_aware[1].cost / 3), (0.95 * 0.6 * 0.95) ** (1 / 3))
+
+
     def test_cutoff_is_strict(self) -> None:
         adjacency, edge_count = build_adjacency(self.matrix, 0.9)
         self.assertEqual(edge_count, 3)

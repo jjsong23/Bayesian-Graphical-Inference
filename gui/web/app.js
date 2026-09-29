@@ -9,12 +9,28 @@ const state = {
   networkResizeTimer: null,
   selectedPathRank: null,
   inspectionHistory: [],
+  currentEvidenceInspection: null,
+  literatureHistory: [],
+  networkLiteratureHistory: [],
+  networkLiteratureResearchId: null,
+  networkLiteraturePollTimer: null,
+  networkLiteratureActive: false,
+  literatureInterpreter: null,
 };
 
 const $ = (id) => document.getElementById(id);
 const formatInt = (value) => new Intl.NumberFormat("en-US").format(Number(value || 0));
 const formatScore = (value) => Number(value).toPrecision(8);
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 function svgElement(name, attributes = {}, text = "") {
   const element = document.createElementNS(SVG_NAMESPACE, name);
@@ -45,15 +61,24 @@ function formatEvidenceNumber(value) {
 function evidenceScopeText(stream, kind) {
   if (!stream.enabled) return "Not used";
   if (kind === "node") {
-    if (stream.negative_evidence_eligible === false) return "Out of scope";
     if (stream.observed) return "Observed";
-    if (stream.fixed_absence_penalty_applied) return "Nondetection penalized";
-    return "Not observed";
+    if (stream.fixed_absence_penalty_applied) return "Not observed · penalty applied";
+    if (stream.negative_evidence_eligible === false) return "Not observed · absence not scorable";
+    return "Not observed · eligible";
   }
-  if (stream.source_record_retained) return "Record retained";
-  if (stream.absence_penalty_applied) return "Absence penalized";
-  if (stream.negative_evidence_eligible === false) return "Out of scope";
-  return stream.derived ? "Rule not triggered" : "No retained record";
+  if (stream.source_record_retained) {
+    return stream.negative_evidence_eligible === false
+      ? "Record retained · absence not scorable"
+      : "Source record retained";
+  }
+  if (stream.fixed_absence_penalty_applied || stream.absence_penalty_applied) {
+    return "No record · penalty applied";
+  }
+  if (stream.continuous_negative_evidence_applied) {
+    return "No record · continuous penalty";
+  }
+  if (stream.negative_evidence_eligible === false) return "No record · no absence penalty";
+  return stream.derived ? "Rule not triggered" : "No record · eligible";
 }
 
 function evidencePercentileText(position) {
@@ -134,6 +159,498 @@ function renderEvidenceFactorDistribution(stream) {
   summary.textContent = `Applied BF ${formatEvidenceNumber(stream.applied_bayes_factor)} is at ${position} (${exactness}) among ${formatInt(distribution.hypothesis_count)} ${scope}. Refuting: ${formatInt(distribution.refuting_count)}; neutral: ${formatInt(distribution.neutral_count)}; supporting: ${formatInt(distribution.supporting_count)}.`;
 }
 
+function readableTraceValue(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return formatEvidenceNumber(value);
+  if (Array.isArray(value)) return value.join("; ") || "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function traceRecordTitle(record, index) {
+  const directed = record.source_symbol && record.target_symbol
+    ? `${record.source_symbol} → ${record.target_symbol}`
+    : null;
+  const pair = record.source_symbol_a && record.source_symbol_b
+    ? `${record.source_symbol_a} — ${record.source_symbol_b}`
+    : null;
+  const resource = Array.isArray(record.resources) ? record.resources.join(", ") : record.resources;
+  return directed || pair || resource || `Source record ${index + 1}`;
+}
+
+function renderDatabaseTrace(trace) {
+  const panel = $("database-trace");
+  const derivation = $("database-trace-derivation");
+  const factors = $("database-trace-factors");
+  const records = $("database-trace-records");
+  const links = $("database-trace-links");
+  derivation.innerHTML = "";
+  factors.innerHTML = "";
+  records.innerHTML = "";
+  links.innerHTML = "";
+  if (!trace) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  $("database-trace-title").textContent = `${trace.database || "Database"} source traceback`;
+  $("database-trace-status").textContent = String(trace.trace_status || "available").replaceAll("_", " ");
+  $("database-trace-summary").textContent = trace.summary || "No traceback summary was provided.";
+
+  const derivationValues = trace.score_derivation || {};
+  [
+    ["Database score", derivationValues.database_score],
+    ["Raw Bayes factor", derivationValues.raw_bayes_factor],
+    ["Model weight", derivationValues.model_weight],
+    ["Effective BF", derivationValues.weighted_effective_bayes_factor],
+    ["Formula", derivationValues.formula],
+    ["Important limit", derivationValues.important_limit],
+  ].forEach(([label, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    const card = document.createElement("div");
+    const name = document.createElement("span");
+    const strong = document.createElement("strong");
+    name.textContent = label;
+    strong.textContent = readableTraceValue(value);
+    card.append(name, strong);
+    derivation.appendChild(card);
+  });
+
+  (trace.factors || []).forEach((factor) => {
+    const card = document.createElement("div");
+    card.className = "trace-factor";
+    const title = document.createElement("strong");
+    const value = document.createElement("span");
+    const note = document.createElement("small");
+    title.textContent = factor.factor || "Factor";
+    value.textContent = readableTraceValue(factor.value);
+    note.textContent = factor.description || factor.role || "";
+    card.append(title, value, note);
+    factors.appendChild(card);
+  });
+
+  (trace.records || []).slice(0, 30).forEach((record, index) => {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    const pre = document.createElement("pre");
+    summary.textContent = traceRecordTitle(record, index);
+    pre.textContent = JSON.stringify(record, null, 2);
+    details.append(summary, pre);
+    records.appendChild(details);
+  });
+
+  (trace.links || []).forEach((item) => {
+    if (!String(item.url || "").startsWith("http")) return;
+    const link = document.createElement("a");
+    link.href = item.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = item.label || item.url;
+    links.appendChild(link);
+  });
+}
+
+function networkLiteratureScope() {
+  const network = state.pathNetwork;
+  if (!network) return { paths: 0, nodes: [], edges: [] };
+  const paths = Math.min(state.networkRankLimit, Number(network.visualized_path_count || 0));
+  const visible = visiblePathNetwork(network, paths);
+  return { paths, nodes: visible.nodes, edges: visible.edges };
+}
+
+const LITERATURE_CONNECTION_STORAGE_KEY = "gbi-literature-connection-v1";
+
+function literatureEndpointConfiguration() {
+  const raw = $("literature-api-base-url").value.trim();
+  const model = $("literature-model").value.trim();
+  let url;
+  try {
+    url = new URL(raw);
+  } catch (_error) {
+    return { valid: false, message: "Enter a complete HTTPS API base URL." };
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  const isPublicOpenAI = hostname === "api.openai.com";
+  const isAzure = hostname.endsWith(".openai.azure.com") || hostname.endsWith(".services.ai.azure.com");
+  const path = url.pathname.replace(/\/+$/, "");
+  if (url.protocol !== "https:" || (!isPublicOpenAI && !isAzure)) {
+    return { valid: false, message: "Use api.openai.com or an official Azure OpenAI HTTPS hostname." };
+  }
+  if (isAzure && !path.endsWith("/openai/v1")) {
+    return { valid: false, message: "Azure API base URLs must end in /openai/v1." };
+  }
+  if (isPublicOpenAI && !path.endsWith("/v1")) {
+    return { valid: false, message: "The public OpenAI API base URL must end in /v1." };
+  }
+  if (!model) return { valid: false, message: "Enter a model ID or Azure deployment name." };
+  const baseUrl = `${url.origin}${path}`;
+  return {
+    valid: true,
+    provider: isAzure ? "Azure OpenAI" : "OpenAI",
+    baseUrl,
+    responsesUrl: `${baseUrl}/responses`,
+    message: isAzure
+      ? `Azure OpenAI · POST ${baseUrl}/responses · deployment: ${model}`
+      : `OpenAI · POST ${baseUrl}/responses · model: ${model}`,
+  };
+}
+
+function saveLiteratureConnectionPreferences() {
+  try {
+    localStorage.setItem(LITERATURE_CONNECTION_STORAGE_KEY, JSON.stringify({
+      apiBaseUrl: $("literature-api-base-url").value.trim(),
+      model: $("literature-model").value.trim(),
+    }));
+  } catch (_error) {
+    // Browser storage can be unavailable in locked-down environments. The form still works.
+  }
+}
+
+function restoreLiteratureConnectionPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LITERATURE_CONNECTION_STORAGE_KEY) || "null");
+    if (saved?.apiBaseUrl) $("literature-api-base-url").value = String(saved.apiBaseUrl);
+    if (saved?.model) $("literature-model").value = String(saved.model);
+  } catch (_error) {
+    // Ignore malformed or unavailable browser storage and keep server defaults.
+  }
+}
+
+function updateLiteratureControls() {
+  const scope = networkLiteratureScope();
+  const browserKey = $("literature-api-key").value.trim();
+  const serverKey = Boolean(state.literatureInterpreter?.available);
+  const credentialReady = Boolean(browserKey) || serverKey;
+  const endpoint = literatureEndpointConfiguration();
+  $("literature-endpoint-preview").textContent = endpoint.message;
+  $("literature-endpoint-preview").classList.toggle("warning", !endpoint.valid);
+  $("literature-path-count").textContent = formatInt(scope.paths);
+  $("literature-node-count").textContent = formatInt(scope.nodes.length);
+  $("literature-edge-count").textContent = formatInt(scope.edges.length);
+  $("literature-batch-count").textContent = formatInt(Math.ceil((scope.nodes.length + scope.edges.length) / 6));
+  $("research-pathway-network").disabled = state.networkLiteratureActive || !state.jobId || !scope.paths || !credentialReady || !endpoint.valid;
+  $("literature-interpreter-availability").textContent = serverKey
+    ? `${state.literatureInterpreter.default_model || "LLM"} · server key ready`
+    : browserKey
+      ? "Session key entered"
+      : "Session key required";
+  if (state.networkLiteratureActive) return;
+  if (!scope.paths) {
+    $("literature-status").textContent = "Complete a path-finding run to define the network scope.";
+  } else if (!endpoint.valid) {
+    $("literature-status").textContent = endpoint.message;
+  } else if (!credentialReady) {
+    $("literature-status").textContent = "Enter an API key above. It will not be saved or included in the analysis configuration.";
+  } else {
+    $("literature-status").textContent = `Ready to research ${formatInt(scope.nodes.length)} nodes and ${formatInt(scope.edges.length)} edges from the top ${formatInt(scope.paths)} displayed paths.`;
+  }
+}
+
+function addLiteratureTextSection(container, title, value) {
+  if (!value || (Array.isArray(value) && !value.length)) return;
+  const section = document.createElement("section");
+  section.className = "literature-section";
+  const heading = document.createElement("h5");
+  heading.textContent = title;
+  section.appendChild(heading);
+  if (Array.isArray(value)) {
+    const list = document.createElement("ul");
+    value.forEach((item) => {
+      const row = document.createElement("li");
+      row.textContent = String(item);
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+  } else {
+    const text = document.createElement("p");
+    text.textContent = String(value);
+    section.appendChild(text);
+  }
+  container.appendChild(section);
+}
+
+function rememberLiteratureInterpretation(payload) {
+  const key = literatureHypothesisKey(payload.hypothesis || {});
+  const existing = state.literatureHistory.findIndex(
+    (item) => literatureHypothesisKey(item.hypothesis || {}) === key,
+  );
+  if (existing >= 0) state.literatureHistory.splice(existing, 1);
+  state.literatureHistory.push(JSON.parse(JSON.stringify(payload)));
+  if (state.literatureHistory.length > 1000) state.literatureHistory.shift();
+}
+
+function literatureHypothesisKey(hypothesis) {
+  if (hypothesis?.kind === "node") {
+    return `node:${String(hypothesis.symbol || "").trim().toLowerCase()}`;
+  }
+  const pair = [hypothesis?.node_a, hypothesis?.node_b]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .sort();
+  return `edge:${pair.join("|")}`;
+}
+
+function evidenceHypothesisKey(payload) {
+  return literatureHypothesisKey(payload.kind === "node"
+    ? { kind: "node", symbol: payload.symbol }
+    : { kind: "edge", node_a: payload.node_a, node_b: payload.node_b });
+}
+
+function selectedLiteratureRecord(payload) {
+  const key = evidenceHypothesisKey(payload);
+  for (let index = state.literatureHistory.length - 1; index >= 0; index -= 1) {
+    const record = state.literatureHistory[index];
+    if (literatureHypothesisKey(record.hypothesis || {}) === key) return record;
+  }
+  return null;
+}
+
+function appendSelectedLiteratureAssessment(label, value) {
+  if (!value || (Array.isArray(value) && !value.length)) return;
+  const row = document.createElement("tr");
+  const heading = document.createElement("th");
+  const body = document.createElement("td");
+  heading.scope = "row";
+  heading.textContent = label;
+  if (Array.isArray(value)) {
+    const list = document.createElement("ul");
+    value.forEach((item) => {
+      const entry = document.createElement("li");
+      entry.textContent = String(item);
+      list.appendChild(entry);
+    });
+    body.appendChild(list);
+  } else {
+    body.textContent = String(value);
+  }
+  row.append(heading, body);
+  $("selected-literature-assessment-body").appendChild(row);
+}
+
+function renderSelectedLiterature(payload) {
+  const panel = $("evidence-literature-interpretation");
+  const record = selectedLiteratureRecord(payload);
+  if (!record) {
+    panel.classList.add("hidden");
+    return;
+  }
+  const result = record.interpretation || {};
+  const label = result.hypothesis_label || (payload.kind === "node"
+    ? payload.symbol
+    : `${payload.node_a} — ${payload.node_b}`);
+  $("selected-literature-title").textContent = label;
+  $("selected-literature-model").textContent = `${record.model || "LLM"} · ${record.reasoning_effort || ""}`;
+  $("selected-literature-classification").textContent = String(result.classification || "uncertain").replaceAll("_", " ");
+  $("selected-literature-confidence").textContent = `${Math.round(Number(result.confidence || 0) * 100)}%`;
+  $("selected-literature-context").textContent = record.cell_type || "Not specified";
+  $("selected-literature-takeaway").textContent = result.one_sentence_takeaway || "No concise takeaway was returned.";
+
+  $("selected-literature-assessment-body").innerHTML = "";
+  appendSelectedLiteratureAssessment("Signaling purpose", record.signaling_purpose);
+  appendSelectedLiteratureAssessment("Novelty", result.novelty_interpretation);
+  appendSelectedLiteratureAssessment("Mechanistic interpretation", result.mechanistic_interpretation);
+  appendSelectedLiteratureAssessment("Bayesian evidence", result.bayesian_evidence_summary);
+  appendSelectedLiteratureAssessment("Database tracebacks", result.database_trace_summary);
+  appendSelectedLiteratureAssessment("Conflicting or missing evidence", result.conflicting_or_missing_evidence);
+  appendSelectedLiteratureAssessment("Caveats", result.caveats);
+
+  const claims = result.contextual_evidence || [];
+  const claimsSection = $("selected-literature-claims");
+  const claimsBody = $("selected-literature-claims-body");
+  claimsBody.innerHTML = "";
+  claimsSection.classList.toggle("hidden", !claims.length);
+  claims.forEach((claim) => {
+    const row = document.createElement("tr");
+    const scope = document.createElement("td");
+    const context = document.createElement("td");
+    const support = document.createElement("td");
+    const text = document.createElement("td");
+    const sources = document.createElement("td");
+    scope.textContent = String(claim.scope || "").replaceAll("_", " ");
+    context.textContent = claim.biological_context || "Not specified";
+    support.textContent = String(claim.support || "").replaceAll("_", " ");
+    text.textContent = claim.claim || "";
+    (claim.source_urls || []).forEach((url, index) => {
+      if (!String(url).startsWith("http")) return;
+      if (sources.childNodes.length) sources.append(" · ");
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = `Source ${index + 1}`;
+      sources.appendChild(link);
+    });
+    row.append(scope, context, support, text, sources);
+    claimsBody.appendChild(row);
+  });
+
+  const sourceBox = $("selected-literature-sources");
+  sourceBox.innerHTML = "";
+  const seen = new Set();
+  [...(result.sources || []), ...(record.web_sources || [])].forEach((source) => {
+    const url = String(source.url || "");
+    if (!url.startsWith("http") || seen.has(url)) return;
+    seen.add(url);
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = source.title || url;
+    link.title = source.relevance || "";
+    sourceBox.appendChild(link);
+  });
+  panel.classList.remove("hidden");
+}
+
+function addLiteratureClaims(container, claims) {
+  if (!(claims || []).length) return;
+  const section = document.createElement("section");
+  section.className = "literature-section";
+  const heading = document.createElement("h5");
+  heading.textContent = "Contextual literature evidence";
+  section.appendChild(heading);
+  claims.forEach((claim) => {
+    const card = document.createElement("div");
+    card.className = "literature-claim";
+    const strong = document.createElement("strong");
+    const scope = document.createElement("small");
+    strong.textContent = claim.claim || "";
+    scope.textContent = `${String(claim.scope || "").replaceAll("_", " ")} · ${claim.support || ""}`;
+    card.append(strong, scope);
+    const links = document.createElement("div");
+    links.className = "trace-links";
+    (claim.source_urls || []).forEach((url, index) => {
+      if (!String(url).startsWith("http")) return;
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.textContent = `Source ${index + 1}`;
+      links.appendChild(anchor);
+    });
+    card.appendChild(links);
+    section.appendChild(card);
+  });
+  container.appendChild(section);
+}
+
+function renderNetworkLiterature(payload) {
+  state.networkLiteratureHistory.push(JSON.parse(JSON.stringify(payload)));
+  if (state.networkLiteratureHistory.length > 10) state.networkLiteratureHistory.shift();
+  (payload.items || []).forEach(rememberLiteratureInterpretation);
+  $("literature-result").classList.remove("hidden");
+  const synthesis = payload.synthesis || {};
+  $("literature-network-takeaway").textContent = synthesis.overall_summary || "The network audit completed.";
+  $("literature-network-model").textContent = `${payload.model || "model"} · ${payload.reasoning_effort || ""}`;
+  $("literature-item-count").textContent = `${formatInt(payload.hypothesis_count)} interpretations are ready. Click a node or edge in the graph to see its structured literature assessment inside the Interpretation panel.`;
+
+  const counts = $("literature-classification-counts");
+  counts.innerHTML = "";
+  Object.entries(payload.classification_counts || {}).sort((a, b) => b[1] - a[1]).forEach(([label, count]) => {
+    const card = document.createElement("div");
+    const name = document.createElement("span");
+    const value = document.createElement("strong");
+    name.textContent = label.replaceAll("_", " ");
+    value.textContent = formatInt(count);
+    card.append(name, value);
+    counts.appendChild(card);
+  });
+
+  if (state.currentEvidenceInspection) renderSelectedLiterature(state.currentEvidenceInspection);
+}
+
+function updateNetworkLiteratureProgress(payload) {
+  state.networkLiteratureActive = !["complete", "failed", "cancelled"].includes(payload.status);
+  $("literature-progress").classList.toggle("hidden", !state.networkLiteratureActive && payload.status !== "complete");
+  $("literature-progress-bar").style.width = `${Math.max(0, Math.min(100, Number(payload.progress || 0) * 100))}%`;
+  $("literature-progress-label").textContent = `${payload.message || payload.status} · ${Math.round(Number(payload.progress || 0) * 100)}%`;
+  $("cancel-network-literature").classList.toggle("hidden", !state.networkLiteratureActive);
+  updateLiteratureControls();
+  $("literature-status").textContent = payload.status === "complete"
+    ? `Completed the literature audit of ${formatInt(payload.hypothesis_count)} unique hypotheses.`
+    : payload.error || payload.message || payload.status;
+}
+
+async function pollNetworkLiterature() {
+  if (!state.jobId || !state.networkLiteratureResearchId) return;
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/network-literature-analysis/${state.networkLiteratureResearchId}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to read literature research progress");
+    updateNetworkLiteratureProgress(payload);
+    if (payload.status === "complete") {
+      clearInterval(state.networkLiteraturePollTimer);
+      state.networkLiteraturePollTimer = null;
+      renderNetworkLiterature(payload.result);
+    } else if (["failed", "cancelled"].includes(payload.status)) {
+      clearInterval(state.networkLiteraturePollTimer);
+      state.networkLiteraturePollTimer = null;
+    }
+  } catch (error) {
+    clearInterval(state.networkLiteraturePollTimer);
+    state.networkLiteraturePollTimer = null;
+    state.networkLiteratureActive = false;
+    $("literature-status").textContent = String(error?.message || error);
+    updateLiteratureControls();
+  }
+}
+
+async function researchPathwayNetwork() {
+  if (!state.jobId) return;
+  const scope = networkLiteratureScope();
+  const button = $("research-pathway-network");
+  const apiKey = $("literature-api-key").value.trim();
+  const apiBaseUrl = $("literature-api-base-url").value.trim();
+  button.disabled = true;
+  state.networkLiteratureActive = true;
+  $("literature-result").classList.add("hidden");
+  $("literature-progress").classList.remove("hidden");
+  $("literature-status").textContent = "Submitting the frozen path-network scope. The API key will not be written to disk.";
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (apiKey) headers["X-OpenAI-API-Key"] = apiKey;
+    const response = await fetch(`/api/jobs/${state.jobId}/network-literature-analysis`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        rank_limit: scope.paths,
+        cell_type: $("literature-cell-type").value.trim(),
+        signaling_purpose: $("literature-purpose").value.trim(),
+        api_base_url: apiBaseUrl,
+        model: $("literature-model").value.trim(),
+        reasoning_effort: $("literature-reasoning").value,
+        force_refresh: $("literature-force-refresh").checked,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok && !(response.status === 409 && payload.active_research)) {
+      throw new Error(payload.error || "Unable to start the network literature audit");
+    }
+    const research = payload.active_research || payload;
+    state.networkLiteratureResearchId = research.research_id;
+    if (apiKey) $("literature-api-key").value = "";
+    updateNetworkLiteratureProgress(research);
+    state.networkLiteraturePollTimer = setInterval(pollNetworkLiterature, 1500);
+    pollNetworkLiterature();
+  } catch (error) {
+    state.networkLiteratureActive = false;
+    $("literature-status").textContent = String(error?.message || error);
+    updateLiteratureControls();
+  }
+}
+
+async function cancelNetworkLiterature() {
+  if (!state.jobId || !state.networkLiteratureResearchId) return;
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/network-literature-analysis/${state.networkLiteratureResearchId}/cancel`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to cancel literature research");
+    updateNetworkLiteratureProgress(payload);
+  } catch (error) {
+    $("literature-status").textContent = String(error?.message || error);
+  }
+}
+
 function renderEvidenceInspection(payload) {
   const result = $("evidence-inspector-result");
   const body = $("evidence-ledger-body");
@@ -142,6 +659,7 @@ function renderEvidenceInspection(payload) {
     ? payload.symbol
     : `${payload.node_a} — ${payload.node_b}`;
   $("evidence-summary-hypothesis").textContent = hypothesis;
+  state.currentEvidenceInspection = JSON.parse(JSON.stringify(payload));
   $("evidence-summary-prior").textContent = formatProbability(payload.prior_probability);
   // Preserve near-boundary probabilities here: 0.99969 must not look like
   // mathematical certainty merely because the compact chart formatter uses
@@ -202,6 +720,7 @@ function renderEvidenceInspection(payload) {
       if (stream.dependence_group) parts.push(`Shared-source group: ${stream.dependence_group}.`);
       $("evidence-stream-detail").textContent = `${stream.label}: ${parts.filter(Boolean).join(" ")}`;
       renderEvidenceFactorDistribution(stream);
+      renderDatabaseTrace(stream.provenance_trace);
       body.querySelectorAll("tr").forEach((candidate) => candidate.classList.toggle("selected", candidate === row));
     };
     if (!initialDetail && stream.enabled) initialDetail = showDetail;
@@ -217,7 +736,9 @@ function renderEvidenceInspection(payload) {
   $("evidence-stream-detail").textContent = "Select a stream row for its normalization, model weight, and score-distribution position.";
   $("evidence-inspector-message").textContent = `${payload.streams.filter((stream) => stream.enabled).length} enabled streams evaluated for ${hypothesis}.`;
   result.classList.remove("hidden");
+  renderSelectedLiterature(payload);
   if (initialDetail) initialDetail();
+  else renderDatabaseTrace(null);
 }
 
 function rememberEvidenceInspection(payload) {
@@ -436,6 +957,49 @@ function visiblePathNetwork(network, rankLimit) {
   return { nodes, edges };
 }
 
+function assignPathTierJitter(nodes, marginX, usableWidth, marginY, usableHeight, seed) {
+  const tierGroups = new Map();
+  const maximumJitter = Math.min(112, Math.max(48, usableWidth * 0.12));
+  nodes.forEach((node) => {
+    const pathPosition = Math.max(0, Math.min(1, Number(node.pathPosition)));
+    node.tierAnchorX = marginX + pathPosition * usableWidth;
+    node.targetX = node.tierAnchorX;
+    node.tierJitterX = 0;
+    // Path positions are normalized fractions. Rounding only suppresses
+    // floating-point noise; it does not merge visibly distinct tiers.
+    const tierKey = Math.round(pathPosition * 1000);
+    if (!tierGroups.has(tierKey)) tierGroups.set(tierKey, []);
+    tierGroups.get(tierKey).push(node);
+  });
+  tierGroups.forEach((tierNodes, tierKey) => {
+    const ordered = [...tierNodes].sort((left, right) => {
+      const leftHash = networkHash(`${left.id}:${tierKey}:${seed}:tier-jitter`);
+      const rightHash = networkHash(`${right.id}:${tierKey}:${seed}:tier-jitter`);
+      return leftHash - rightHash || String(left.id).localeCompare(String(right.id));
+    });
+    const spacing = Math.min(46, (2 * maximumJitter) / Math.max(1, ordered.length - 1));
+    ordered.forEach((node, index) => {
+      if (node.is_start || node.is_target) return;
+      const offset = (index - (ordered.length - 1) / 2) * spacing;
+      node.tierJitterX = offset;
+      node.targetX = Math.max(
+        marginX,
+        Math.min(marginX + usableWidth, node.tierAnchorX + offset),
+      );
+      // Allocate deterministic vertical lanes within every tier.  The earlier
+      // layout used unrelated random Y targets, which could still place
+      // several same-tier nodes—and their edges—on top of one another.
+      const laneCount = ordered.length;
+      const lane = laneCount === 1 ? 0.5 : (index + 0.5) / laneCount;
+      const microJitter = ((networkHash(`${node.id}:${tierKey}:${seed}:lane`) % 17) - 8) * 0.7;
+      node.targetY = Math.max(
+        marginY,
+        Math.min(marginY + usableHeight, marginY + lane * usableHeight + microJitter),
+      );
+    });
+  });
+}
+
 function layoutPathNetwork(nodes, edges, width, height, seed) {
   const marginX = Math.min(62, Math.max(46, width * 0.08));
   const marginY = 38;
@@ -443,18 +1007,22 @@ function layoutPathNetwork(nodes, edges, width, height, seed) {
   const usableHeight = Math.max(height - 2 * marginY, 180);
   nodes.forEach((node) => {
     node.radius = node.is_start || node.is_target ? 11 : 10;
-    node.targetX = marginX + Math.max(0, Math.min(1, node.pathPosition)) * usableWidth;
     const hash = networkHash(`${node.id}:${seed}`);
-    node.x = node.targetX + ((hash % 1000) / 999 - 0.5) * Math.min(42, usableWidth * 0.09);
     node.targetY = marginY + (((hash >>> 10) % 1000) / 999) * usableHeight;
-    node.y = node.targetY;
     node.fixed = Boolean(node.is_start || node.is_target);
+  });
+  assignPathTierJitter(nodes, marginX, usableWidth, marginY, usableHeight, seed);
+  nodes.forEach((node) => {
+    node.x = node.targetX;
+    node.y = node.targetY;
     if (node.is_start) {
       node.x = marginX;
+      node.targetX = node.x;
       node.y = height / 2;
       node.targetY = node.y;
     } else if (node.is_target) {
       node.x = width - marginX;
+      node.targetX = node.x;
       node.y = height / 2;
       node.targetY = node.y;
     }
@@ -464,16 +1032,16 @@ function layoutPathNetwork(nodes, edges, width, height, seed) {
     .map((edge) => ({ edge, source: byId.get(edge.source), target: byId.get(edge.target) }))
     .filter((item) => item.source && item.target);
 
-  const iterations = nodes.length > 120 ? 120 : 190;
+  const iterations = nodes.length > 120 ? 180 : 250;
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const forces = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]));
     nodes.forEach((node) => {
       const force = forces.get(node.id);
-      force.x += (node.targetX - node.x) * 0.075;
+      force.x += (node.targetX - node.x) * 0.11;
       // Retain deterministic vertical lanes while the springs merge shared
       // hubs. This prevents dense top-path unions from collapsing into a
       // single horizontal knot.
-      force.y += (node.targetY - node.y) * 0.018;
+      force.y += (node.targetY - node.y) * 0.065;
     });
     for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
@@ -487,7 +1055,7 @@ function layoutPathNetwork(nodes, edges, width, height, seed) {
           dy = 1;
           distance = Math.hypot(dx, dy);
         }
-        const desired = left.radius + right.radius + 34;
+        const desired = left.radius + right.radius + 48;
         if (distance < desired) {
           const push = (desired - distance) * 0.055;
           const unitX = dx / distance;
@@ -505,7 +1073,8 @@ function layoutPathNetwork(nodes, edges, width, height, seed) {
       const distance = Math.max(Math.hypot(dx, dy), 0.01);
       const layerDistance = Math.abs(target.targetX - source.targetX);
       const desired = Math.max(48, Math.min(105, 45 + layerDistance * 0.38));
-      const pull = (distance - desired) * 0.016;
+      const sameTier = Math.abs(Number(source.pathPosition) - Number(target.pathPosition)) < 0.001;
+      const pull = (distance - desired) * (sameTier ? 0.002 : 0.013);
       const unitX = dx / distance;
       const unitY = dy / distance;
       forces.get(source.id).x += unitX * pull;
@@ -561,7 +1130,7 @@ function selectRankedPath(path, row) {
   const nodes = (network.nodes || []).filter((node) => (node.path_ranks || []).map(Number).includes(rank));
   const edges = (network.edges || []).filter((edge) => (edge.path_ranks || []).map(Number).includes(rank));
   setPathNetworkSelection(
-    `Path ${rank}: ${path.path_symbols} · geometric-mean edge score ${formatScore(path.geometric_mean_edge_probability ?? path.path_probability_product)}. Its lowest-probability edge is loaded below; select any highlighted node or edge to inspect another component.`,
+    `Path ${rank}: ${path.path_symbols} · primary score ${formatScore(path.primary_path_score ?? path.geometric_mean_edge_probability ?? path.path_probability_product)}. Its lowest-probability edge is loaded below; select any highlighted node or edge to inspect another component.`,
     nodes.map((node) => node.id),
     edges.map((edge) => edge.id),
   );
@@ -602,7 +1171,7 @@ function drawPathNetwork() {
   updatePathNetworkColorScale("node", nodeScale);
   updatePathNetworkColorScale("edge", edgeScale);
   const width = Math.max(320, Math.round(svg.parentElement.getBoundingClientRect().width || 640));
-  const height = Math.max(430, Math.min(620, 350 + visible.nodes.length * 4.5));
+  const height = Math.max(520, Math.min(860, 390 + visible.nodes.length * 6.5));
   svg.innerHTML = "";
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("height", String(height));
@@ -655,7 +1224,13 @@ function drawPathNetwork() {
       marker.appendChild(svgElement("path", { d: "M 0 0 L 8 4 L 0 8 z", style: `fill:${evidenceColor}` }));
       defs.appendChild(marker);
     }
-    const pathData = `M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    const edgeHash = networkHash(`${edge.id}:${state.networkLayoutSeed}:edge-route`);
+    const sameTier = Math.abs(Number(source.pathPosition) - Number(target.pathPosition)) < 0.001;
+    const bendDirection = edgeHash % 2 ? 1 : -1;
+    const bendMagnitude = sameTier ? 42 + (edgeHash % 39) : 10 + (edgeHash % 17);
+    const controlX = (x1 + x2) / 2 - (dy / distance) * bendMagnitude * bendDirection;
+    const controlY = (y1 + y2) / 2 + (dx / distance) * bendMagnitude * bendDirection;
+    const pathData = `M ${x1.toFixed(2)} ${y1.toFixed(2)} Q ${controlX.toFixed(2)} ${controlY.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)}`;
     const visiblePath = svgElement("path", {
       d: pathData,
       class: `network-edge ${evidenceClass}`,
@@ -791,6 +1366,7 @@ function renderPathNetwork(network) {
   limitSelect.value = String(state.networkRankLimit);
   state.networkLayoutSeed = 0;
   drawPathNetwork();
+  updateLiteratureControls();
 }
 
 function streamCard(stream, group, current) {
@@ -813,14 +1389,15 @@ function streamCard(stream, group, current) {
   copy.innerHTML = `<strong>${stream.label}</strong><span>${stream.description}</span><small>${stream.normalization.reference}</small>${dependence}`;
   const weight = document.createElement("label");
   weight.className = "weight-field";
-  weight.innerHTML = `<span>Weight</span><input class="stream-weight stream-setting" type="number" min="0" max="10" step="0.1" value="${current.weight}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} weight" />`;
+  weight.title = "Any finite value from 0 through 10 is allowed; decimals are not restricted to tenths.";
+  weight.innerHTML = `<span>Weight</span><input class="stream-weight stream-setting" type="number" min="0" max="10" step="any" value="${current.weight}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} weight" />`;
   card.append(toggle, copy, weight);
   if (stream.normalization.user_control !== false) {
     card.classList.add("with-preferred-tq");
     const normalization = document.createElement("label");
     normalization.className = "normalization-field";
     normalization.title = stream.normalization.help;
-    normalization.innerHTML = `<span>${stream.normalization.control_label}</span><input class="stream-tq stream-setting" type="number" min="0.05" max="20" step="0.05" value="${current.tq_multiplier}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} ${stream.normalization.control_label}" />`;
+    normalization.innerHTML = `<span>${stream.normalization.control_label}</span><input class="stream-tq stream-setting" type="number" min="0.05" max="20" step="any" value="${current.tq_multiplier}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} ${stream.normalization.control_label}" />`;
     card.appendChild(normalization);
     const preferred = document.createElement("label");
     const bounds = stream.normalization.calibration_bounds || [0.25, 4];
@@ -838,8 +1415,8 @@ function streamCard(stream, group, current) {
     card.classList.add("with-parameters");
     const field = document.createElement("label");
     field.className = "stream-parameter-field";
-    field.title = parameter.help;
-    field.innerHTML = `<span>${parameter.label}</span><input class="stream-parameter stream-setting" data-parameter="${parameter.id}" type="number" min="${parameter.minimum}" max="${parameter.maximum}" step="${parameter.step}" value="${current.parameters[parameter.id]}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} ${parameter.label}" />`;
+    field.title = `${parameter.help} Any decimal within ${parameter.minimum}–${parameter.maximum} is accepted; ${parameter.step} is a suggested adjustment increment, not a validity grid.`;
+    field.innerHTML = `<span>${parameter.label}</span><input class="stream-parameter stream-setting" data-parameter="${parameter.id}" type="number" min="${parameter.minimum}" max="${parameter.maximum}" step="any" value="${current.parameters[parameter.id]}" ${current.enabled ? "" : "disabled"} aria-label="${stream.label} ${parameter.label}" />`;
     card.appendChild(field);
   });
   if (group === "node" || !stream.derived) {
@@ -921,6 +1498,13 @@ function populateControls() {
   $("continuous-edge-bf-floor").value = edge.continuous_bayes_factor_floor;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
+  const graphStatistics = state.defaults.graph_statistics;
+  $("graph-statistics-enabled").checked = graphStatistics.enabled;
+  $("graph-statistics-cutoff").value = graphStatistics.edge_probability_cutoff;
+  const selectedGraphStatistics = new Set(graphStatistics.metrics || []);
+  document.querySelectorAll(".graph-statistic").forEach((input) => {
+    input.checked = selectedGraphStatistics.has(input.value);
+  });
   const path = state.defaults.path;
   $("path-enabled").checked = path.enabled;
   $("path-start").value = path.start;
@@ -928,6 +1512,7 @@ function populateControls() {
   $("path-top-k").value = path.top_k;
   $("path-max-hops").value = path.max_hops;
   $("path-cutoff").value = path.minimum_edge_probability;
+  $("path-include-node-probabilities").checked = path.include_node_probabilities;
   $("ontology-directionality").checked = path.ontology_directionality_enabled;
   $("omnipath-directionality").checked = path.omnipath_directionality_enabled;
   $("signal-only").checked = path.signaling_intermediates_only;
@@ -942,6 +1527,7 @@ function populateControls() {
   $("temporal-p-adjust").value = temporal.p_adjust_method;
   $("temporal-min-scored").value = temporal.minimum_scored_nodes;
   setCalibrationControls(calibration.enabled);
+  setGraphStatisticsControls(graphStatistics.enabled);
   setPathControls(path.enabled);
 }
 
@@ -995,6 +1581,13 @@ function collectConfiguration() {
       prior_probability: Number($("edge-prior").value),
       output_probability_cutoff: Number($("edge-cutoff").value),
     },
+    graph_statistics: {
+      enabled: $("graph-statistics-enabled").checked,
+      edge_probability_cutoff: Number($("graph-statistics-cutoff").value),
+      metrics: Array.from(document.querySelectorAll(".graph-statistic:checked")).map(
+        (input) => input.value
+      ),
+    },
     path: {
       enabled: $("path-enabled").checked,
       start: $("path-start").value.trim(),
@@ -1002,6 +1595,7 @@ function collectConfiguration() {
       top_k: Number($("path-top-k").value),
       max_hops: Number($("path-max-hops").value),
       minimum_edge_probability: Number($("path-cutoff").value),
+      include_node_probabilities: $("path-include-node-probabilities").checked,
       ontology_directionality_enabled: $("ontology-directionality").checked,
       omnipath_directionality_enabled: $("omnipath-directionality").checked,
       signaling_intermediates_only: $("signal-only").checked,
@@ -1031,6 +1625,13 @@ function setCalibrationControls(enabled) {
     const card = control.closest(".stream-card");
     control.disabled = !enabled || !card.querySelector(".stream-toggle").checked;
   });
+}
+
+function setGraphStatisticsControls(enabled) {
+  $("graph-statistics-controls").querySelectorAll("input").forEach((control) => {
+    control.disabled = !enabled;
+  });
+  $("graph-statistics-controls").classList.toggle("inactive", !enabled);
 }
 
 function setPathControls(enabled) {
@@ -1072,8 +1673,11 @@ function showPanel(name) {
 
 function showWorkflowError(error, fallbackMessage = "The analysis could not be completed.") {
   const rawMessage = String(error?.message || error || fallbackMessage);
-  const disconnected = error instanceof TypeError
-    || /failed to fetch|networkerror|load failed|network request failed/i.test(rawMessage);
+  // A TypeError can also be raised by result rendering.  Classifying every
+  // TypeError as a lost server connection hides the actionable JavaScript
+  // message and makes an intact backend look offline.  Real fetch failures
+  // already carry one of the browser-specific network phrases below.
+  const disconnected = /failed to fetch|networkerror|load failed|network request failed/i.test(rawMessage);
   $("error-eyebrow").textContent = disconnected ? "Local connection lost" : "Run stopped";
   $("error-title").textContent = disconnected
     ? "Local analysis server is not running"
@@ -1164,6 +1768,167 @@ function renderCalibrationParameters(calibration) {
   section.classList.toggle("hidden", !nodeVisible && !edgeVisible);
 }
 
+function renderFullGraphNodeRanking(statistics, metricId) {
+  const body = $("full-graph-node-rankings");
+  body.innerHTML = "";
+  const rows = statistics?.top_nodes_by_metric?.[metricId] || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4" class="muted">No ranking is available for this statistic.</td></tr>';
+    return;
+  }
+  rows.forEach((row, index) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${index + 1}</td><td>${escapeHtml(row.symbol)}</td><td>${escapeHtml(row.name || "—")}</td><td class="score">${formatEvidenceNumber(row.value)}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+function renderMetricOverview(statistics, containerId) {
+  const container = $(containerId);
+  container.innerHTML = "";
+  const available = statistics?.available_metrics || [];
+  available.forEach((metric, metricIndex) => {
+    const rows = (statistics?.top_nodes_by_metric?.[metric.id] || []).slice(0, 10);
+    if (!rows.length) return;
+    const details = document.createElement("details");
+    details.className = "metric-overview-card";
+    if (metricIndex < 4) details.open = true;
+    details.innerHTML = `<summary>${escapeHtml(metric.label)}</summary><ol>${rows.map((row) => (
+      `<li><strong>${escapeHtml(row.symbol)}</strong><span class="metric-value">${formatEvidenceNumber(row.value)}</span></li>`
+    )).join("")}</ol>`;
+    container.appendChild(details);
+  });
+}
+
+function renderFullGraphStatistics(statistics) {
+  const section = $("full-graph-statistics-result");
+  if (!statistics?.summary) {
+    section.classList.add("hidden");
+    return;
+  }
+  section.classList.remove("hidden");
+  const summary = statistics.summary;
+  $("full-graph-statistics-definition").textContent = `p(edge) > ${formatEvidenceNumber(summary.edge_probability_cutoff_exclusive)}`;
+  const fields = [
+    ["Nodes", summary.node_count],
+    ["Edges", summary.edge_count],
+    ["Density", summary.density],
+    ["Components", summary.connected_component_count],
+    ["Largest component", summary.largest_component_node_count],
+    ["Isolates", summary.isolate_count],
+    ["Mean degree", summary.average_degree],
+    ["Median degree", summary.median_degree],
+    ["Maximum degree", summary.maximum_degree],
+    ["Mean posterior strength", summary.average_posterior_strength],
+    ["Mean clustering", summary.average_clustering_coefficient],
+    ["Weighted mean clustering", summary.weighted_average_clustering_coefficient],
+    ["Transitivity", summary.transitivity],
+    ["Degree assortativity", summary.degree_assortativity],
+    ["Diameter (largest component)", summary.largest_component_diameter_unweighted],
+    ["Mean path length (largest component)", summary.largest_component_average_shortest_path_length_unweighted],
+    ["Communities", summary.community_count],
+    ["Weighted modularity", summary.probability_weighted_modularity],
+    ["Articulation points", summary.articulation_point_count],
+  ].filter(([, value]) => value !== null && value !== undefined);
+  $("full-graph-summary").innerHTML = fields.map(([label, value]) => (
+    `<div><dt>${escapeHtml(label)}</dt><dd>${Number.isInteger(Number(value)) ? formatInt(value) : formatEvidenceNumber(value)}</dd></div>`
+  )).join("");
+  const select = $("full-graph-metric");
+  select.innerHTML = "";
+  (statistics.available_metrics || []).forEach((metric) => {
+    const option = document.createElement("option");
+    option.value = metric.id;
+    option.textContent = metric.label;
+    select.appendChild(option);
+  });
+  if (select.options.length) {
+    const preferred = Array.from(select.options).find((option) => option.value === "degree");
+    select.value = preferred ? preferred.value : select.options[0].value;
+    renderFullGraphNodeRanking(statistics, select.value);
+  } else {
+    renderFullGraphNodeRanking(statistics, "");
+  }
+  select.onchange = () => renderFullGraphNodeRanking(statistics, select.value);
+  renderMetricOverview(statistics, "full-graph-metric-panels");
+  const approximations = [];
+  if (summary.clustering_is_approximate) approximations.push(`clustering (${formatInt(summary.clustering_neighbor_pair_samples_per_node)} neighbor pairs/node)`);
+  if (summary.betweenness_is_approximate) approximations.push(`betweenness (${formatInt(summary.betweenness_approximation_source_count)} sources)`);
+  if (summary.distance_centrality_is_approximate) approximations.push(`closeness/harmonic (${formatInt(summary.distance_centrality_landmark_count)} landmarks across components)`);
+  if (summary.shortest_path_is_approximate) approximations.push(`path length and diameter (${formatInt(summary.shortest_path_landmark_count)} landmarks; diameter is a lower bound)`);
+  if (approximations.length) {
+    $("full-graph-statistics-definition").textContent += ` · deterministic approximations: ${approximations.join(", ")}`;
+  }
+}
+
+function renderFoundPathNodeRanking(statistics, metricId) {
+  const body = $("found-path-node-rankings");
+  body.innerHTML = "";
+  const rows = statistics?.top_nodes_by_metric?.[metricId] || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4" class="muted">No returned-path ranking is available.</td></tr>';
+    return;
+  }
+  rows.forEach((row, index) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${index + 1}</td><td>${escapeHtml(row.symbol)}</td><td>${escapeHtml(row.name || "—")}</td><td class="score">${formatEvidenceNumber(row.value)}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+function renderFoundPathStatistics(statistics) {
+  const section = $("found-path-statistics-result");
+  if (!statistics?.summary) {
+    section.classList.add("hidden");
+    return;
+  }
+  section.classList.remove("hidden");
+  const summary = statistics.summary;
+  $("found-path-statistics-definition").textContent = `${formatInt(summary.returned_path_count || 0)} returned paths · exact edge union`;
+  const fields = [
+    ["Returned paths", summary.returned_path_count],
+    ["Unique nodes", summary.unique_node_count ?? summary.node_count],
+    ["Unique undirected edges", summary.unique_undirected_path_edge_count ?? summary.edge_count],
+    ["Directed transitions", summary.directed_transition_count],
+    ["Bidirectional pairs", summary.bidirectional_pair_count],
+    ["Density", summary.density],
+    ["Components", summary.connected_component_count],
+    ["Mean degree", summary.average_degree],
+    ["Median degree", summary.median_degree],
+    ["Maximum degree", summary.maximum_degree],
+    ["Mean posterior strength", summary.average_posterior_strength],
+    ["Mean clustering", summary.average_clustering_coefficient],
+    ["Weighted mean clustering", summary.weighted_average_clustering_coefficient],
+    ["Transitivity", summary.transitivity],
+    ["Degree assortativity", summary.degree_assortativity],
+    ["Diameter", summary.largest_component_diameter_unweighted],
+    ["Mean path length", summary.largest_component_average_shortest_path_length_unweighted],
+    ["Communities", summary.community_count],
+    ["Articulation points", summary.articulation_point_count],
+  ].filter(([, value]) => value !== null && value !== undefined);
+  $("found-path-summary").innerHTML = fields.map(([label, value]) => (
+    `<div><dt>${escapeHtml(label)}</dt><dd>${Number.isInteger(Number(value)) ? formatInt(value) : formatEvidenceNumber(value)}</dd></div>`
+  )).join("");
+  const select = $("found-path-metric");
+  select.innerHTML = "";
+  (statistics.available_metrics || []).forEach((metric) => {
+    const option = document.createElement("option");
+    option.value = metric.id;
+    option.textContent = metric.label;
+    select.appendChild(option);
+  });
+  if (select.options.length) {
+    const preferred = Array.from(select.options).find(
+      (option) => option.value === "path_participation_count"
+    );
+    select.value = preferred ? preferred.value : select.options[0].value;
+    renderFoundPathNodeRanking(statistics, select.value);
+  } else {
+    renderFoundPathNodeRanking(statistics, "");
+  }
+  select.onchange = () => renderFoundPathNodeRanking(statistics, select.value);
+  renderMetricOverview(statistics, "found-path-metric-panels");
+}
+
 function renderResult(job) {
   const preview = job.preview || { metrics: {}, top_paths: [], files: [], warnings: [] };
   $("evidence-inspector-result").classList.add("hidden");
@@ -1173,7 +1938,15 @@ function renderResult(job) {
   $("metric-paths").textContent = formatInt(preview.metrics.ranked_paths);
   renderProbabilityDistribution("node", preview.probability_distributions?.nodes);
   renderProbabilityDistribution("edge", preview.probability_distributions?.edges);
+  renderFullGraphStatistics(preview.full_graph_statistics);
+  renderFoundPathStatistics(preview.found_path_union_statistics);
   renderPathNetwork(preview.path_network);
+  const nodeAwarePathScore = Boolean(
+    job.summary?.path_finding?.node_probabilities_included_in_primary_score
+  );
+  $("path-score-label").textContent = nodeAwarePathScore
+    ? "Geometric-mean node + edge score"
+    : "Geometric-mean edge score";
   const calibration = preview.calibration;
   $("calibration-result").classList.toggle("hidden", !calibration?.enabled);
   renderCalibrationParameters(calibration);
@@ -1196,12 +1969,15 @@ function renderResult(job) {
     $("oriented-edge-count").textContent = formatInt(directionality.uniquely_oriented_edge_count);
     $("oriented-edge-percent").textContent = `${percent.toFixed(1)}%`;
     const ontologyOnly = Number(directionality.uniquely_oriented_by_ontology_only_count || 0);
+    const kinaseOnly = Number(directionality.uniquely_oriented_by_kinase_predictor_only_count || 0);
+    const kinaseAny = Number(directionality.uniquely_oriented_with_kinase_predictor_count || 0);
     const omnipathOnly = Number(directionality.uniquely_oriented_by_omnipath_only_count || 0);
     const both = Number(directionality.uniquely_oriented_by_both_count || 0);
     const precedence = Number(directionality.ontology_precedence_over_opposing_omnipath_count || 0);
+    const kinasePrecedence = Number(directionality.kinase_predictor_precedence_over_opposing_omnipath_count || 0);
     const noDirection = Number(directionality.unresolved_no_direction_evidence_count ?? directionality.unresolved_no_matching_rule_count ?? 0);
     const conflicts = Number(directionality.unresolved_conflicting_direction_count ?? directionality.unresolved_conflicting_rules_count ?? 0);
-    $("directionality-result-detail").textContent = `${formatInt(directionality.retained_unique_edge_count)} edges above the output cutoff; ontology-led: ${formatInt(ontologyOnly)}, added by OmniPath: ${formatInt(omnipathOnly)}, agreed by both: ${formatInt(both)}. ${formatInt(precedence)} opposing OmniPath calls retained the ontology restriction. ${formatInt(noDirection)} had no direction evidence and ${formatInt(conflicts)} remained bidirectional.`;
+    $("directionality-result-detail").textContent = `${formatInt(directionality.retained_unique_edge_count)} edges above the output cutoff; ontology-led: ${formatInt(ontologyOnly)}, added by KinasePredictor: ${formatInt(kinaseOnly)}, added by OmniPath: ${formatInt(omnipathOnly)}. ${formatInt(kinaseAny)} oriented edges carried KinasePredictor direction evidence and ${formatInt(both)} had agreeing ontology/OmniPath evidence. ${formatInt(precedence)} opposing OmniPath calls retained the ontology restriction; ${formatInt(kinasePrecedence)} retained the KinasePredictor restriction. ${formatInt(noDirection)} had no direction evidence and ${formatInt(conflicts)} remained bidirectional.`;
   }
   const temporal = preview.temporal_validation;
   const temporalExecuted = Boolean(temporal?.executed);
@@ -1226,7 +2002,7 @@ function renderResult(job) {
       const temporalCells = temporalExecuted
         ? `<td>${formatInt(path.temporal_n_scored)}</td><td class="score">${formatProbability(path.temporal_kendall_tau_mean)} [${formatProbability(path.temporal_kendall_tau_low)}, ${formatProbability(path.temporal_kendall_tau_high)}]</td>`
         : "";
-      row.innerHTML = `<td>${path.rank}</td><td class="route">${path.path_symbols}</td><td>${path.hop_count}</td><td class="score">${formatScore(path.geometric_mean_edge_probability ?? path.path_probability_product)}</td>${temporalCells}`;
+      row.innerHTML = `<td>${path.rank}</td><td class="route">${path.path_symbols}</td><td>${path.hop_count}</td><td class="score">${formatScore(path.primary_path_score ?? path.geometric_mean_edge_probability ?? path.path_probability_product)}</td>${temporalCells}`;
       row.addEventListener("click", () => selectRankedPath(path, row));
       row.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -1268,6 +2044,8 @@ async function saveEntireSession() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         inspection_history: state.inspectionHistory,
+        literature_interpretations: state.literatureHistory.map((item) => ({ cache_key: item.cache_key })),
+        network_literature_analyses: state.networkLiteratureHistory.map((item) => ({ cache_key: item.cache_key })),
         client_state: {
           exported_at: new Date().toISOString(),
           visible_path_rank_limit: state.networkRankLimit,
@@ -1289,7 +2067,7 @@ async function saveEntireSession() {
     repeatLink.textContent = `Download ${report.file} again`;
     repeatLink.classList.remove("hidden");
     const reportSize = `${(Number(report.report_bytes || 0) / (1024 * 1024)).toFixed(1)} MB`;
-    status.textContent = `${report.file} is ready (${reportSize}; ${formatInt(report.embedded_file_count)} embedded artifacts and ${formatInt(report.interpretation_hypothesis_count)} offline evidence interpretations).`;
+    status.textContent = `${report.file} is ready (${reportSize}; ${formatInt(report.embedded_file_count)} embedded artifacts, ${formatInt(report.interpretation_hypothesis_count)} evidence ledgers, and ${formatInt(report.literature_interpretation_count || 0)} literature reports).`;
   } catch (error) {
     status.textContent = String(error?.message || error);
   } finally {
@@ -1353,7 +2131,17 @@ async function startRun(event) {
   $("run-button").disabled = true;
   state.jobId = null;
   state.inspectionHistory = [];
+  state.literatureHistory = [];
+  state.networkLiteratureHistory = [];
+  state.networkLiteratureResearchId = null;
+  state.networkLiteratureActive = false;
+  if (state.networkLiteraturePollTimer) clearInterval(state.networkLiteraturePollTimer);
+  state.networkLiteraturePollTimer = null;
+  state.currentEvidenceInspection = null;
   $("evidence-inspector-result").classList.add("hidden");
+  $("database-trace").classList.add("hidden");
+  $("literature-result").classList.add("hidden");
+  updateLiteratureControls();
   $("cancel-job-button").disabled = true;
   $("cancel-job-button").textContent = "Cancel analysis";
   showPanel("job-state");
@@ -1404,6 +2192,18 @@ async function initialize() {
     if (!response.ok) throw new Error(payload.error || "Unable to load configuration");
     state.registry = payload.registry;
     state.defaults = payload.defaults;
+    state.literatureInterpreter = payload.literature_interpreter || { available: false };
+    if (state.literatureInterpreter.default_model) {
+      $("literature-model").value = state.literatureInterpreter.default_model;
+    }
+    if (state.literatureInterpreter.default_api_base_url) {
+      $("literature-api-base-url").value = state.literatureInterpreter.default_api_base_url;
+    }
+    if (state.literatureInterpreter.default_reasoning_effort) {
+      $("literature-reasoning").value = state.literatureInterpreter.default_reasoning_effort;
+    }
+    restoreLiteratureConnectionPreferences();
+    updateLiteratureControls();
     $("catalog-nodes").textContent = formatInt(payload.project.seed_catalog_nodes);
     $("catalog-pairs").textContent = formatInt(payload.project.cached_pair_hypotheses);
     populateControls();
@@ -1432,13 +2232,31 @@ $("edge-evidence-form").addEventListener("submit", (event) => {
 });
 $("cancel-job-button").addEventListener("click", cancelRun);
 $("save-session-html").addEventListener("click", saveEntireSession);
+$("research-pathway-network").addEventListener("click", researchPathwayNetwork);
+$("cancel-network-literature").addEventListener("click", cancelNetworkLiterature);
+$("literature-api-key").addEventListener("input", updateLiteratureControls);
+for (const fieldId of ["literature-api-base-url", "literature-model"]) {
+  $(fieldId).addEventListener("input", () => {
+    saveLiteratureConnectionPreferences();
+    updateLiteratureControls();
+  });
+}
+$("literature-key-visibility").addEventListener("click", () => {
+  const input = $("literature-api-key");
+  const reveal = input.type === "password";
+  input.type = reveal ? "text" : "password";
+  $("literature-key-visibility").textContent = reveal ? "Hide key" : "Show key";
+  $("literature-key-visibility").setAttribute("aria-pressed", String(reveal));
+});
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
 $("calibration-enabled").addEventListener("change", (event) => setCalibrationControls(event.target.checked));
+$("graph-statistics-enabled").addEventListener("change", (event) => setGraphStatisticsControls(event.target.checked));
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));
 $("ontology-directionality").addEventListener("change", () => setDirectionalityControls($("path-enabled").checked));
 $("path-network-limit").addEventListener("change", (event) => {
   state.networkRankLimit = Number(event.target.value);
   drawPathNetwork();
+  updateLiteratureControls();
 });
 $("path-network-relayout").addEventListener("click", () => {
   state.networkLayoutSeed += 1;

@@ -401,6 +401,29 @@ probability. It is written per run as
 `scaffold_triadic_closure_audit.tsv.gz`. The revised fixed validation run is
 stored at `results/gui_runs/scaffold_binary_closure_validation_20260804_v2/`.
 
+## BioGRID positive evidence and shared-partner closure
+
+BioGRID build 5.0.261 contributes a positive-only reported-interaction stream.
+Direct/contact and co-complex records share one default BF 5. If both
+annotations exist for a pair, it is counted once; annotations from the same
+database are not multiplied. Absence is always neutral because
+the archive does not define a comprehensive tested-negative pair universe.
+Human records, including HuRI, and rat records are projected to mouse with the
+project's audited orthology tables; native mouse pairs use official symbols.
+
+The separate `biogrid_shared_partner_closure` rule assigns fixed likelihood
+0.90 (BF 1.8) when two protein nodes each have a reported direct/contact or
+co-complex relationship to the same third protein. The common partner may lie
+outside the graph. The operation is one-pass, has no degree/promiscuity
+adjustment, and does not strengthen a pair for having multiple common partners.
+An endpoint pair already present in the reported-interaction stream is removed
+from closure, so reported and closure factors are never multiplied for the
+same hypothesis. The per-run summary records candidates, reported exclusions,
+and final novel closure pairs.
+The current 871-protein universe yields 303,286 qualifying pairs from 205,571
+audited incident anchors. This is dependent proximity evidence and must not be
+reported as direct-binding confirmation.
+
 ## Validation and backend storage
 
 All six cumulative adjacency matrices were independently checked against the

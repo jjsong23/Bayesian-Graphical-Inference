@@ -144,6 +144,63 @@ class SessionReportTests(unittest.TestCase):
                 "visible_path_rank_limit": 1,
                 "coverage": "Every inspectable node and edge in the saved network.",
             },
+            "literature_interpretations": [
+                {
+                    "generated_at": "2026-09-23T12:00:00+00:00",
+                    "model": "gpt-5.5",
+                    "reasoning_effort": "high",
+                    "cell_type": "collecting duct principal cells",
+                    "signaling_purpose": "vasopressin-regulated AQP2 trafficking",
+                    "hypothesis": {"kind": "node", "symbol": "Aqp2"},
+                    "interpretation": {
+                        "hypothesis_label": "Aqp2",
+                        "classification": "known_in_exact_context",
+                        "confidence": 0.95,
+                        "one_sentence_takeaway": "AQP2 is an established collecting-duct effector.",
+                        "contextual_evidence": [
+                            {
+                                "scope": "exact_cell_type_and_purpose",
+                                "biological_context": "mouse collecting duct principal cells under vasopressin stimulation",
+                                "support": "direct",
+                                "claim": "AQP2 mediates vasopressin-regulated water transport.",
+                                "source_urls": ["https://pubmed.ncbi.nlm.nih.gov/123456/"],
+                            }
+                        ],
+                        "novelty_interpretation": "This node is not novel in this context.",
+                        "mechanistic_interpretation": "AQP2 is trafficked to the apical membrane.",
+                        "bayesian_evidence_summary": "The frozen ledger supports the node.",
+                        "database_trace_summary": "No database traceback applies to this node.",
+                        "conflicting_or_missing_evidence": [],
+                        "caveats": ["Interpretation does not change the posterior."],
+                        "sources": [
+                            {
+                                "title": "Example primary study",
+                                "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+                                "source_type": "primary_research",
+                                "relevance": "Exact context",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "network_literature_analyses": [
+                {
+                    "model": "gpt-5.5",
+                    "reasoning_effort": "high",
+                    "node_count": 1,
+                    "edge_count": 1,
+                    "classification_counts": {"known_in_exact_context": 1, "plausible_novel_candidate": 1},
+                    "synthesis": {
+                        "overall_summary": "The complete displayed network was audited.",
+                        "established_core": ["Aqp2"],
+                        "contextually_novel_candidates": ["Prkaca — Aqp2"],
+                        "important_conflicts": [],
+                        "pathway_level_interpretation": "The pathway combines established and candidate biology.",
+                        "recommended_validation_priorities": ["Validate the candidate edge."],
+                        "limitations": ["Search retrieval is not exhaustive."],
+                    },
+                }
+            ],
         }
 
         result = build_session_report(session, self.directory)
@@ -161,12 +218,20 @@ class SessionReportTests(unittest.TestCase):
         self.assertIn('id="interpretation-select"', document)
         self.assertIn('data-interpretation-key="node:aqp2"', document)
         self.assertIn("Applied Bayes-factor distribution", document)
+        self.assertIn("Literature audit overview", document)
+        self.assertIn('id="interpretation-literature"', document)
+        self.assertIn("The complete displayed network was audited.", document)
+        self.assertIn("whole displayed network", document)
+        self.assertIn("known_in_exact_context", document)
+        self.assertIn("AQP2 is an established collecting-duct effector.", document)
+        self.assertIn("https://pubmed.ncbi.nlm.nih.gov/123456/", document)
         self.assertIn("Every inspectable node and edge in the saved network.", document)
         self.assertIn("use separate monotone color scales", document)
         self.assertIn('id="network-node-posterior-scale"', document)
         self.assertIn('id="network-edge-posterior-scale"', document)
         self.assertIn("session_snapshot.json", document)
         self.assertEqual(result["embedded_file_count"], 3)
+        self.assertEqual(result["literature_interpretation_count"], 1)
 
         encoded_vault = document.split("const vault=", 1)[1].split(";\nfunction decode64", 1)[0]
         vault = json.loads(encoded_vault)
@@ -206,6 +271,18 @@ class SessionReportTests(unittest.TestCase):
                     "node_b": right,
                 },
             ),
+            patch.object(
+                server,
+                "inspect_edge_evidence_batch",
+                side_effect=lambda _run, pairs, **_kwargs: [
+                    {
+                        "kind": "edge",
+                        "node_a": left,
+                        "node_b": right,
+                    }
+                    for left, right in pairs
+                ],
+            ),
         ):
             catalog, scope, errors = server._materialize_export_interpretations(
                 job_payload,
@@ -240,6 +317,18 @@ class SessionReportTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(scope["visible_path_rank_limit"], 50)
         self.assertEqual(server.MAX_AUTOMATIC_EXPORT_INTERPRETATIONS, 1000)
+
+    def test_literature_export_recovers_cached_reports_after_browser_reload(self) -> None:
+        cache = self.directory / "literature_interpretations"
+        cache.mkdir()
+        cached = {
+            "cache_key": "cached-key",
+            "generated_at": "2026-09-23T12:00:00+00:00",
+            "interpretation": {"hypothesis_label": "Aqp2"},
+        }
+        (cache / "cached-key.json").write_text(json.dumps(cached), encoding="utf-8")
+        result = server._complete_literature_history(self.directory, [])
+        self.assertEqual(result, [cached])
 
     def test_server_endpoint_creates_a_downloadable_report(self) -> None:
         (self.directory / "configuration.json").write_text("{}\n", encoding="utf-8")

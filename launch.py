@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,37 @@ FEATURE_IMPORTS = {
     "networkx": "networkx",
     "obonet": "obonet",
 }
+
+_PROXY_VARIABLES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "GIT_HTTP_PROXY",
+    "GIT_HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "git_http_proxy",
+    "git_https_proxy",
+)
+_DEAD_LOCAL_PROXY = "http://127.0.0.1:9"
+
+
+def child_environment() -> dict[str, str]:
+    """Preserve real proxy settings but discard Codex's closed proxy sentinel.
+
+    Local servers launched from a managed Codex process can inherit
+    ``127.0.0.1:9`` as a deliberate no-network placeholder.  Keeping that
+    value makes later, user-authorized OpenAI/Azure API calls fail locally even
+    though the destination is reachable.  No ordinary or institutional proxy
+    is altered.
+    """
+
+    environment = dict(os.environ)
+    for name in _PROXY_VARIABLES:
+        if environment.get(name, "").strip().casefold().rstrip("/") == _DEAD_LOCAL_PROXY:
+            environment.pop(name, None)
+    return environment
 
 
 def parse_args() -> argparse.Namespace:
@@ -128,7 +160,7 @@ def launch(args: argparse.Namespace) -> int:
         ]
         if args.no_browser:
             command.append("--no-browser")
-    return subprocess.call(command, cwd=PROJECT_ROOT)
+    return subprocess.call(command, cwd=PROJECT_ROOT, env=child_environment())
 
 
 def main() -> int:

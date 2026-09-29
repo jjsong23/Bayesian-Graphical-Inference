@@ -1213,6 +1213,89 @@ $$
 
 because the initial logit of a 0.5 prior is zero.
 
+## 15b. Presence-only IMCD nucleus/cytoplasm evidence
+
+Two optional, condition-specific edge streams were later added from the NHLBI
+rat IMCD cytoplasmic and nuclear proteome resources. The control samples define
+the basal stream, and the 30-minute dDAVP samples define the stimulated stream.
+The cytoplasmic `Summary for Web` sheet and nuclear `IMCD Two Peptides` sheet
+were used so that both inputs required at least two distinct identified
+peptides. Nuclear-extract and nuclear-pellet detections were combined by logical
+OR within each condition.
+
+All spectral-count measurements were reduced to binary detection. A numeric
+count greater than zero was present; zero, blank, or source labels indicating
+non-detection were absent. Spectral-count magnitude, basal-to-dDAVP ratios,
+fold changes, and p-values were excluded. Rat symbols were mapped to mouse with
+the Ensembl release 116 orthology mapping already used for collecting-duct node
+selection, with high-confidence mappings preferred and every mapping retained
+for audit.
+
+For condition \(c\), the binary shared-compartment indicator was
+
+$$
+I_{ij,c} =
+I(C_{i,c} \land C_{j,c})
+\lor
+I(N_{i,c} \land N_{j,c}),
+$$
+
+where \(C\) and \(N\) denote cytoplasmic and nuclear detection. A supported
+pair receives a configurable likelihood \(L_c\) and
+
+$$
+BF_{ij,c}=\frac{L_c}{0.5}.
+$$
+
+The default \(L_c=0.75\) gives BF 1.5. No empirical \(T_q\) is used because
+the observation is binary. Unsupported or unmeasured pairs remain neutral by
+default. Under the optional negative-evidence policy, only pairs for which both
+proteins have a condition-specific profile can be penalized for sharing neither
+compartment.
+
+The basal and dDAVP streams are separately selectable, but both are disabled by
+default and marked as correlated fractionation evidence. Of 598 profiled seed
+nodes in each condition, 174,561 of 178,503 possible basal pairs (97.79%) and
+174,779 dDAVP pairs (97.91%) shared at least one of the two broad compartments.
+The resulting streams therefore encode permissive spatial plausibility but
+provide little pairwise discrimination and should generally receive modest
+weight.
+
+## 15c. BioGRID reported interactions and shared-partner closure
+
+BioGRID build 5.0.261 was separated into direct/contact and co-complex assay
+tiers. Native mouse records were matched by official symbol. Human records,
+including HuRI, were projected with the existing human-to-mouse HPA mapping;
+rat records used the Ensembl release 116 orthology mapping. Cross-species rows
+and self-interactions were excluded from graph-edge and closure construction.
+
+The reported-pair stream uses one explicit expert evidence strength. A pair
+reported through direct/contact evidence, co-complex evidence, or both receives
+default BF 5 exactly once. Correlated annotations from the same database are
+not multiplied. Nonreporting is
+always neutral. The current 871-protein universe contains 14,277 mapped
+reported pairs, including 131 with explicit HuRI provenance.
+
+A separate, default-off one-pass closure supports A–B if both proteins have a reported
+direct/contact or co-complex relationship with the same third protein C. C may
+be outside the selected graph. Every qualifying pair receives likelihood 0.90,
+equivalent to BF 1.8 relative to the 0.50 neutral likelihood. The number of
+shared partners and partner degree are retained for audit but do not change the
+factor, and inferred edges are never reused as anchors.
+
+Reported A–B endpoint pairs are excluded before the closure factor is applied.
+Consequently, no endpoint pair receives both the reported BioGRID BF and the
+shared-partner closure BF. Candidate, excluded-reported, and final novel-pair
+counts are written to each run's derivation summary.
+
+The 205,571 normalized incident anchors yield 303,286 unique closure pairs in
+the current universe. This density is a consequence of applying the requested
+rule to publication-aggregated co-complex records. It must be interpreted as
+sensitivity-oriented dependent proximity evidence, not as independent proof
+of direct physical binding. The normalized anchor table is the complete
+reconstruction source; each run also records pair support counts, one example
+partner, and pre/post-closure probability.
+
 # Part IV: Separate colocalization graph for AlphaFold screening
 
 ## 16. Purpose and distinction from the general edge graph
@@ -1589,16 +1672,16 @@ These are planning estimates, not measured completion times. The model fit had
 \(r^2=0.89\), assumes ideal scheduling, and may not capture memory limitations,
 queueing, failures, or unusually long protein pairs.
 
-# Part VII: Ontology-based partial directionality
+# Part VII: Partial signal-propagation directionality
 
 ## 26. Separation of edge existence from signal-flow direction
 
 Bayesian edge characterization continued to estimate one undirected association
 probability for each unordered node pair. Directionality was added only as a
 path-traversal layer and did not change that probability. For an edge with
-probability (p_{ij}), a uniquely supported ontology direction retained
-(p_{ij}) in the allowed direction and assigned zero to the disallowed reverse
-traversal. Unresolved pairs retained (p_{ij}) in both directions.
+probability (p_{ij}), a uniquely supported direction retained (p_{ij}) in the
+allowed direction and assigned zero to the disallowed reverse traversal.
+Unresolved pairs retained (p_{ij}) in both directions.
 
 This partial orientation prevents a path search from crossing a resolved
 collider (A\rightarrow B\leftarrow C) from (A) through (B) to (C), or a
@@ -1637,7 +1720,7 @@ matching rule were marked `unresolved_no_matching_rule` and also retained in
 both directions. This fail-open policy avoided inventing causal order when the
 ontology labels were insufficient or contradictory.
 
-The implementation wrote four additional artifacts per directional run:
+The ontology implementation wrote four additional artifacts per directional run:
 
 - `propagation_adjacency_matrix.tsv`;
 - `ontology_directionality_audit.tsv.gz`;
@@ -1649,7 +1732,30 @@ replacement of the 17 ontology classes. The edge-level audit recorded both
 nodes, their complete class sets, the matched rules in each direction, the two
 allowed-traversal flags, and the final resolution status.
 
-## 28. Initial directionality coverage
+### KinasePredictor and OmniPath direction sources
+
+Positive KinasePredictor records preserve an ordered `kinase_node ->
+target_protein` relationship even though they update a symmetric edge-existence
+posterior. Under the active run's Tq/reference and negative-evidence settings,
+site log Bayes factors were summed separately for each ordered kinase-target
+pair. An ordered relationship with combined BF greater than one supplied a
+direction constraint only when the stream's complete undirected pair BF also
+exceeded one. `kinase -> substrate` retained the symmetric edge posterior and
+the reverse `substrate -> kinase` traversal was set to zero.
+Bidirectional positive predictions did not orient an otherwise unresolved
+pair. Disabling KinasePredictor or setting its weight to zero disabled this
+direction source.
+
+Mapped mouse OmniPath core source-target interactions supplied a third
+direction source. The precedence order was ontology, KinasePredictor, then
+OmniPath: each later source uniquely oriented only pairs left unresolved by the
+earlier sources and could not reopen a disallowed traversal. Agreement,
+opposition, record counts, KinasePredictor sites/models, and OmniPath
+resources/references were retained in the pair-level audit. Runs also wrote
+`kinase_predictor_direction_evidence.tsv.gz` and
+`omnipath_direction_evidence.tsv.gz` when those sources were active.
+
+## 28. Initial ontology-only directionality coverage
 
 The initial validation used the default 891 selected nodes plus external target
 Aqp2, giving 892 nodes and 169,769 undirected edges strictly above probability
@@ -1666,8 +1772,9 @@ allowed transitions; no path edge used a direction marked as disallowed.
 
 Biochemical sign remains separate. The phosphodiesterase rule records a
 negative-effect interpretation in the catalog, but activation and inhibition
-do not yet affect path scoring. Directed OmniPath annotations are likewise not
-yet combined with this ontology-only layer.
+do not yet affect path scoring. The counts above describe the initial
+ontology-only validation and are not presented as coverage counts for the
+later combined ontology, KinasePredictor, and OmniPath implementation.
 
 # Part VIII: Temporal validation of ranked paths
 

@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import gzip
 import copy
+import hashlib
 import json
 import math
 import re
+import sqlite3
 import sys
 import uuid
 from dataclasses import dataclass
@@ -24,7 +26,8 @@ PROJECT_ROOT = GUI_DIR.parent
 CODE_DIR = PROJECT_ROOT / "code"
 PATH_CODE_DIR = CODE_DIR / "path_finding"
 EDGE_CODE_DIR = CODE_DIR / "edge_characterization"
-for search_path in (CODE_DIR, PATH_CODE_DIR, EDGE_CODE_DIR):
+GRAPH_ANALYSIS_CODE_DIR = CODE_DIR / "graph_analysis"
+for search_path in (CODE_DIR, PATH_CODE_DIR, EDGE_CODE_DIR, GRAPH_ANALYSIS_CODE_DIR):
     if str(search_path) not in sys.path:
         sys.path.insert(0, str(search_path))
 
@@ -40,11 +43,14 @@ from find_ranked_paths import (  # noqa: E402
     cached_target_extension,
     connected_component_size,
     k_shortest_simple_paths,
+    path_node_probability_vector,
     resolve_existing_node,
     serialize_paths,
 )
 from incremental_edge_cache import (  # noqa: E402
+    cache_path as incremental_cache_path,
     ensure_incremental_pairs,
+    evidence_signature as incremental_evidence_signature,
     incremental_factor_table,
     incremental_pair_factor_table,
     incremental_node_scope_table,
@@ -52,6 +58,7 @@ from incremental_edge_cache import (  # noqa: E402
 from ontology_directionality import (  # noqa: E402
     RULE_CATALOG_PATH,
     apply_ontology_directionality,
+    build_kinase_predictor_direction_evidence,
     build_omnipath_direction_evidence,
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
@@ -68,6 +75,13 @@ from temporal_path_ranking import (  # noqa: E402
 from parameter_calibration import (  # noqa: E402
     bounded_powell_positive_calibration,
 )
+from full_graph_statistics import (  # noqa: E402
+    GUI_RANKING_LIMIT,
+    SUPPORTED_METRICS as SUPPORTED_GRAPH_STATISTICS,
+    compute_full_graph_statistics,
+    compute_path_union_node_statistics,
+    top_node_statistics,
+)
 
 
 ProgressCallback = Callable[[str, float], None]
@@ -76,6 +90,65 @@ CancellationCallback = Callable[[], bool]
 
 class WorkflowCancelled(RuntimeError):
     """Raised when a user requests cooperative workflow cancellation."""
+
+
+_FULL_GRAPH_STATISTICS_CACHE: dict[
+    str, tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]
+] = {}
+
+
+def _cached_full_graph_statistics(
+    matrix: pd.DataFrame,
+    metadata: pd.DataFrame,
+    *,
+    cutoff: float,
+    metrics: Iterable[str],
+    progress: Callable[[str], None] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
+    """Reuse identical descriptive graph calculations within a server process."""
+
+    selected_metrics = tuple(map(str, metrics))
+    digest = hashlib.sha256()
+    digest.update(np.ascontiguousarray(matrix.to_numpy(dtype=np.float64)).tobytes())
+    digest.update("\0".join(map(str, matrix.index)).encode("utf-8"))
+    digest.update(repr(float(cutoff)).encode("ascii"))
+    digest.update("\0".join(selected_metrics).encode("utf-8"))
+    metadata_columns = [
+        column
+        for column in ("symbol", "display_symbol", "name", "classes", "node_type")
+        if column in metadata.columns
+    ]
+    if metadata_columns:
+        digest.update(
+            pd.util.hash_pandas_object(
+                metadata[metadata_columns].fillna(""), index=False
+            ).to_numpy(dtype=np.uint64).tobytes()
+        )
+    key = digest.hexdigest()
+    cached = _FULL_GRAPH_STATISTICS_CACHE.get(key)
+    if cached is not None:
+        if progress:
+            progress("Reusing identical full-graph statistics from this session")
+        return (
+            cached[0].copy(deep=True),
+            copy.deepcopy(cached[1]),
+            cached[2].copy(deep=True),
+        )
+    result = compute_full_graph_statistics(
+        matrix,
+        metadata,
+        cutoff=cutoff,
+        metrics=selected_metrics,
+        progress=progress,
+    )
+    _FULL_GRAPH_STATISTICS_CACHE[key] = (
+        result[0].copy(deep=True),
+        copy.deepcopy(result[1]),
+        result[2].copy(deep=True),
+    )
+    while len(_FULL_GRAPH_STATISTICS_CACHE) > 2:
+        _FULL_GRAPH_STATISTICS_CACHE.pop(next(iter(_FULL_GRAPH_STATISTICS_CACHE)))
+    return result
 
 
 NODE_FACTORS_RELATIVE = Path(
@@ -108,6 +181,21 @@ HPA_PROFILES_RELATIVE = Path(
     "data/edge_characterization/localization/hpa/v25.1/processed/"
     "node_hpa_localization_profiles.tsv"
 )
+IMCD_COMPARTMENT_PROFILES_RELATIVE = Path(
+    "data/edge_characterization/imcd_compartment_presence/processed/"
+    "imcd_compartment_node_profiles.tsv"
+)
+BIOGRID_MAPPED_PAIRS_RELATIVE = Path(
+    "data/edge_characterization/biogrid/5.0.261/"
+    "mapped_graph_physical_pairs.tsv.gz"
+)
+BIOGRID_INCIDENT_ANCHORS_RELATIVE = Path(
+    "data/edge_characterization/biogrid/5.0.261/"
+    "graph_incident_physical_anchors.tsv.gz"
+)
+BIOGRID_PAIR_CATALOG_RELATIVE = Path(
+    "data/edge_characterization/biogrid/5.0.261/biogrid_ppi_pairs.tsv.gz"
+)
 OMNIPATH_EFFORT_MATRIX_RELATIVE = Path(
     "results/edge_characterization/localization_kinase_predictor_string_hpa_omnipath/"
     "omnipath_curation_effort_matrix.tsv"
@@ -136,6 +224,11 @@ STRING_REFERENCE_SCORE = 0.041
 STITCH_REFERENCE_SCORE = 0.150
 NEUTRAL_LIKELIHOOD = 0.5
 FACTOR_EPSILON = 1e-12
+IMCD_COMPARTMENT_HANDLERS = {
+    "imcd_basal_compartment_presence": "basal",
+    "imcd_ddavp_compartment_presence": "ddavp",
+}
+BIOGRID_PHYSICAL_HANDLER = "biogrid_physical_interaction"
 PHOSPHOPROTEOMIC_CALIBRATION_STREAMS = {
     "kinase_activity",
     "phosphoprotein_response",
@@ -341,6 +434,20 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
                 defaults["continuous_edge_bayes_factor_floor"]
             ),
         },
+        "graph_statistics": {
+            "enabled": bool(defaults.get("graph_statistics_enabled", True)),
+            "edge_probability_cutoff": float(
+                defaults.get(
+                    "graph_statistics_edge_probability_cutoff",
+                    defaults["edge_probability_cutoff"],
+                )
+            ),
+            "metrics": list(
+                defaults.get(
+                    "graph_statistics_metrics", SUPPORTED_GRAPH_STATISTICS
+                )
+            ),
+        },
         "path": {
             "enabled": True,
             "start": defaults["start_node"],
@@ -349,6 +456,9 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "max_hops": int(defaults["maximum_hops"]),
             "minimum_edge_probability": float(
                 defaults["path_minimum_edge_probability"]
+            ),
+            "include_node_probabilities": bool(
+                defaults.get("path_include_node_probabilities", False)
             ),
             "ontology_directionality_enabled": bool(
                 defaults["ontology_directionality_enabled"]
@@ -471,6 +581,7 @@ def normalize_configuration(
                 )
     config["node_integration"].update(supplied.get("node_integration", {}))
     config["edge_integration"].update(supplied.get("edge_integration", {}))
+    config["graph_statistics"].update(supplied.get("graph_statistics", {}))
     config["path"].update(supplied.get("path", {}))
     config["temporal_validation"].update(supplied.get("temporal_validation", {}))
 
@@ -615,6 +726,30 @@ def normalize_configuration(
         0.0,
         1.0,
     )
+    graph_statistics = config["graph_statistics"]
+    graph_statistics["enabled"] = bool(graph_statistics["enabled"])
+    graph_statistics["edge_probability_cutoff"] = _number(
+        graph_statistics["edge_probability_cutoff"],
+        "graph-statistics edge cutoff",
+        0.0,
+        1 - 1e-12,
+    )
+    selected_statistics = graph_statistics.get("metrics")
+    if not isinstance(selected_statistics, list):
+        raise ValueError("graph statistics must be a list")
+    selected_statistics = list(
+        dict.fromkeys(str(value).strip() for value in selected_statistics if str(value).strip())
+    )
+    unknown_statistics = sorted(
+        set(selected_statistics).difference(SUPPORTED_GRAPH_STATISTICS)
+    )
+    if unknown_statistics:
+        raise ValueError(
+            "unknown graph statistics: " + ", ".join(unknown_statistics)
+        )
+    if graph_statistics["enabled"] and not selected_statistics:
+        raise ValueError("select at least one full-graph statistic")
+    graph_statistics["metrics"] = selected_statistics
     path = config["path"]
     path["enabled"] = bool(path["enabled"])
     path["ontology_directionality_enabled"] = bool(
@@ -625,10 +760,13 @@ def normalize_configuration(
     )
     path["start"] = str(path["start"]).strip()
     path["target"] = str(path["target"]).strip()
-    path["top_k"] = int(_number(path["top_k"], "top paths", 1, 500))
+    path["top_k"] = int(_number(path["top_k"], "top paths", 1, 2000))
     path["max_hops"] = int(_number(path["max_hops"], "maximum hops", 1, 12))
     path["minimum_edge_probability"] = _number(
         path["minimum_edge_probability"], "path edge cutoff", 0.0, 1 - 1e-12
+    )
+    path["include_node_probabilities"] = bool(
+        path.get("include_node_probabilities", False)
     )
     path["signaling_intermediates_only"] = bool(path["signaling_intermediates_only"])
     path["exclude_multirole_scaffolds"] = bool(path["exclude_multirole_scaffolds"])
@@ -708,7 +846,7 @@ def normalize_configuration(
     edge_defs = {stream["id"]: stream for stream in registry["edge_streams"]}
     if all(edge_defs[stream_id].get("derived") for stream_id in effective_edges):
         raise ValueError(
-            "scaffold closure requires at least one non-derived edge stream to "
+            "derived closure requires at least one non-derived edge stream to "
             "construct its pre-closure graph"
         )
     exclusive: dict[str, list[str]] = {}
@@ -904,6 +1042,37 @@ def continuous_complement_bayes_factor(
 
 def _stream_multiplier(state: dict[str, Any]) -> float:
     return float(state.get("tq_multiplier", 1.0))
+
+
+def _definition_parameter_default(
+    definition: dict[str, Any], parameter_id: str
+) -> float:
+    for parameter in definition.get("parameters", []):
+        if parameter.get("id") == parameter_id:
+            return float(parameter["default"])
+    raise KeyError(
+        f"evidence stream {definition.get('id', '<unknown>')} has no "
+        f"{parameter_id!r} parameter"
+    )
+
+
+def _imcd_support_likelihood(
+    definition: dict[str, Any], state: dict[str, Any] | None = None
+) -> float:
+    default = _definition_parameter_default(definition, "support_likelihood")
+    value = float((state or {}).get("parameters", {}).get("support_likelihood", default))
+    if not NEUTRAL_LIKELIHOOD <= value < 1.0:
+        raise ValueError("IMCD support likelihood must be in [0.5, 1)")
+    return value
+
+
+def _edge_incremental_scale(
+    definition: dict[str, Any], state: dict[str, Any]
+) -> float:
+    """Return the scalar understood by the incremental stream implementation."""
+    if definition["normalization"]["handler"] in IMCD_COMPARTMENT_HANDLERS:
+        return _imcd_support_likelihood(definition, state)
+    return _stream_multiplier(state)
 
 
 def _aligned_series(
@@ -1869,6 +2038,137 @@ def _kinase_predictor_edge_factors(
     return grouped[["node_a", "node_b", "bayes_factor"]]
 
 
+def _incremental_kinase_hit_table(
+    project: Path,
+    graph_symbols: list[str],
+) -> pd.DataFrame:
+    """Read ordered kinase/substrate roles from the current raw-pair cache."""
+    columns = [
+        "kinase_node",
+        "target_protein",
+        "site",
+        "predictor_label",
+        "raw_score",
+        "site_Tq_q75",
+    ]
+    database = incremental_cache_path(project)
+    if not database.is_file():
+        return pd.DataFrame(columns=columns)
+    signature, _ = incremental_evidence_signature(project)
+    selected = set(map(str, graph_symbols))
+    connection = sqlite3.connect(database)
+    records: list[dict[str, Any]] = []
+    try:
+        cursor = connection.execute(
+            """
+            SELECT node_a, node_b, kinase_hits_json
+            FROM pair_evidence WHERE evidence_signature=?
+            """,
+            (signature,),
+        )
+        for node_a, node_b, encoded_hits in cursor:
+            if node_a not in selected or node_b not in selected:
+                continue
+            for hit in json.loads(encoded_hits or "[]"):
+                kinase = str(hit.get("kinase", "")).strip()
+                target = str(hit.get("target", "")).strip()
+                if (
+                    not kinase
+                    or not target
+                    or kinase == target
+                    or kinase not in selected
+                    or target not in selected
+                ):
+                    continue
+                records.append(
+                    {
+                        "kinase_node": kinase,
+                        "target_protein": target,
+                        "site": str(hit.get("site", "")),
+                        "predictor_label": str(hit.get("predictor_label", "")),
+                        "raw_score": hit.get("raw_score"),
+                        "site_Tq_q75": hit.get("site_tq"),
+                    }
+                )
+    finally:
+        connection.close()
+    return pd.DataFrame.from_records(records, columns=columns)
+
+
+def kinase_predictor_direction_evidence(
+    project: Path,
+    graph_symbols: list[str],
+    state: dict[str, Any],
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
+) -> pd.DataFrame:
+    """Return supported kinase->substrate directions under current settings.
+
+    The edge-existence factor remains an undirected product across sites. This
+    companion table keeps the ordered kinase and substrate roles long enough
+    for path finding to remove the biologically reversed traversal.
+    """
+    predictions = pd.read_csv(project / KINASE_PREDICTIONS_RELATIVE, sep="\t")
+    used = predictions["used_for_undirected_edge"]
+    if used.dtype != bool:
+        used = used.astype(str).str.casefold().eq("true")
+    predictions = predictions.loc[used].copy().rename(
+        columns={"target_site": "site"}
+    )
+    selected = set(map(str, graph_symbols))
+    predictions = predictions.loc[
+        predictions["kinase_node"].astype(str).isin(selected)
+        & predictions["target_protein"].astype(str).isin(selected)
+    ]
+    incremental = _incremental_kinase_hit_table(project, graph_symbols)
+    columns = [
+        "kinase_node",
+        "target_protein",
+        "site",
+        "predictor_label",
+        "raw_score",
+        "site_Tq_q75",
+    ]
+    records = pd.concat(
+        [predictions.reindex(columns=columns), incremental.reindex(columns=columns)],
+        ignore_index=True,
+    )
+    if records.empty:
+        return build_kinase_predictor_direction_evidence(records, graph_symbols)
+
+    raw_score = pd.to_numeric(records["raw_score"], errors="raise").to_numpy(float)
+    tq = pd.to_numeric(records["site_Tq_q75"], errors="raise").to_numpy(float)
+    multiplier = _stream_multiplier(state)
+    if continuous_negative:
+        site_bf = continuous_complement_bayes_factor(
+            np.maximum(raw_score, 0.0),
+            tq * multiplier,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+    else:
+        site_bf = complement_minimum_likelihood(
+            np.maximum(raw_score, 0.0), tq * multiplier
+        ) / NEUTRAL_LIKELIHOOD
+    records["directional_log_bf"] = np.log(site_bf)
+    position = {symbol: index for index, symbol in enumerate(graph_symbols)}
+    kinase_position = records["kinase_node"].map(position).to_numpy(int)
+    target_position = records["target_protein"].map(position).to_numpy(int)
+    records["pair_left_index"] = np.minimum(kinase_position, target_position)
+    records["pair_right_index"] = np.maximum(kinase_position, target_position)
+    records["undirected_total_log_bf"] = records.groupby(
+        ["pair_left_index", "pair_right_index"], sort=False
+    )["directional_log_bf"].transform("sum")
+    records["directional_total_log_bf"] = records.groupby(
+        ["kinase_node", "target_protein"], sort=False
+    )["directional_log_bf"].transform("sum")
+    supported = records.loc[
+        (records["undirected_total_log_bf"] > math.log1p(FACTOR_EPSILON))
+        & (records["directional_total_log_bf"] > math.log1p(FACTOR_EPSILON))
+    ].copy()
+    return build_kinase_predictor_direction_evidence(supported, graph_symbols)
+
+
 def _string_edge_factors(
     project: Path,
     symbols: list[str],
@@ -1972,6 +2272,227 @@ def _hpa_edge_factors(
     return _upper_factor_table(symbols, likelihood / NEUTRAL_LIKELIHOOD)
 
 
+def _imcd_compartment_edge_factors(
+    project: Path,
+    symbols: list[str],
+    condition: str,
+    support_likelihood: float,
+) -> pd.DataFrame:
+    """Return a fixed factor when two proteins share an IMCD compartment.
+
+    Spectral-count magnitude is intentionally absent from this calculation.
+    The input profiles contain only condition-specific detection flags.
+    """
+    if condition not in {"basal", "ddavp"}:
+        raise ValueError(f"unsupported IMCD condition: {condition}")
+    if not NEUTRAL_LIKELIHOOD <= support_likelihood < 1.0:
+        raise ValueError("IMCD support likelihood must be in [0.5, 1)")
+    profiles = (
+        pd.read_csv(project / IMCD_COMPARTMENT_PROFILES_RELATIVE, sep="\t")
+        .set_index("symbol")
+        .reindex(symbols)
+    )
+    observed = _observed_series(profiles[f"{condition}_profile_observed"]).to_numpy(bool)
+    cytoplasm = _observed_series(profiles[f"cytoplasm_{condition}"]).to_numpy(bool)
+    nucleus = _observed_series(profiles[f"nucleus_{condition}"]).to_numpy(bool)
+    shared = (
+        np.logical_or(
+            np.logical_and.outer(cytoplasm, cytoplasm),
+            np.logical_and.outer(nucleus, nucleus),
+        )
+        & np.logical_and.outer(observed, observed)
+    )
+    np.fill_diagonal(shared, False)
+    factors = np.ones((len(symbols), len(symbols)), dtype=float)
+    factors[shared] = support_likelihood / NEUTRAL_LIKELIHOOD
+    return _upper_factor_table(
+        symbols,
+        factors,
+        include=shared,
+        # A user may set Support L to exactly 0.5. Retaining those records
+        # distinguishes a measured shared compartment from an unsupported pair
+        # if optional negative evidence is also enabled.
+        retain_included_neutral=True,
+    )
+
+
+def _biogrid_parameter_values(
+    definition: dict[str, Any], state: dict[str, Any] | None = None
+) -> tuple[float, float]:
+    parameters = (state or {}).get("parameters", {})
+    if "reported_pair_bayes_factor" in parameters:
+        reported = float(parameters["reported_pair_bayes_factor"])
+        direct = cocomplex = reported
+    elif "direct_bayes_factor" in parameters or "cocomplex_bayes_factor" in parameters:
+        # Historical completed runs retain their submitted tier-specific values
+        # so their evidence inspector can still reconstruct the original odds.
+        direct = float(parameters.get("direct_bayes_factor", 5.0))
+        cocomplex = float(parameters.get("cocomplex_bayes_factor", direct))
+    else:
+        reported = float(
+            _definition_parameter_default(definition, "reported_pair_bayes_factor")
+        )
+        direct = cocomplex = reported
+    if direct <= 1.0 or cocomplex <= 1.0:
+        raise ValueError("BioGRID reported-pair Bayes factors must exceed 1")
+    return direct, cocomplex
+
+
+def _biogrid_reported_pairs(
+    project: Path, symbols: list[str]
+) -> pd.DataFrame:
+    """Return deduplicated BioGRID tiers for selected mouse graph symbols."""
+    canonical = {str(symbol).casefold(): str(symbol) for symbol in symbols}
+    selected = set(symbols)
+    mapped = pd.read_csv(
+        project / BIOGRID_MAPPED_PAIRS_RELATIVE, sep="\t", compression="gzip"
+    )
+    mapped = mapped.loc[
+        mapped["node_a"].astype(str).isin(selected)
+        & mapped["node_b"].astype(str).isin(selected)
+    ].copy()
+    records = mapped.reindex(
+        columns=["node_a", "node_b", "in_direct", "in_cocomplex"]
+    )
+
+    # Dynamically added nodes can still use native mouse BioGRID symbols even
+    # when they were absent from the fixed seed-universe mapping audit.
+    raw = pd.read_csv(
+        project / BIOGRID_PAIR_CATALOG_RELATIVE,
+        sep="\t",
+        compression="gzip",
+        usecols=["species", "symbol_a", "symbol_b", "in_direct", "in_cocomplex"],
+    )
+    raw = raw.loc[raw["species"].astype(str).eq("mouse")].copy()
+    raw["node_a"] = raw["symbol_a"].astype(str).str.casefold().map(canonical)
+    raw["node_b"] = raw["symbol_b"].astype(str).str.casefold().map(canonical)
+    raw = raw.loc[
+        raw["node_a"].notna()
+        & raw["node_b"].notna()
+        & raw["node_a"].ne(raw["node_b"])
+    ]
+    records = pd.concat(
+        [records, raw[["node_a", "node_b", "in_direct", "in_cocomplex"]]],
+        ignore_index=True,
+    )
+    if records.empty:
+        return pd.DataFrame(
+            columns=["node_a", "node_b", "in_direct", "in_cocomplex"]
+        )
+    pairs = [
+        _canonical_undirected_pair(left, right)
+        for left, right in records[["node_a", "node_b"]].itertuples(
+            index=False, name=None
+        )
+    ]
+    records["node_a"] = [pair[0] for pair in pairs]
+    records["node_b"] = [pair[1] for pair in pairs]
+    records["in_direct"] = _observed_series(records["in_direct"])
+    records["in_cocomplex"] = _observed_series(records["in_cocomplex"])
+    return (
+        records.groupby(["node_a", "node_b"], as_index=False)
+        .agg(in_direct=("in_direct", "max"), in_cocomplex=("in_cocomplex", "max"))
+    )
+
+
+def _biogrid_edge_factors(
+    project: Path,
+    symbols: list[str],
+    direct_bayes_factor: float,
+    cocomplex_bayes_factor: float,
+) -> pd.DataFrame:
+    pairs = _biogrid_reported_pairs(project, symbols)
+    if pairs.empty:
+        return pd.DataFrame(columns=["node_a", "node_b", "bayes_factor"])
+    pairs["bayes_factor"] = np.maximum(
+        np.where(pairs["in_direct"], direct_bayes_factor, 1.0),
+        np.where(pairs["in_cocomplex"], cocomplex_bayes_factor, 1.0),
+    )
+    return pairs[["node_a", "node_b", "bayes_factor"]]
+
+
+def _biogrid_incident_anchors(
+    project: Path, symbols: list[str]
+) -> pd.DataFrame:
+    """Return exact BioGRID partners for graph nodes, including outside nodes."""
+    canonical = {str(symbol).casefold(): str(symbol) for symbol in symbols}
+    selected = set(symbols)
+    anchors = pd.read_csv(
+        project / BIOGRID_INCIDENT_ANCHORS_RELATIVE,
+        sep="\t",
+        compression="gzip",
+    )
+    anchors = anchors.loc[anchors["graph_node"].astype(str).isin(selected)].copy()
+
+    raw = pd.read_csv(
+        project / BIOGRID_PAIR_CATALOG_RELATIVE,
+        sep="\t",
+        compression="gzip",
+        usecols=[
+            "species",
+            "entrez_a",
+            "entrez_b",
+            "symbol_a",
+            "symbol_b",
+            "in_direct",
+            "in_cocomplex",
+            "is_self",
+        ],
+        dtype=str,
+    ).fillna("")
+    raw = raw.loc[raw["species"].eq("mouse")].copy()
+    raw = raw.loc[~_observed_series(raw["is_self"])].copy()
+    raw["graph_a"] = raw["symbol_a"].str.casefold().map(canonical)
+    raw["graph_b"] = raw["symbol_b"].str.casefold().map(canonical)
+    extra_rows: list[pd.DataFrame] = []
+    left = raw.loc[raw["graph_a"].notna()].copy()
+    if not left.empty:
+        extra_rows.append(
+            pd.DataFrame(
+                {
+                    "graph_node": left["graph_a"],
+                    "partner_key": "mouse:" + left["entrez_b"].where(
+                        left["entrez_b"].ne(""), left["symbol_b"].str.casefold()
+                    ),
+                    "partner_symbol": left["symbol_b"],
+                    "source_species": "mouse",
+                    "in_direct": left["in_direct"],
+                    "in_cocomplex": left["in_cocomplex"],
+                }
+            )
+        )
+    right = raw.loc[raw["graph_b"].notna()].copy()
+    if not right.empty:
+        extra_rows.append(
+            pd.DataFrame(
+                {
+                    "graph_node": right["graph_b"],
+                    "partner_key": "mouse:" + right["entrez_a"].where(
+                        right["entrez_a"].ne(""), right["symbol_a"].str.casefold()
+                    ),
+                    "partner_symbol": right["symbol_a"],
+                    "source_species": "mouse",
+                    "in_direct": right["in_direct"],
+                    "in_cocomplex": right["in_cocomplex"],
+                }
+            )
+        )
+    if extra_rows:
+        anchors = pd.concat([anchors, *extra_rows], ignore_index=True, sort=False)
+    anchors["in_direct"] = _observed_series(anchors["in_direct"])
+    anchors["in_cocomplex"] = _observed_series(anchors["in_cocomplex"])
+    anchors = anchors.loc[anchors["in_direct"] | anchors["in_cocomplex"]]
+    return (
+        anchors.groupby(["graph_node", "partner_key"], as_index=False)
+        .agg(
+            partner_symbol=("partner_symbol", "first"),
+            source_species=("source_species", lambda values: ";".join(sorted(set(map(str, values))))),
+            in_direct=("in_direct", "max"),
+            in_cocomplex=("in_cocomplex", "max"),
+        )
+    )
+
+
 def _omnipath_edge_factors(
     project: Path,
     symbols: list[str],
@@ -2067,6 +2588,16 @@ def edge_stream_factor_table(
         )
     multiplier = _stream_multiplier(state)
     handler = definition["normalization"]["handler"]
+    imcd_support_likelihood = (
+        _imcd_support_likelihood(definition, state)
+        if handler in IMCD_COMPARTMENT_HANDLERS
+        else None
+    )
+    imcd_default_likelihood = (
+        _definition_parameter_default(definition, "support_likelihood")
+        if handler in IMCD_COMPARTMENT_HANDLERS
+        else None
+    )
     use_raw_negative_string = (
         (include_negative or continuous_negative) and handler == "string_v12"
     )
@@ -2074,6 +2605,16 @@ def edge_stream_factor_table(
         math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15)
         and not use_raw_negative_string
         and not continuous_negative
+        and handler != BIOGRID_PHYSICAL_HANDLER
+        and (
+            handler not in IMCD_COMPARTMENT_HANDLERS
+            or math.isclose(
+                float(imcd_support_likelihood),
+                float(imcd_default_likelihood),
+                rel_tol=0.0,
+                abs_tol=1e-15,
+            )
+        )
     ):
         table = pd.read_csv(
             project / definition["factor_file"], sep="\t", compression="gzip"
@@ -2122,6 +2663,18 @@ def edge_stream_factor_table(
             high_confidence=True,
             continuous_negative=continuous_negative,
             minimum_bayes_factor=minimum_bayes_factor,
+        )
+    if handler in IMCD_COMPARTMENT_HANDLERS:
+        return _imcd_compartment_edge_factors(
+            project,
+            symbols,
+            IMCD_COMPARTMENT_HANDLERS[handler],
+            float(imcd_support_likelihood),
+        )
+    if handler == BIOGRID_PHYSICAL_HANDLER:
+        direct_bf, cocomplex_bf = _biogrid_parameter_values(definition, state)
+        return _biogrid_edge_factors(
+            project, symbols, direct_bf, cocomplex_bf
         )
     if handler == "omnipath_core":
         return _omnipath_edge_factors(
@@ -2221,6 +2774,18 @@ def edge_stream_eligibility_matrix(
         observed = _observed_series(aligned[observed_column])
         tq = pd.to_numeric(aligned[tq_column], errors="coerce")
         node_flag = (observed & tq.gt(0) & tq.notna()).to_numpy(bool)
+    elif eligibility in {
+        "both_imcd_basal_profiles",
+        "both_imcd_ddavp_profiles",
+    }:
+        condition = "basal" if eligibility == "both_imcd_basal_profiles" else "ddavp"
+        profiles = pd.read_csv(
+            project / IMCD_COMPARTMENT_PROFILES_RELATIVE, sep="\t"
+        ).set_index("symbol")
+        aligned = profiles.reindex(symbols)
+        node_flag = _observed_series(
+            aligned[f"{condition}_profile_observed"]
+        ).to_numpy(bool)
     elif eligibility == "kinase_to_scorable_phosphoprotein":
         sites = pd.read_csv(project / OBSERVED_PHOSPHOSITES_RELATIVE, sep="\t")
         scorable = _observed_series(sites["kinasepredictor_scorable"])
@@ -2319,6 +2884,7 @@ def _raw_seed_edge_factor_table(
     symbols: list[str],
     multiplier: float,
     *,
+    stream_parameters: dict[str, Any] | None = None,
     continuous_negative: bool = False,
     minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
@@ -2355,6 +2921,20 @@ def _raw_seed_edge_factor_table(
             project, symbols, multiplier, high_confidence=True,
             continuous_negative=continuous_negative,
             minimum_bayes_factor=minimum_bayes_factor,
+        )
+    if handler in IMCD_COMPARTMENT_HANDLERS:
+        state = {"parameters": stream_parameters or {}}
+        return _imcd_compartment_edge_factors(
+            project,
+            symbols,
+            IMCD_COMPARTMENT_HANDLERS[handler],
+            _imcd_support_likelihood(definition, state),
+        )
+    if handler == BIOGRID_PHYSICAL_HANDLER:
+        state = {"parameters": stream_parameters or {}}
+        direct_bf, cocomplex_bf = _biogrid_parameter_values(definition, state)
+        return _biogrid_edge_factors(
+            project, symbols, direct_bf, cocomplex_bf
         )
     if handler == "omnipath_core":
         return _omnipath_edge_factors(
@@ -2449,22 +3029,38 @@ def calibrate_edge_parameters(
                 )
             )
         )
+        handler = definition["normalization"]["handler"]
+        seed_factor_symbols = (
+            target_symbols
+            if handler == BIOGRID_PHYSICAL_HANDLER
+            else seed_targets
+        )
         tables = [
             _raw_seed_edge_factor_table(
                 project,
                 definition,
-                seed_targets,
+                seed_factor_symbols,
                 multiplier,
+                stream_parameters=config["edge_streams"][stream_id].get(
+                    "parameters", {}
+                ),
                 continuous_negative=stream_continuous_negative,
                 minimum_bayes_factor=continuous_floor,
             )
         ]
-        if incremental_targets:
+        if incremental_targets and handler != BIOGRID_PHYSICAL_HANDLER:
             tables.append(
                 incremental_pair_factor_table(
                     project,
                     definition["normalization"]["handler"],
-                    multiplier,
+                    (
+                        _imcd_support_likelihood(
+                            definition, config["edge_streams"][stream_id]
+                        )
+                        if definition["normalization"]["handler"]
+                        in IMCD_COMPARTMENT_HANDLERS
+                        else multiplier
+                    ),
                     incremental_targets,
                     continuous_negative=stream_continuous_negative,
                     minimum_bayes_factor=continuous_floor,
@@ -2500,7 +3096,10 @@ def calibrate_edge_parameters(
     def probabilities(settings: dict[str, float]) -> np.ndarray:
         log_odds = np.full(len(known_edges), prior_log_odds, dtype=float)
         for stream_id in active:
-            multiplier = settings[f"{stream_id}:tq_multiplier"]
+            multiplier = settings.get(
+                f"{stream_id}:tq_multiplier",
+                _stream_multiplier(config["edge_streams"][stream_id]),
+            )
             weight = settings[f"{stream_id}:weight"]
             log_odds += weight * np.log(stream_factors(stream_id, multiplier))
         return stable_expit(log_odds)
@@ -2532,7 +3131,7 @@ def calibrate_edge_parameters(
     ]
     summary["scope_note"] = (
         "Only known-present undirected edge controls entered the fit loss. Unknown "
-        "pairs were unlabeled. Derived scaffold closure was held fixed and excluded "
+        "pairs were unlabeled. Derived closure streams were held fixed and excluded "
         "from optimization."
     )
     return summary, target_table, trace
@@ -2683,6 +3282,201 @@ def scaffold_triadic_closure_factors(
     return audit, summary
 
 
+def biogrid_shared_partner_closure_factors(
+    project: Path,
+    graph_symbols: list[str],
+    preclosure_probabilities: np.ndarray,
+    state: dict[str, Any],
+    *,
+    graph_metadata: pd.DataFrame | None = None,
+    check_cancel: Callable[[], None] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Assign one fixed factor to protein pairs sharing a BioGRID partner.
+
+    The anchors are publication-reported BioGRID direct-contact or co-complex
+    records.  The common partner may be outside the selected graph.  Closure is
+    applied only when the endpoint pair itself is not reported by BioGRID, so a
+    reported interaction and evidence derived from the same database are never
+    multiplied for one pair.  This is a deliberately simple, one-pass rule:
+    the number of common partners is retained for auditing but does not change
+    the factor, and inferred edges are never recycled as anchors.
+    """
+    if check_cancel is not None:
+        check_cancel()
+    symbols = list(graph_symbols)
+    metadata = _metadata_for_graph(project, symbols, graph_metadata)
+    node_types = metadata.get("node_type", pd.Series("", index=metadata.index))
+    protein_symbols = metadata.index[
+        node_types.astype(str).str.casefold().eq("protein")
+    ].astype(str).tolist()
+    closure_likelihood = float(
+        state.get("parameters", {}).get("closure_likelihood", 0.9)
+    )
+    if not NEUTRAL_LIKELIHOOD <= closure_likelihood < 1.0:
+        raise ValueError(
+            "BioGRID shared-partner closure likelihood must be in [0.5, 1)"
+        )
+    closure_factor = closure_likelihood / NEUTRAL_LIKELIHOOD
+    rule_text = (
+        "Two distinct protein nodes each have a reported BioGRID direct-contact "
+        "or co-complex relationship with the same third protein. Every qualifying "
+        "pair that is not itself a reported BioGRID interaction receives one fixed "
+        "factor in a non-recursive pass."
+    )
+    columns = [
+        "node_a",
+        "node_b",
+        "preclosure_probability",
+        "bayes_factor",
+        "closure_support_likelihood",
+        "supporting_partner_count",
+        "first_supporting_partner",
+        "closure_rule",
+    ]
+    empty_summary = {
+        "protein_node_count": int(len(protein_symbols)),
+        "incident_anchor_count": 0,
+        "unique_third_partner_count": 0,
+        "usable_third_partner_count": 0,
+        "total_pair_support_incidences": 0,
+        "candidate_pairs_sharing_at_least_one_biogrid_partner": 0,
+        "reported_pairs_excluded_from_closure": 0,
+        "pairs_sharing_at_least_one_biogrid_partner": 0,
+        "pairs_with_non_neutral_closure_factor": 0,
+        "closure_support_likelihood": closure_likelihood,
+        "closure_bayes_factor": closure_factor,
+        "degree_adjustment": "none",
+        "recursive_feedback": False,
+        "empirical_tq": None,
+        "anchor_audit_file": str(BIOGRID_INCIDENT_ANCHORS_RELATIVE),
+        "closure_rule": rule_text,
+        "reported_pair_overlap_policy": "excluded from closure",
+    }
+    if len(protein_symbols) < 2:
+        return pd.DataFrame(columns=columns), empty_summary
+
+    anchors = _biogrid_incident_anchors(project, protein_symbols)
+    if anchors.empty:
+        return pd.DataFrame(columns=columns), empty_summary
+    node_index = {symbol: position for position, symbol in enumerate(protein_symbols)}
+    partner_keys = sorted(anchors["partner_key"].astype(str).unique())
+    support_count = np.zeros(
+        (len(protein_symbols), len(protein_symbols)), dtype=np.uint32
+    )
+    first_partner = np.full(
+        (len(protein_symbols), len(protein_symbols)), -1, dtype=np.int32
+    )
+    usable_partner_count = 0
+    total_support_incidences = 0
+    for partner_number, (partner_key, group) in enumerate(
+        anchors.groupby("partner_key", sort=True)
+    ):
+        if check_cancel is not None and partner_number % 256 == 0:
+            check_cancel()
+        indices = np.asarray(
+            sorted(
+                {
+                    node_index[symbol]
+                    for symbol in group["graph_node"].astype(str)
+                    if symbol in node_index
+                }
+            ),
+            dtype=int,
+        )
+        if len(indices) < 2:
+            continue
+        usable_partner_count += 1
+        total_support_incidences += len(indices) * (len(indices) - 1) // 2
+        block = np.ix_(indices, indices)
+        support_count[block] += 1
+        existing = first_partner[block]
+        existing[existing < 0] = partner_number
+        first_partner[block] = existing
+
+    upper = np.triu_indices(len(protein_symbols), 1)
+    qualifying = support_count[upper] > 0
+    candidate_rows_i = upper[0][qualifying]
+    candidate_rows_j = upper[1][qualifying]
+    reported_pairs = {
+        _canonical_undirected_pair(left, right)
+        for left, right in _biogrid_reported_pairs(
+            project, protein_symbols
+        )[["node_a", "node_b"]].itertuples(index=False, name=None)
+    }
+    candidate_left = np.asarray(protein_symbols, dtype=object)[candidate_rows_i]
+    candidate_right = np.asarray(protein_symbols, dtype=object)[candidate_rows_j]
+    not_reported = np.asarray(
+        [
+            _canonical_undirected_pair(left, right) not in reported_pairs
+            for left, right in zip(candidate_left, candidate_right)
+        ],
+        dtype=bool,
+    )
+    rows_i = candidate_rows_i[not_reported]
+    rows_j = candidate_rows_j[not_reported]
+    excluded_reported_count = int((~not_reported).sum())
+    if not len(rows_i):
+        empty_summary.update(
+            {
+                "incident_anchor_count": int(len(anchors)),
+                "unique_third_partner_count": int(len(partner_keys)),
+                "usable_third_partner_count": int(usable_partner_count),
+                "candidate_pairs_sharing_at_least_one_biogrid_partner": int(
+                    len(candidate_rows_i)
+                ),
+                "reported_pairs_excluded_from_closure": excluded_reported_count,
+            }
+        )
+        return pd.DataFrame(columns=columns), empty_summary
+
+    symbol_to_graph_index = {symbol: index for index, symbol in enumerate(symbols)}
+    left_symbols = np.asarray(protein_symbols, dtype=object)[rows_i]
+    right_symbols = np.asarray(protein_symbols, dtype=object)[rows_j]
+    left_graph = np.asarray(
+        [symbol_to_graph_index[symbol] for symbol in left_symbols], dtype=int
+    )
+    right_graph = np.asarray(
+        [symbol_to_graph_index[symbol] for symbol in right_symbols], dtype=int
+    )
+    first_keys = np.asarray(partner_keys, dtype=object)[first_partner[rows_i, rows_j]]
+    audit = pd.DataFrame(
+        {
+            "node_a": left_symbols,
+            "node_b": right_symbols,
+            "preclosure_probability": preclosure_probabilities[
+                left_graph, right_graph
+            ],
+            "bayes_factor": np.full(len(rows_i), closure_factor),
+            "closure_support_likelihood": np.full(
+                len(rows_i), closure_likelihood
+            ),
+            "supporting_partner_count": support_count[rows_i, rows_j],
+            "first_supporting_partner": first_keys,
+            "closure_rule": rule_text,
+        }
+    ).sort_values(
+        ["supporting_partner_count", "node_a", "node_b"],
+        ascending=[False, True, True],
+        kind="stable",
+    ).reset_index(drop=True)
+    summary = {
+        **empty_summary,
+        "incident_anchor_count": int(len(anchors)),
+        "unique_third_partner_count": int(len(partner_keys)),
+        "usable_third_partner_count": int(usable_partner_count),
+        "total_pair_support_incidences": int(total_support_incidences),
+        "candidate_pairs_sharing_at_least_one_biogrid_partner": int(
+            len(candidate_rows_i)
+        ),
+        "reported_pairs_excluded_from_closure": excluded_reported_count,
+        "pairs_sharing_at_least_one_biogrid_partner": int(len(audit)),
+        "pairs_with_non_neutral_closure_factor": int(
+            len(audit) if closure_factor > 1.0 + FACTOR_EPSILON else 0
+        ),
+    }
+    return audit, summary
+
+
 def combine_edge_factors(
     project: Path,
     registry: dict[str, Any],
@@ -2741,11 +3535,15 @@ def combine_edge_factors(
             global_continuous_negative
             or bool(state.get("continuous_negative_evidence", False))
         )
+        handler = definition["normalization"]["handler"]
+        factor_symbols = (
+            graph_symbols if handler == BIOGRID_PHYSICAL_HANDLER else seed_graph_symbols
+        )
         seed_table = edge_stream_factor_table(
             project,
             definition,
             state,
-            seed_graph_symbols,
+            factor_symbols,
             include_negative=penalize_unsupported,
             continuous_negative=stream_continuous_negative,
             minimum_bayes_factor=continuous_floor,
@@ -2753,7 +3551,7 @@ def combine_edge_factors(
         if check_cancel is not None:
             check_cancel()
         tables = [seed_table]
-        if has_incremental_nodes:
+        if has_incremental_nodes and handler != BIOGRID_PHYSICAL_HANDLER:
             incremental_loader = (
                 incremental_pair_factor_table
                 if len(incremental_pairs) <= 50_000
@@ -2763,7 +3561,7 @@ def combine_edge_factors(
                 incremental_loader(
                     project,
                     definition["normalization"]["handler"],
-                    _stream_multiplier(state),
+                    _edge_incremental_scale(definition, state),
                     (
                         incremental_pairs
                         if incremental_loader is incremental_pair_factor_table
@@ -2831,6 +3629,7 @@ def combine_edge_factors(
                 "label": definition["label"],
                 "weight": float(state["weight"]),
                 "tq_multiplier": _stream_multiplier(state),
+                "parameters": dict(state.get("parameters", {})),
                 "normalization_reference": definition["normalization"]["reference"],
                 "supported_pairs_in_selected_graph": int(mask.sum()),
                 "eligible_pairs_for_negative_evidence": int(eligible_upper.sum()),
@@ -2863,16 +3662,26 @@ def combine_edge_factors(
         if check_cancel is not None:
             check_cancel()
         handler = definition["normalization"]["handler"]
-        if handler != "scaffold_triadic_closure":
+        if handler == "scaffold_triadic_closure":
+            table, closure_summary = scaffold_triadic_closure_factors(
+                project,
+                graph_symbols,
+                preclosure_probabilities,
+                state,
+                graph_metadata=graph_metadata,
+                check_cancel=check_cancel,
+            )
+        elif handler == "biogrid_shared_partner_closure":
+            table, closure_summary = biogrid_shared_partner_closure_factors(
+                project,
+                graph_symbols,
+                preclosure_probabilities,
+                state,
+                graph_metadata=graph_metadata,
+                check_cancel=check_cancel,
+            )
+        else:
             raise ValueError(f"unsupported derived edge handler: {handler}")
-        table, closure_summary = scaffold_triadic_closure_factors(
-            project,
-            graph_symbols,
-            preclosure_probabilities,
-            state,
-            graph_metadata=graph_metadata,
-            check_cancel=check_cancel,
-        )
         if check_cancel is not None:
             check_cancel()
         left_index = table["node_a"].map(index).astype(int).to_numpy()
@@ -2978,8 +3787,9 @@ def combine_edge_factors(
             "factors below 1, and scores eligible no-record pairs as x=0 using the "
             "numerical BF floor. Out-of-scope pairs remain at BF=1. When both negative "
             "modes are off, missing sparse-table entries receive BF=1. "
-            "If enabled, scaffold closure is derived once from the pre-closure graph "
-            "and appended without recursive feedback or absence penalties."
+            "If enabled, closure streams are derived once from their documented "
+            "pre-closure anchors and appended without recursive feedback or absence "
+            "penalties."
         ),
     }
     return matrix, summary
@@ -3023,6 +3833,78 @@ def external_target_stream_values(
 ) -> np.ndarray | None:
     multiplier = _stream_multiplier(state)
     handler = definition["normalization"]["handler"]
+    if handler in IMCD_COMPARTMENT_HANDLERS:
+        condition = IMCD_COMPARTMENT_HANDLERS[handler]
+        result = np.ones(len(symbols), dtype=float)
+        profiles = pd.read_csv(
+            project / IMCD_COMPARTMENT_PROFILES_RELATIVE, sep="\t"
+        )
+        profiles["symbol_key"] = profiles["symbol"].astype(str).str.casefold()
+        profiles = profiles.drop_duplicates("symbol_key").set_index("symbol_key")
+        target_key = str(target_symbol).casefold()
+        if target_key not in profiles.index:
+            return result
+        target = profiles.loc[target_key]
+        target_observed = bool(
+            _observed_series(
+                pd.Series([target[f"{condition}_profile_observed"]])
+            ).iloc[0]
+        )
+        if not target_observed:
+            return result
+        aligned = profiles.reindex(symbols.astype(str).str.casefold())
+        node_observed = _observed_series(
+            aligned[f"{condition}_profile_observed"]
+        ).to_numpy(bool)
+        node_cytoplasm = _observed_series(
+            aligned[f"cytoplasm_{condition}"]
+        ).to_numpy(bool)
+        node_nucleus = _observed_series(
+            aligned[f"nucleus_{condition}"]
+        ).to_numpy(bool)
+        shared = node_observed & (
+            (
+                bool(
+                    _observed_series(
+                        pd.Series([target[f"cytoplasm_{condition}"]])
+                    ).iloc[0]
+                )
+                & node_cytoplasm
+            )
+            | (
+                bool(
+                    _observed_series(
+                        pd.Series([target[f"nucleus_{condition}"]])
+                    ).iloc[0]
+                )
+                & node_nucleus
+            )
+        )
+        shared &= symbols.astype(str).str.casefold().to_numpy() != target_key
+        result[shared] = (
+            _imcd_support_likelihood(definition, state) / NEUTRAL_LIKELIHOOD
+        )
+        return result
+    if handler == BIOGRID_PHYSICAL_HANDLER:
+        result = np.ones(len(symbols), dtype=float)
+        direct_bf, cocomplex_bf = _biogrid_parameter_values(definition, state)
+        table = _biogrid_edge_factors(
+            project,
+            list(dict.fromkeys([str(target_symbol), *symbols.astype(str).tolist()])),
+            direct_bf,
+            cocomplex_bf,
+        )
+        lookup = {
+            _canonical_undirected_pair(row.node_a, row.node_b): float(
+                row.bayes_factor
+            )
+            for row in table.itertuples(index=False)
+        }
+        for position, symbol in enumerate(symbols.astype(str)):
+            result[position] = lookup.get(
+                _canonical_undirected_pair(str(target_symbol), symbol), 1.0
+            )
+        return result
     if handler == "stitch_secondary_messenger":
         result = np.ones(len(symbols), dtype=float)
         if "string_target_id" not in vector_by_symbol.columns:
@@ -3193,6 +4075,32 @@ def external_target_stream_eligibility(
     """Return source scope for edges between one external target and the graph."""
     aligned = vector_by_symbol.reindex(symbols)
     handler = definition["normalization"]["handler"]
+    if handler in IMCD_COMPARTMENT_HANDLERS:
+        condition = IMCD_COMPARTMENT_HANDLERS[handler]
+        profiles = pd.read_csv(
+            project / IMCD_COMPARTMENT_PROFILES_RELATIVE, sep="\t"
+        )
+        profiles["symbol_key"] = profiles["symbol"].astype(str).str.casefold()
+        profiles = profiles.drop_duplicates("symbol_key").set_index("symbol_key")
+        target_key = str(target_symbol).casefold()
+        if target_key not in profiles.index:
+            return np.zeros(len(symbols), dtype=bool)
+        target_observed = bool(
+            _observed_series(
+                pd.Series(
+                    [profiles.loc[target_key, f"{condition}_profile_observed"]]
+                )
+            ).iloc[0]
+        )
+        node_profiles = profiles.reindex(symbols.astype(str).str.casefold())
+        node_observed = _observed_series(
+            node_profiles[f"{condition}_profile_observed"]
+        ).to_numpy(bool)
+        return target_observed & node_observed
+    if handler == BIOGRID_PHYSICAL_HANDLER:
+        # BioGRID nonreporting is neutral, so this stream intentionally has no
+        # negative-evidence eligibility region for an external target.
+        return np.zeros(len(symbols), dtype=bool)
     if handler == "mpkccd_localization":
         return _truth_array(aligned["mpkccd_localization_observed_for_both"])
     if handler == "kinase_predictor":
@@ -3261,6 +4169,58 @@ def external_target_stream_eligibility(
     return np.zeros(len(symbols), dtype=bool)
 
 
+def _biogrid_external_shared_partner_factors(
+    project: Path,
+    target_symbol: str,
+    symbols: pd.Index,
+    state: dict[str, Any],
+) -> np.ndarray:
+    """Return one-pass shared-partner factors for an appended protein target."""
+    result = np.ones(len(symbols), dtype=float)
+    anchors = _biogrid_incident_anchors(
+        project,
+        list(dict.fromkeys([str(target_symbol), *symbols.astype(str).tolist()])),
+    )
+    target_partners = set(
+        anchors.loc[
+            anchors["graph_node"].astype(str).eq(str(target_symbol)),
+            "partner_key",
+        ].astype(str)
+    )
+    if not target_partners:
+        return result
+    qualifying_nodes = set(
+        anchors.loc[
+            anchors["partner_key"].astype(str).isin(target_partners),
+            "graph_node",
+        ].astype(str)
+    )
+    qualifying_nodes.discard(str(target_symbol))
+    reported = _biogrid_reported_pairs(
+        project,
+        list(dict.fromkeys([str(target_symbol), *symbols.astype(str).tolist()])),
+    )
+    directly_reported_nodes = {
+        right if left == str(target_symbol) else left
+        for left, right in reported[["node_a", "node_b"]].itertuples(
+            index=False, name=None
+        )
+        if str(target_symbol) in {left, right}
+    }
+    qualifying_nodes.difference_update(directly_reported_nodes)
+    likelihood = float(
+        state.get("parameters", {}).get("closure_likelihood", 0.9)
+    )
+    if not NEUTRAL_LIKELIHOOD <= likelihood < 1.0:
+        raise ValueError(
+            "BioGRID shared-partner closure likelihood must be in [0.5, 1)"
+        )
+    result[symbols.astype(str).isin(qualifying_nodes)] = (
+        likelihood / NEUTRAL_LIKELIHOOD
+    )
+    return result
+
+
 def append_external_target(
     project: Path,
     matrix: pd.DataFrame,
@@ -3287,6 +4247,19 @@ def append_external_target(
             continue
         definition = stream_defs[stream_id]
         if definition.get("derived"):
+            if (
+                definition["normalization"]["handler"]
+                == "biogrid_shared_partner_closure"
+            ):
+                values = _biogrid_external_shared_partner_factors(
+                    project, target_symbol, matrix.index, state
+                )
+                target_log_odds += float(state["weight"]) * np.log(values)
+                warnings.append(
+                    f"{definition['label']} was reapplied once to the external "
+                    f"target and supported {int((values > 1.0).sum())} target edges."
+                )
+                continue
             warnings.append(
                 f"{definition['label']} is derived from the internal graph and was "
                 "not reapplied to the external target."
@@ -3419,6 +4392,13 @@ def run_paths(
     symbol_index = {symbol: index for index, symbol in enumerate(symbols)}
     start_index = symbol_index[start_symbol]
     target_index = symbol_index[target_symbol]
+    node_probability_values: np.ndarray | None = None
+    node_probability_audit: dict[str, Any] | None = None
+    if path_config.get("include_node_probabilities", False):
+        node_probability_values, node_probability_audit = path_node_probability_vector(
+            metadata,
+            symbols,
+        )
     ranked = k_shortest_simple_paths(
         adjacency,
         matrix.to_numpy(float),
@@ -3427,8 +4407,14 @@ def run_paths(
         top_k=path_config["top_k"],
         max_hops=path_config["max_hops"],
         permitted_nodes=permitted,
+        node_probabilities=node_probability_values,
     )
-    paths, edges = serialize_paths(ranked, matrix, metadata)
+    paths, edges = serialize_paths(
+        ranked,
+        matrix,
+        metadata,
+        node_probability_values,
+    )
     validation = {
         "all_paths_simple": all(len(item.nodes) == len(set(item.nodes)) for item in ranked),
         "all_paths_within_hop_limit": all(
@@ -3464,6 +4450,16 @@ def run_paths(
         "maximum_hops": int(path_config["max_hops"]),
         "minimum_edge_probability_exclusive": float(
             path_config["minimum_edge_probability"]
+        ),
+        "node_probabilities_included_in_primary_score": bool(
+            path_config.get("include_node_probabilities", False)
+        ),
+        "node_probability_scoring_audit": node_probability_audit,
+        "primary_score_definition": (
+            "Geometric mean of every edge posterior and every internal-node "
+            "posterior. Query endpoints are excluded."
+            if path_config.get("include_node_probabilities", False)
+            else "Geometric mean of edge posteriors only."
         ),
         "signaling_intermediates_only": bool(
             path_config["signaling_intermediates_only"]
@@ -3881,14 +4877,50 @@ def run_workflow(
                 "edge graph. It is dependent proximity/co-complex evidence, not "
                 "independent proof of a direct binary PPI."
             )
+        if "biogrid_shared_partner_closure" in derived_audits:
+            warnings.append(
+                "BioGRID shared-partner closure is dependent physical-proximity "
+                "evidence inferred from reported direct/contact or co-complex "
+                "anchors. It is one-pass, is not independent proof of a direct "
+                "binary PPI, and can be dense for highly connected partners."
+            )
         cutoff = config["edge_integration"]["output_probability_cutoff"]
         supported = supported_edge_table(matrix, cutoff)
+        graph_node_statistics = pd.DataFrame()
+        graph_robustness = pd.DataFrame()
+        graph_statistics_summary: dict[str, Any] | None = None
+        graph_statistics_preview: dict[str, Any] | None = None
+        if config["graph_statistics"]["enabled"]:
+            update("Computing full-graph statistics", 0.67)
+            (
+                graph_node_statistics,
+                graph_statistics_summary,
+                graph_robustness,
+            ) = _cached_full_graph_statistics(
+                matrix,
+                graph_metadata,
+                cutoff=config["graph_statistics"]["edge_probability_cutoff"],
+                metrics=config["graph_statistics"]["metrics"],
+                progress=lambda message: update(message, 0.68),
+            )
+            graph_statistics_preview = {
+                "summary": graph_statistics_summary,
+                **top_node_statistics(
+                    graph_node_statistics, limit=GUI_RANKING_LIMIT
+                ),
+                "robustness": (
+                    json.loads(graph_robustness.to_json(orient="records"))
+                    if not graph_robustness.empty
+                    else []
+                ),
+            }
         propagation_matrix = matrix
         directionality_audit = pd.DataFrame()
         directionality_class_catalog = pd.DataFrame()
         directionality_summary: dict[str, Any] | None = None
         directionality_catalog: dict[str, Any] | None = None
         omnipath_direction_evidence = pd.DataFrame()
+        kinase_direction_evidence = pd.DataFrame()
         if (
             config["path"]["enabled"]
             and config["path"]["ontology_directionality_enabled"]
@@ -3904,6 +4936,25 @@ def run_workflow(
                 directionality_catalog,
                 [item["id"] for item in registry["path_ontology_classes"]],
             )
+            kinase_state = config["edge_streams"].get("kinase_predictor", {})
+            if kinase_state.get("enabled") and float(kinase_state.get("weight", 0)) > 0:
+                kinase_continuous = bool(
+                    config["edge_integration"].get(
+                        "continuous_negative_evidence", False
+                    )
+                    or kinase_state.get("continuous_negative_evidence", False)
+                )
+                kinase_direction_evidence = kinase_predictor_direction_evidence(
+                    project,
+                    graph_symbols,
+                    kinase_state,
+                    continuous_negative=kinase_continuous,
+                    minimum_bayes_factor=float(
+                        config["edge_integration"].get(
+                            "continuous_bayes_factor_floor", 1e-6
+                        )
+                    ),
+                )
             if config["path"]["omnipath_directionality_enabled"]:
                 omnipath_direction_path = project / OMNIPATH_DIRECTION_RAW_RELATIVE
                 if not omnipath_direction_path.is_file():
@@ -3943,16 +4994,25 @@ def run_workflow(
                     if config["path"]["omnipath_directionality_enabled"]
                     else None
                 ),
+                kinase_predictor_directions=kinase_direction_evidence,
             )
             directionality_summary["omnipath_direction_source"] = (
                 str(OMNIPATH_DIRECTION_RAW_RELATIVE)
                 if config["path"]["omnipath_directionality_enabled"]
                 else None
             )
+            directionality_summary["kinase_predictor_direction_source"] = (
+                str(KINASE_PREDICTIONS_RELATIVE)
+                if not kinase_direction_evidence.empty
+                else None
+            )
         path_rows = pd.DataFrame()
         path_edges = pd.DataFrame()
         eligibility = pd.DataFrame()
         path_summary: dict[str, Any] | None = None
+        path_union_node_statistics = pd.DataFrame()
+        path_union_statistics_summary: dict[str, Any] | None = None
+        path_union_statistics_preview: dict[str, Any] | None = None
         temporal_path_rows = pd.DataFrame()
         temporal_gene_rows = pd.DataFrame()
         temporal_trend_rows = pd.DataFrame()
@@ -3969,6 +5029,35 @@ def run_workflow(
             )
             if path_summary is not None:
                 path_summary["ontology_directionality"] = directionality_summary
+
+            update("Computing returned-path node statistics", 0.75)
+            (
+                path_union_node_statistics,
+                path_union_statistics_summary,
+            ) = compute_path_union_node_statistics(
+                path_rows,
+                path_edges,
+                graph_metadata,
+                progress=lambda message: update(message, 0.755),
+            )
+            path_union_statistics_preview = {
+                "summary": path_union_statistics_summary,
+                **(
+                    top_node_statistics(
+                        path_union_node_statistics, limit=GUI_RANKING_LIMIT
+                    )
+                    if not path_union_node_statistics.empty
+                    else {
+                        "available_metrics": [],
+                        "top_nodes_by_metric": {},
+                        "display_limit": GUI_RANKING_LIMIT,
+                    }
+                ),
+            }
+            if path_summary is not None:
+                path_summary["returned_path_union_statistics"] = (
+                    path_union_statistics_summary
+                )
 
         path_network = build_path_network_payload(
             path_rows,
@@ -4086,11 +5175,23 @@ def run_workflow(
         directionality_class_catalog_path = output / "ontology_class_pair_catalog.tsv"
         directionality_rules_path = output / "ontology_direction_rules.json"
         omnipath_direction_evidence_path = output / "omnipath_direction_evidence.tsv.gz"
+        kinase_direction_evidence_path = (
+            output / "kinase_predictor_direction_evidence.tsv.gz"
+        )
         temporal_paths_path = output / "ranked_paths_temporal.tsv"
         temporal_genes_path = output / "temporal_gene_responses.tsv.gz"
         temporal_trend_path = output / "temporal_variance_trend.tsv"
         temporal_summary_path = output / "temporal_validation_summary.json"
         path_network_path = output / "top_path_network.json"
+        graph_node_statistics_path = output / "full_graph_node_statistics.tsv.gz"
+        graph_statistics_summary_path = output / "full_graph_statistics_summary.json"
+        graph_robustness_path = output / "full_graph_robustness.tsv"
+        path_union_node_statistics_path = (
+            output / "found_path_union_node_statistics.tsv.gz"
+        )
+        path_union_statistics_summary_path = (
+            output / "found_path_union_statistics_summary.json"
+        )
         summary_path = output / "analysis_summary.json"
         check_cancel()
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -4109,6 +5210,29 @@ def run_workflow(
             matrix_path,
             supported_path,
         ]
+        if graph_statistics_summary is not None:
+            graph_node_statistics.to_csv(
+                graph_node_statistics_path,
+                sep="\t",
+                index=False,
+                compression="gzip",
+                float_format="%.12g",
+            )
+            graph_statistics_summary_path.write_text(
+                json.dumps(graph_statistics_summary, indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+            files.extend(
+                [graph_node_statistics_path, graph_statistics_summary_path]
+            )
+            if not graph_robustness.empty:
+                graph_robustness.to_csv(
+                    graph_robustness_path,
+                    sep="\t",
+                    index=False,
+                    float_format="%.12g",
+                )
+                files.append(graph_robustness_path)
         if calibration_summary is not None:
             warnings.append(
                 "Calibration used known-present positive controls only. It improves "
@@ -4199,6 +5323,14 @@ def run_workflow(
                     directionality_rules_path,
                 ]
             )
+            if not kinase_direction_evidence.empty:
+                kinase_direction_evidence.to_csv(
+                    kinase_direction_evidence_path,
+                    sep="\t",
+                    index=False,
+                    compression="gzip",
+                )
+                files.append(kinase_direction_evidence_path)
             if config["path"]["omnipath_directionality_enabled"]:
                 omnipath_direction_evidence.to_csv(
                     omnipath_direction_evidence_path,
@@ -4225,6 +5357,26 @@ def run_workflow(
                 json.dumps(path_network, indent=2) + "\n", encoding="utf-8"
             )
             files.append(path_network_path)
+            if path_union_statistics_summary is not None:
+                path_union_statistics_summary_path.write_text(
+                    json.dumps(
+                        path_union_statistics_summary,
+                        indent=2,
+                        default=str,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                files.append(path_union_statistics_summary_path)
+                if not path_union_node_statistics.empty:
+                    path_union_node_statistics.to_csv(
+                        path_union_node_statistics_path,
+                        sep="\t",
+                        index=False,
+                        compression="gzip",
+                        float_format="%.12g",
+                    )
+                    files.append(path_union_node_statistics_path)
         if temporal_summary is not None:
             check_cancel()
             temporal_summary_path.write_text(
@@ -4268,6 +5420,8 @@ def run_workflow(
                 "matrix_node_count_after_target_extension": int(len(matrix)),
                 "reported_supported_edge_count": int(len(supported)),
             },
+            "full_graph_statistics": graph_statistics_summary,
+            "found_path_union_statistics": path_union_statistics_summary,
             "path_finding": path_summary,
             "temporal_validation": temporal_summary,
             "ontology_directionality": directionality_summary,
@@ -4304,7 +5458,9 @@ def run_workflow(
                 [
                     "rank",
                     "hop_count",
+                    "primary_path_score",
                     "geometric_mean_edge_probability",
+                    "geometric_mean_node_edge_probability",
                     "path_probability_product",
                     "path_symbols",
                     *(
@@ -4325,6 +5481,8 @@ def run_workflow(
             if not path_rows.empty
             else [],
             "path_network": path_network,
+            "full_graph_statistics": graph_statistics_preview,
+            "found_path_union_statistics": path_union_statistics_preview,
             "probability_distributions": {
                 "nodes": node_summary["probability_distribution"],
                 "edges": edge_summary["probability_distribution"],
@@ -4335,6 +5493,12 @@ def run_workflow(
             "warnings": warnings,
             "files": [path.name for path in [*files, summary_path]],
         }
+        preview_path = output / "gui_preview.json"
+        preview["files"].append(preview_path.name)
+        preview_path.write_text(
+            json.dumps(preview, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
         update("Complete", 1.0)
         return WorkflowResult(run_id, output, summary, preview)
     except Exception:

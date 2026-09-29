@@ -14,12 +14,14 @@ from workflow_engine import (
     WorkflowCancelled,
     _calibration_parameter_specs,
     append_external_target,
+    build_adjacency,
     build_path_network_payload,
     combine_edge_factors,
     default_configuration,
     edge_stream_factor_table,
     evidence_factor_distribution_summary,
     load_registry,
+    k_shortest_simple_paths,
     node_stream_values,
     normalize_configuration,
     scaffold_triadic_closure_factors,
@@ -32,6 +34,7 @@ from incremental_edge_cache import (
 )
 from ontology_directionality import (
     apply_ontology_directionality,
+    build_kinase_predictor_direction_evidence,
     build_omnipath_direction_evidence,
     build_complete_class_pair_catalog,
     load_direction_rule_catalog,
@@ -105,11 +108,16 @@ class WorkflowEngineTests(unittest.TestCase):
                 "kinase_predictor",
                 "string_v12",
                 "hpa_primary",
+                "imcd_basal_compartment_presence",
+                "imcd_ddavp_compartment_presence",
                 "omnipath_core",
                 "stitch_secondary_messenger",
+                "biogrid_physical_interaction",
                 "scaffold_triadic_closure",
+                "biogrid_shared_partner_closure",
             },
         )
+        self.assertEqual(config["edge_streams"]["string_v12"]["weight"], 0.25)
         self.assertEqual(
             tuple(config["path"]["allowed_intermediate_classes"]),
             DEFAULT_SIGNAL_RELAY_CLASSES,
@@ -164,10 +172,14 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(
             config["node_integration"]["continuous_bayes_factor_floor"], 1e-6
         )
-        self.assertEqual(config["path"]["start"], "Aqp2")
-        self.assertEqual(config["path"]["target"], "Prkaca")
+        self.assertEqual(config["path"]["start"], "Prkaca")
+        self.assertEqual(config["path"]["target"], "Aqp2")
         self.assertEqual(config["path"]["top_k"], 100)
         self.assertEqual(config["path"]["max_hops"], 6)
+        self.assertFalse(config["path"]["include_node_probabilities"])
+        self.assertTrue(config["graph_statistics"]["enabled"])
+        self.assertEqual(config["graph_statistics"]["edge_probability_cutoff"], 0.5)
+        self.assertEqual(len(config["graph_statistics"]["metrics"]), 9)
 
     def test_exact_half_priors_are_valid_html_values(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -191,6 +203,47 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("/cancel`, { method: \"POST\" }", javascript)
         self.assertIn('job.status === "cancelled"', javascript)
         self.assertIn('/api/jobs/active', javascript)
+
+    def test_stream_weights_accept_arbitrary_decimal_values(self) -> None:
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        self.assertIn('class="stream-weight stream-setting"', javascript)
+        self.assertIn('min="0" max="10" step="any"', javascript)
+        self.assertIn('class="stream-tq stream-setting" type="number" min="0.05" max="20" step="any"', javascript)
+        self.assertIn('class="stream-parameter stream-setting"', javascript)
+        self.assertIn('max="${parameter.maximum}" step="any"', javascript)
+        for field_id in (
+            "node-cutoff",
+            "edge-cutoff",
+            "graph-statistics-cutoff",
+            "path-cutoff",
+        ):
+            tag = re.search(rf'<input id="{field_id}"[^>]*>', html)
+            self.assertIsNotNone(tag, field_id)
+            self.assertIn('step="any"', tag.group(0))
+        supplied = default_configuration(self.registry)
+        supplied["edge_streams"]["string_v12"]["weight"] = 0.2375
+        supplied["edge_streams"]["biogrid_physical_interaction"]["parameters"][
+            "reported_pair_bayes_factor"
+        ] = 4.8123
+        config = normalize_configuration(supplied, self.registry)
+        self.assertEqual(config["edge_streams"]["string_v12"]["weight"], 0.2375)
+        self.assertEqual(
+            config["edge_streams"]["biogrid_physical_interaction"]["parameters"][
+                "reported_pair_bayes_factor"
+            ],
+            4.8123,
+        )
+        supplied["edge_streams"]["biogrid_physical_interaction"]["parameters"][
+            "reported_pair_bayes_factor"
+        ] = 1.0
+        neutral_config = normalize_configuration(supplied, self.registry)
+        self.assertEqual(
+            neutral_config["edge_streams"]["biogrid_physical_interaction"][
+                "parameters"
+            ]["reported_pair_bayes_factor"],
+            1.0,
+        )
 
     def test_edge_integration_honors_cancellation_checkpoints(self) -> None:
         supplied = default_configuration(self.registry)
@@ -229,6 +282,11 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertIn(f'id="{control}"', html)
         self.assertIn("function renderPathNetwork(network)", javascript)
         self.assertIn("function layoutPathNetwork", javascript)
+        self.assertIn("function assignPathTierJitter", javascript)
+        self.assertIn("node.tierJitterX = offset", javascript)
+        self.assertIn("Allocate deterministic vertical lanes", javascript)
+        self.assertIn("const bendMagnitude = sameTier", javascript)
+        self.assertIn(" Q ${controlX.toFixed(2)}", javascript)
         self.assertIn("directionality === \"uniquely_directed\"", javascript)
         self.assertIn("state.networkRankLimit = Math.min(50, available)", javascript)
         self.assertIn("geometric_mean_edge_probability", javascript)
@@ -246,6 +304,72 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("const strokeWidth = 2.6", javascript)
         self.assertIn('inspectEvidence("node")', javascript)
         self.assertIn('inspectEvidence("edge")', javascript)
+        self.assertIn('id="evidence-literature-interpretation"', html)
+        self.assertIn("function renderSelectedLiterature", javascript)
+        self.assertIn("Literature findings across contexts", html)
+        self.assertIn("claim.biological_context", javascript)
+        self.assertNotIn('appendSelectedLiteratureAssessment("Recommended follow-up"', javascript)
+        self.assertNotIn('appendSelectedLiteratureAssessment("Plain-language summary"', javascript)
+        self.assertIn('id="literature-endpoint-preview"', html)
+        self.assertIn("function literatureEndpointConfiguration", javascript)
+        self.assertIn("gbi-literature-connection-v1", javascript)
+        self.assertNotIn('id="literature-network-items"', html)
+
+    def test_gui_exposes_full_graph_statistics_and_node_aware_path_score(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        for control in (
+            "graph-statistics-enabled",
+            "graph-statistics-cutoff",
+            "full-graph-statistics-result",
+            "full-graph-metric",
+            "full-graph-node-rankings",
+            "found-path-statistics-result",
+            "found-path-metric",
+            "found-path-node-rankings",
+            "path-include-node-probabilities",
+        ):
+            self.assertIn(f'id="{control}"', html)
+        for metric in (
+            "degree_strength",
+            "clustering",
+            "betweenness",
+            "closeness_harmonic",
+            "eigenvector_pagerank",
+            "coreness",
+            "connectivity",
+            "communities",
+            "robustness",
+        ):
+            self.assertIn(f'value="{metric}"', html)
+        self.assertIn("function renderFullGraphStatistics", javascript)
+        self.assertIn("function renderFoundPathStatistics", javascript)
+        self.assertIn("found_path_union_statistics", javascript)
+        self.assertIn("primary_path_score", javascript)
+
+    def test_graph_statistics_configuration_is_optional_and_validated(self) -> None:
+        supplied = default_configuration(self.registry)
+        supplied["graph_statistics"].update(
+            {
+                "enabled": True,
+                "edge_probability_cutoff": 0.72,
+                "metrics": ["degree_strength", "betweenness"],
+            }
+        )
+        supplied["path"]["include_node_probabilities"] = True
+        config = normalize_configuration(supplied, self.registry)
+        self.assertEqual(
+            config["graph_statistics"],
+            {
+                "enabled": True,
+                "edge_probability_cutoff": 0.72,
+                "metrics": ["degree_strength", "betweenness"],
+            },
+        )
+        self.assertTrue(config["path"]["include_node_probabilities"])
+        supplied["graph_statistics"]["metrics"] = ["not_a_metric"]
+        with self.assertRaisesRegex(ValueError, "unknown graph statistics"):
+            normalize_configuration(supplied, self.registry)
 
     def test_gui_renders_calibrated_parameters_and_factor_positions(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -551,6 +675,117 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(
             edge_summary["ontology_precedence_over_opposing_omnipath_count"], 1
         )
+
+    def test_kinase_predictor_direction_blocks_reverse_forks_and_colliders(self) -> None:
+        symbols = ["A", "B", "C"]
+        values = np.zeros((3, 3), dtype=float)
+        values[0, 1] = values[1, 0] = 0.9
+        values[1, 2] = values[2, 1] = 0.9
+        matrix = pd.DataFrame(values, index=symbols, columns=symbols)
+        metadata = pd.DataFrame({"symbol": symbols, "classes": ["", "", ""]})
+        catalog = load_direction_rule_catalog(
+            known_classes=[item["id"] for item in self.registry["path_ontology_classes"]]
+        )
+
+        # B -> A and B -> C is a fork. A linear A-B-C traversal would have to
+        # walk A -> B against the first phosphorylation arrow and must fail.
+        fork_records = pd.DataFrame(
+            [
+                {"kinase_node": "B", "target_protein": "A", "site": "S1"},
+                {"kinase_node": "B", "target_protein": "C", "site": "S2"},
+            ]
+        )
+        fork_directions = build_kinase_predictor_direction_evidence(
+            fork_records, symbols
+        )
+        fork_matrix, fork_audit, fork_summary = apply_ontology_directionality(
+            matrix,
+            metadata,
+            catalog,
+            audit_probability_cutoff=0.5,
+            edge_output_cutoff=0.5,
+            path_probability_cutoff=0.5,
+            kinase_predictor_directions=fork_directions,
+        )
+        self.assertEqual(fork_matrix.loc["A", "B"], 0.0)
+        self.assertEqual(fork_matrix.loc["B", "A"], 0.9)
+        self.assertEqual(fork_matrix.loc["B", "C"], 0.9)
+        self.assertEqual(fork_matrix.loc["C", "B"], 0.0)
+        self.assertEqual(
+            fork_summary["path_graph"][
+                "uniquely_oriented_by_kinase_predictor_only_count"
+            ],
+            2,
+        )
+        ab = fork_audit.loc[
+            fork_audit["node_a"].eq("A") & fork_audit["node_b"].eq("B")
+        ].iloc[0]
+        self.assertEqual(ab["direction_evidence_sources"], "kinase_predictor")
+        self.assertFalse(ab["allowed_a_to_b"])
+        self.assertTrue(ab["allowed_b_to_a"])
+        fork_adjacency, _ = build_adjacency(
+            fork_matrix, 0.5, directed=True
+        )
+        self.assertEqual(
+            k_shortest_simple_paths(
+                fork_adjacency,
+                fork_matrix.to_numpy(float),
+                0,
+                2,
+                top_k=5,
+                max_hops=2,
+            ),
+            [],
+        )
+
+        # A -> B <- C is a collider. A-B-C would have to leave B against the
+        # C -> B arrow, so the B -> C traversal must likewise be absent.
+        collider_records = pd.DataFrame(
+            [
+                {"kinase_node": "A", "target_protein": "B", "site": "S3"},
+                {"kinase_node": "C", "target_protein": "B", "site": "S4"},
+            ]
+        )
+        collider_directions = build_kinase_predictor_direction_evidence(
+            collider_records, symbols
+        )
+        collider_matrix, _, _ = apply_ontology_directionality(
+            matrix,
+            metadata,
+            catalog,
+            audit_probability_cutoff=0.5,
+            edge_output_cutoff=0.5,
+            path_probability_cutoff=0.5,
+            kinase_predictor_directions=collider_directions,
+        )
+        self.assertEqual(collider_matrix.loc["A", "B"], 0.9)
+        self.assertEqual(collider_matrix.loc["B", "A"], 0.0)
+        self.assertEqual(collider_matrix.loc["B", "C"], 0.0)
+        self.assertEqual(collider_matrix.loc["C", "B"], 0.9)
+        collider_adjacency, _ = build_adjacency(
+            collider_matrix, 0.5, directed=True
+        )
+        self.assertEqual(
+            k_shortest_simple_paths(
+                collider_adjacency,
+                collider_matrix.to_numpy(float),
+                0,
+                2,
+                top_k=5,
+                max_hops=2,
+            ),
+            [],
+        )
+
+    def test_evidence_ledger_distinguishes_records_from_negative_scope(self) -> None:
+        html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
+        javascript = (PROJECT_ROOT / "gui/web/app.js").read_text(encoding="utf-8")
+        report = (PROJECT_ROOT / "gui/session_report.py").read_text(encoding="utf-8")
+        self.assertIn("Record / negative scope", html)
+        self.assertIn("Record versus negative scope", html)
+        self.assertIn("Record retained · absence not scorable", javascript)
+        self.assertIn("Record retained · absence not scorable", report)
+        self.assertNotIn('return "Out of scope"', javascript)
 
     def test_path_network_merges_paths_and_marks_only_constrained_arrows(self) -> None:
         path_rows = pd.DataFrame(
@@ -858,6 +1093,22 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(factor_distribution["hypothesis_count"], 1_133_265)
             self.assertEqual(sum(factor_distribution["bin_counts"]), 1_133_265)
 
+    def test_every_edge_stream_except_hpa_high_confidence_is_enabled_by_default(self) -> None:
+        config = default_configuration(self.registry)
+        enabled = {
+            stream_id
+            for stream_id, state in config["edge_streams"].items()
+            if state["enabled"]
+        }
+        self.assertEqual(
+            enabled,
+            {
+                stream["id"]
+                for stream in self.registry["edge_streams"]
+                if stream["id"] != "hpa_high_confidence"
+            },
+        )
+
     def test_optional_edge_absence_penalty_lowers_only_eligible_pairs(self) -> None:
         supplied = default_configuration(self.registry)
         for state in supplied["edge_streams"].values():
@@ -965,12 +1216,12 @@ class WorkflowEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive weight"):
             normalize_configuration(supplied, self.registry)
 
-    def test_path_limit_allows_500_but_rejects_more(self) -> None:
+    def test_path_limit_allows_2000_but_rejects_more(self) -> None:
         supplied = default_configuration(self.registry)
-        supplied["path"]["top_k"] = 500
+        supplied["path"]["top_k"] = 2000
         config = normalize_configuration(supplied, self.registry)
-        self.assertEqual(config["path"]["top_k"], 500)
-        supplied["path"]["top_k"] = 501
+        self.assertEqual(config["path"]["top_k"], 2000)
+        supplied["path"]["top_k"] = 2001
         with self.assertRaisesRegex(ValueError, "top paths"):
             normalize_configuration(supplied, self.registry)
 

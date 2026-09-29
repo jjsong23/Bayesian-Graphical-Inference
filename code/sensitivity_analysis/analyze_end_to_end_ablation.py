@@ -51,9 +51,11 @@ from workflow_engine import (  # noqa: E402
     _calibration_tq_bounds,
     append_requested_graph_endpoint,
     apply_ontology_directionality,
+    biogrid_shared_partner_closure_factors,
     combine_edge_factors,
     default_configuration,
     ensure_incremental_pairs,
+    kinase_predictor_direction_evidence,
     load_direction_rule_catalog,
     load_registry,
     normalize_configuration,
@@ -361,18 +363,28 @@ class Evaluator:
             index = {symbol: position for position, symbol in enumerate(graph_symbols)}
             for stream_id, state in derived:
                 definition = definitions[stream_id]
-                if definition["normalization"]["handler"] != "scaffold_triadic_closure":
+                handler = definition["normalization"]["handler"]
+                if handler == "scaffold_triadic_closure":
+                    table, _ = scaffold_triadic_closure_factors(
+                        self.project,
+                        graph_symbols,
+                        preclosure_probabilities,
+                        state,
+                        graph_metadata=graph_metadata,
+                    )
+                elif handler == "biogrid_shared_partner_closure":
+                    table, _ = biogrid_shared_partner_closure_factors(
+                        self.project,
+                        graph_symbols,
+                        preclosure_probabilities,
+                        state,
+                        graph_metadata=graph_metadata,
+                    )
+                else:
                     raise ValueError(
                         f"unsupported derived edge handler: "
-                        f"{definition['normalization']['handler']}"
+                        f"{handler}"
                     )
-                table, _ = scaffold_triadic_closure_factors(
-                    self.project,
-                    graph_symbols,
-                    preclosure_probabilities,
-                    state,
-                    graph_metadata=graph_metadata,
-                )
                 if table.empty:
                     continue
                 left = table["node_a"].map(index).astype(int).to_numpy()
@@ -454,6 +466,25 @@ class Evaluator:
                 cutoff,
                 float(config["path"]["minimum_edge_probability"]),
             )
+            kinase_state = config["edge_streams"].get("kinase_predictor", {})
+            kinase_directions = pd.DataFrame()
+            if kinase_state.get("enabled") and float(kinase_state.get("weight", 0)) > 0:
+                kinase_directions = kinase_predictor_direction_evidence(
+                    self.project,
+                    graph_symbols,
+                    kinase_state,
+                    continuous_negative=bool(
+                        config["edge_integration"].get(
+                            "continuous_negative_evidence", False
+                        )
+                        or kinase_state.get("continuous_negative_evidence", False)
+                    ),
+                    minimum_bayes_factor=float(
+                        config["edge_integration"].get(
+                            "continuous_bayes_factor_floor", 1e-6
+                        )
+                    ),
+                )
             propagation, _, _ = apply_ontology_directionality(
                 matrix,
                 graph_metadata,
@@ -461,6 +492,7 @@ class Evaluator:
                 audit_probability_cutoff=orientation_cutoff,
                 edge_output_cutoff=cutoff,
                 path_probability_cutoff=float(config["path"]["minimum_edge_probability"]),
+                kinase_predictor_directions=kinase_directions,
             )
             directed = True
         paths = pd.DataFrame()

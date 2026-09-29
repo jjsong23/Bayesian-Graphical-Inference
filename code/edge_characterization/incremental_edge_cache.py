@@ -54,6 +54,14 @@ Q = 0.75
 NEUTRAL = 0.5
 STRING_REFERENCE = 0.041
 STITCH_REFERENCE = 0.150
+IMCD_COMPARTMENT_PROFILES_RELATIVE = Path(
+    "data/edge_characterization/imcd_compartment_presence/processed/"
+    "imcd_compartment_node_profiles.tsv"
+)
+IMCD_COMPARTMENT_HANDLERS = {
+    "imcd_basal_compartment_presence": "basal",
+    "imcd_ddavp_compartment_presence": "ddavp",
+}
 ProgressCallback = Callable[[str, float], None]
 CancellationCheckpoint = Callable[[], None]
 PairFilter = Callable[[tuple[str, str]], bool]
@@ -1053,6 +1061,52 @@ def _odds_factor(score: float, reference: float, *, floor: bool = False) -> floa
     return max(1.0, factor) if floor else factor
 
 
+def _truth(value: object) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    return str(value).strip().casefold() in {"true", "1", "yes"}
+
+
+def _imcd_profile_lookup(
+    project: Path, handler: str
+) -> dict[str, tuple[bool, bool, bool]]:
+    condition = IMCD_COMPARTMENT_HANDLERS[handler]
+    profiles = pd.read_csv(
+        project / IMCD_COMPARTMENT_PROFILES_RELATIVE, sep="\t"
+    )
+    return {
+        str(row.symbol).casefold(): (
+            _truth(getattr(row, f"{condition}_profile_observed")),
+            _truth(getattr(row, f"cytoplasm_{condition}")),
+            _truth(getattr(row, f"nucleus_{condition}")),
+        )
+        for row in profiles.itertuples(index=False)
+    }
+
+
+def _imcd_pair_factor(
+    profiles: dict[str, tuple[bool, bool, bool]],
+    left: str,
+    right: str,
+    support_likelihood: float,
+) -> tuple[float, bool]:
+    if not NEUTRAL <= support_likelihood < 1.0:
+        raise ValueError("IMCD support likelihood must be in [0.5, 1)")
+    left_profile = profiles.get(str(left).casefold())
+    right_profile = profiles.get(str(right).casefold())
+    if left_profile is None or right_profile is None:
+        return 1.0, False
+    left_observed, left_cytoplasm, left_nucleus = left_profile
+    right_observed, right_cytoplasm, right_nucleus = right_profile
+    shared = left_observed and right_observed and (
+        (left_cytoplasm and right_cytoplasm) or (left_nucleus and right_nucleus)
+    )
+    return (
+        support_likelihood / NEUTRAL if shared else 1.0,
+        bool(shared),
+    )
+
+
 def incremental_factor_table(
     project: Path,
     handler: str,
@@ -1063,6 +1117,11 @@ def incremental_factor_table(
     minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     """Rescore cached incremental pairs for one evidence stream."""
+    imcd_profiles = (
+        _imcd_profile_lookup(project, handler)
+        if handler in IMCD_COMPARTMENT_HANDLERS
+        else None
+    )
     signature, _ = evidence_signature(project)
     connection = _connect(project)
     try:
@@ -1083,6 +1142,7 @@ def incremental_factor_table(
             if row[0] not in selected or row[1] not in selected:
                 continue
             factor = 1.0
+            imcd_record_observed = False
             if handler == "mpkccd_localization" and row[2] is not None and row[3] is not None and row[4] is not None:
                 factor = (
                     _complement(float(row[2]), float(row[3]) * multiplier, continuous_negative=continuous_negative, minimum_bayes_factor=minimum_bayes_factor)
@@ -1115,7 +1175,16 @@ def incremental_factor_table(
                 factor = _odds_factor(float(row[14]), STITCH_REFERENCE * multiplier, floor=not continuous_negative)
                 if continuous_negative:
                     factor = max(minimum_bayes_factor, factor)
-            if factor > 0 and math.isfinite(factor) and abs(factor - 1.0) > 1e-12:
+            elif handler in IMCD_COMPARTMENT_HANDLERS:
+                assert imcd_profiles is not None
+                factor, imcd_record_observed = _imcd_pair_factor(
+                    imcd_profiles, row[0], row[1], multiplier
+                )
+            if (
+                factor > 0
+                and math.isfinite(factor)
+                and (abs(factor - 1.0) > 1e-12 or imcd_record_observed)
+            ):
                 output.append((row[0], row[1], factor))
         return pd.DataFrame.from_records(
             output, columns=["node_a", "node_b", "bayes_factor"]
@@ -1134,6 +1203,18 @@ def incremental_pair_factor_table(
     minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
     """Rescore only named cached pairs, avoiding a full incremental-cache scan."""
+    if handler in IMCD_COMPARTMENT_HANDLERS:
+        profiles = _imcd_profile_lookup(project, handler)
+        output: list[tuple[str, str, float]] = []
+        for left, right in dict.fromkeys(canonical_pair(*pair) for pair in pairs):
+            factor, observed = _imcd_pair_factor(
+                profiles, left, right, multiplier
+            )
+            if observed:
+                output.append((left, right, factor))
+        return pd.DataFrame.from_records(
+            output, columns=["node_a", "node_b", "bayes_factor"]
+        )
     signature, _ = evidence_signature(project)
     connection = _connect(project)
     select_sql = """

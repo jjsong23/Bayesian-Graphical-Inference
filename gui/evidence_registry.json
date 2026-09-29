@@ -323,12 +323,12 @@
     {
       "id": "string_v12",
       "label": "STRING v12",
-      "description": "Mouse functional associations from STRING v12.",
+      "description": "Mouse functional associations from STRING v12. The default 0.25 power weight tempers this broad, internally combined evidence stream while preserving its score ranking and raw BF for audit.",
       "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/string_v12_bf_gt1.tsv.gz",
       "factor_column": "bayes_factor",
       "target_factor_column": "string_bayes_factor",
       "default_enabled": true,
-      "default_weight": 1.0,
+      "default_weight": 0.25,
       "negative_evidence": {
         "eligibility": "both_string_mapped_proteins",
         "absence_definition": "Both protein nodes have valid STRING mouse identifiers, but the pair has no non-neutral STRING association record."
@@ -386,6 +386,74 @@
       }
     },
     {
+      "id": "imcd_basal_compartment_presence",
+      "label": "IMCD basal compartment co-detection",
+      "description": "Presence-only rat IMCD evidence: both proteins were detected in cytoplasm or both in nucleus under basal conditions.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/imcd_basal_compartment_presence_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": null,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "dependence_group": "imcd_compartment_fractionation",
+      "parameters": [
+        {
+          "id": "support_likelihood",
+          "label": "Support L",
+          "default": 0.75,
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "step": 0.05,
+          "help": "Likelihood assigned when both proteins are detected in at least one shared compartment. Relative to neutral likelihood 0.5, 0.75 gives BF = 1.5."
+        }
+      ],
+      "negative_evidence": {
+        "eligibility": "both_imcd_basal_profiles",
+        "absence_definition": "Both proteins have basal IMCD compartment profiles, but they share neither cytoplasm nor nucleus. Penalizing this is optional because nondetection is not proof of absence."
+      },
+      "normalization": {
+        "handler": "imcd_basal_compartment_presence",
+        "user_control": false,
+        "control_label": "",
+        "default_multiplier": 1.0,
+        "reference": "Binary presence-only co-detection; basal cytoplasm OR basal nucleus",
+        "help": "This source has no continuous score or empirical Tq. Adjust Support L to set the positive Bayes factor; spectral-count magnitude, ratios, and p-values are ignored."
+      }
+    },
+    {
+      "id": "imcd_ddavp_compartment_presence",
+      "label": "IMCD dDAVP compartment co-detection",
+      "description": "Presence-only rat IMCD evidence: both proteins were detected in cytoplasm or both in nucleus after 30 minutes of dDAVP.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/imcd_ddavp_compartment_presence_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": null,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "dependence_group": "imcd_compartment_fractionation",
+      "parameters": [
+        {
+          "id": "support_likelihood",
+          "label": "Support L",
+          "default": 0.75,
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "step": 0.05,
+          "help": "Likelihood assigned when both proteins are detected in at least one shared compartment. Relative to neutral likelihood 0.5, 0.75 gives BF = 1.5."
+        }
+      ],
+      "negative_evidence": {
+        "eligibility": "both_imcd_ddavp_profiles",
+        "absence_definition": "Both proteins have dDAVP IMCD compartment profiles, but they share neither cytoplasm nor nucleus. Penalizing this is optional because nondetection is not proof of absence."
+      },
+      "normalization": {
+        "handler": "imcd_ddavp_compartment_presence",
+        "user_control": false,
+        "control_label": "",
+        "default_multiplier": 1.0,
+        "reference": "Binary presence-only co-detection; dDAVP cytoplasm OR dDAVP nucleus",
+        "help": "This source has no continuous score or empirical Tq. Adjust Support L to set the positive Bayes factor; spectral-count magnitude, ratios, and p-values are ignored."
+      }
+    },
+    {
       "id": "omnipath_core",
       "label": "OmniPath core",
       "description": "Core mouse signaling interactions collapsed to unsigned, undirected pairs.",
@@ -428,6 +496,36 @@
       }
     },
     {
+      "id": "biogrid_physical_interaction",
+      "label": "BioGRID physical interaction",
+      "description": "Publication-reported direct-binding or co-complex interactions from BioGRID, including HuRI and human/rat ortholog projections.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/biogrid_physical_interaction_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": null,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "dependence_group": "biogrid_physical_evidence",
+      "parameters": [
+        {
+          "id": "reported_pair_bayes_factor",
+          "label": "Reported-pair BF",
+          "default": 5.0,
+          "minimum": 1.0,
+          "maximum": 100.0,
+          "step": 0.5,
+          "help": "One fixed BF for any BioGRID-reported physical pair. Direct/contact and co-complex assays receive identical treatment, and overlapping records are counted once."
+        }
+      ],
+      "normalization": {
+        "handler": "biogrid_physical_interaction",
+        "user_control": false,
+        "control_label": "",
+        "default_multiplier": 1.0,
+        "reference": "Binary reported physical interaction; one fixed BF for either assay tier; absence neutral",
+        "help": "Direct/contact and co-complex reports share one explicit user-controlled evidence strength. BioGRID nonreporting is always neutral."
+      }
+    },
+    {
       "id": "scaffold_triadic_closure",
       "label": "Scaffold-mediated closure",
       "description": "Fixed one-pass evidence for protein pairs that each have a strong edge to the same adaptor/scaffold.",
@@ -462,6 +560,34 @@
         "default_multiplier": 1.0,
         "reference": "Binary shared-scaffold rule; no empirical Tq or scaffold-degree penalty",
         "help": "Closure uses the Anchor and Support L controls and is calculated once without recursive feedback."
+      }
+    },
+    {
+      "id": "biogrid_shared_partner_closure",
+      "label": "BioGRID shared-partner closure",
+      "description": "One-pass evidence for two proteins that each have a reported BioGRID direct or co-complex relationship with the same third protein.",
+      "derived": true,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "dependence_group": "biogrid_physical_evidence",
+      "parameters": [
+        {
+          "id": "closure_likelihood",
+          "label": "Support L",
+          "default": 0.9,
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "step": 0.01,
+          "help": "Likelihood assigned when the pair shares at least one BioGRID physical partner. Relative to neutral likelihood 0.5, 0.90 gives BF = 1.8."
+        }
+      ],
+      "normalization": {
+        "handler": "biogrid_shared_partner_closure",
+        "user_control": false,
+        "control_label": "",
+        "default_multiplier": 1.0,
+        "reference": "Binary one-pass shared BioGRID partner rule; direct and co-complex anchors qualify",
+        "help": "Closure is derived once from reported BioGRID anchors. Closure-created edges never become new anchors, and BioGRID absence remains neutral."
       }
     }
   ],
@@ -601,11 +727,25 @@
     "unsupported_edge_bayes_factor": 0.5,
     "continuous_negative_edge_evidence": false,
     "continuous_edge_bayes_factor_floor": 1e-6,
-    "start_node": "Aqp2",
-    "target_node": "Prkaca",
+    "start_node": "Prkaca",
+    "target_node": "Aqp2",
     "top_k_paths": 100,
     "maximum_hops": 6,
     "path_minimum_edge_probability": 0.5,
+    "path_include_node_probabilities": false,
+    "graph_statistics_enabled": true,
+    "graph_statistics_edge_probability_cutoff": 0.5,
+    "graph_statistics_metrics": [
+      "degree_strength",
+      "clustering",
+      "betweenness",
+      "closeness_harmonic",
+      "eigenvector_pagerank",
+      "coreness",
+      "connectivity",
+      "communities",
+      "robustness"
+    ],
     "ontology_directionality_enabled": true,
     "omnipath_directionality_enabled": true,
     "signaling_intermediates_only": true,

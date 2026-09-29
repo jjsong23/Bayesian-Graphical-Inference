@@ -821,7 +821,10 @@ def rank_paths_replicate(
             "temporal_soft_precedence",
         ]
         ascending = [False, False, False]
-        if "geometric_mean_edge_probability" in ranked.columns:
+        if "primary_path_score" in ranked.columns:
+            order_columns.append("primary_path_score")
+            ascending.append(False)
+        elif "geometric_mean_edge_probability" in ranked.columns:
             order_columns.append("geometric_mean_edge_probability")
             ascending.append(False)
         elif "path_probability_product" in ranked.columns:

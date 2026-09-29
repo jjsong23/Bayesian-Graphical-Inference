@@ -29,6 +29,27 @@ and reuses an already healthy server rather than creating a duplicate.
 The workbench opens at `http://127.0.0.1:8765`. It binds only to the local
 loopback interface by default.
 
+The optional literature-grounded interpreter accepts either the public OpenAI
+API or an OpenAI-compatible Azure deployment. The preferred method is to enter
+the key, base URL, and deployment/model name in the result panel. For a trusted
+single-user machine, the key and default endpoint may instead be supplied only
+in the launch shell:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+$env:GBI_OPENAI_BASE_URL = "https://your-resource.services.ai.azure.com/openai/v1"
+$env:GBI_INTERPRETATION_MODEL = "your-deployment-name"
+python launch.py --foreground
+```
+
+The Azure base URL must end in `/openai/v1`; the application appends
+`/responses`. In Azure, the Model field is the deployment name. The key is
+never saved. After a completed run, database-backed edge rows expose their
+source-native STRING, OmniPath, BioGRID, or closure traceback. The network
+research result is cached in the run folder and included in subsequent
+complete-session HTML exports. It summarizes the frozen ledger but cannot
+change the graph.
+
 If the backend stops, the page now reports **Local analysis server is not
 running** rather than misclassifying the browser network error as an invalid
 scientific configuration. Restart the server and choose **Reconnect to local
@@ -50,28 +71,35 @@ server**.
    own `Tq ×` control. A global nondetection rule gives each eligible but
    unobserved candidate a configurable BF below 1 in every enabled node stream.
    It is enabled in the Version 1 profile with BF 0.5.
-   Non-kinases remain out of scope and neutral in the kinase-activity stream.
+   Non-kinases are not eligible for a kinase-activity nondetection penalty and
+   remain neutral in that stream.
    The six collecting-duct streams and two selective PKA-subunit-KO streams are
    enabled in the Version 1 profile. The 891-node edge catalog remains the immutable
    seed; the revised site-centric double-KO stream expands the current default
    to 1,051 proteins, or 1,071 nodes with curated messengers.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
-   KinasePredictor, STRING, HPA, OmniPath, STITCH, and the optional derived
+   KinasePredictor, STRING, HPA, presence-only IMCD basal/dDAVP compartment
+   co-detection, OmniPath, STITCH, and the optional derived
    scaffold-closure stream. Edge prior odds are multiplied by
    each sparse Bayes factor raised to its selected weight. HPA primary and HPA
    high-confidence are alternatives and cannot be enabled together. Each edge
    dataset has an independent normalization control. An optional global rule
    assigns a configurable BF below 1 to a pair that is eligible for an enabled
-   source but has no non-neutral relationship in that source. Out-of-scope
-   pairs remain neutral. The option is off by default and its default penalty
-   is BF 0.5. Scaffold closure is positive-only and enabled in the Version 1
+   source but has no non-neutral relationship in that source. Pairs that the
+   source could not fairly evaluate for absence remain neutral. The option is
+   off by default and its default penalty is BF 0.5. Scaffold closure is positive-only and enabled in the Version 1
    profile; it reuses the selected pre-closure graph rather than adding an
    independent experiment.
+   The Version 1 default enables every registered edge stream except HPA
+   high-confidence. HPA primary remains enabled, preserving the required
+   mutual exclusion between the two HPA alternatives.
 3. **Find paths.** Choose a selected start node and any mouse protein target.
    Targets outside the node universe are characterized from the same evidence
    streams and appended as an undirected row/column. Paths are ranked by the
-   geometric mean of their edge probabilities. The raw product remains an
-   audit column, while the path panel exposes every
+   geometric mean of their edge probabilities by default. The optional
+   node-aware score includes each internal-node posterior in the same geometric
+   mean; fixed endpoints are excluded. Raw edge products and edge-only scores
+   remain audit columns, while the path panel exposes every
    ontology-derived node-role class and the GO root term(s) used to assign it.
    Users select which roles may serve as internal signal relays. The Version 1
    default enables receptor, receptor-regulator, ligand, catalytic,
@@ -83,14 +111,18 @@ server**.
    every scaffold-tagged intermediate, even if another selected role matches.
 
    Conservative directionality is enabled by default and combines ontology-role
-   rules with mapped OmniPath source-target records. Established ontology
-   restrictions are applied first. OmniPath can add a unique direction only for
-   a pair ontology left unresolved; it cannot reopen or reverse an
-   ontology-disallowed traversal. The original edge probability is retained in
-   every allowed direction. Pairs with no direction evidence, and unresolved
-   pairs with bidirectional evidence, remain traversable both ways. Source
-   disagreements are recorded in the audit. OmniPath direction use has a
-   separate checkbox beneath the master directionality control.
+   rules, positive KinasePredictor kinase-to-substrate records, and mapped
+   OmniPath source-target records. Established ontology restrictions are
+   applied first, KinasePredictor directions second, and OmniPath last. A later
+   source can add a unique direction only for a pair left unresolved by earlier
+   sources; it cannot reopen or reverse an already disallowed traversal. The
+   original edge probability is retained in every allowed direction and the
+   uniquely disallowed reverse direction is set to zero. This prevents the path
+   search from crossing a resolved fork or collider backwards. Pairs with no
+   direction evidence, and unresolved pairs with bidirectional evidence, remain
+   traversable both ways. Source disagreements are recorded in the audit.
+   OmniPath direction use has a separate checkbox beneath the master
+   directionality control.
 
    Completed path runs also display a merged pathway map. The browser overlays
    up to the first 50 ranked paths, collapses repeated relationships to one
@@ -104,8 +136,30 @@ server**.
    to one. Arrowheads appear only when the propagation matrix actually
    disallows the reverse traversal. Selecting a mark reveals the exact
    probability, ontology roles, direction status, and contributing path ranks.
+   Path order determines the horizontal tier. Nodes sharing a tier receive
+   small deterministic horizontal offsets, preventing same-tier relationships
+   from collapsing onto one line while preserving the overall path ordering.
 
-4. **Validate temporal order (optional).** Compare the current path order with
+4. **Describe the full graph (enabled by default).** Threshold all unique undirected
+   pairs at a separate user-selected cutoff and compute degree, posterior
+   strength, clustering, centralities, coreness, components,
+   articulation/removal impact, communities, modularity, shortest-path
+   summaries, and node-removal robustness. The live GUI shows a compact summary,
+   up to 100 nodes per selected ranking, and top-10 panels for every computed
+   measure; complete values are written to
+   `full_graph_node_statistics.tsv.gz`. This descriptive stage does not feed
+   evidence back into the Bayesian graph.
+
+5. **Describe the returned-path union.** Whenever pathfinding runs, the backend
+   computes node statistics on the exact union of every returned path. Only
+   traversed path edges are used—no additional edge from the full posterior
+   graph is filled in. The live results and saved session HTML expose sortable
+   rankings, and the full tables are saved as
+   `found_path_union_node_statistics.tsv.gz` and
+   `found_path_union_statistics_summary.json`. The result remains conditioned
+   on the configured Top paths limit and all path-search constraints.
+
+6. **Validate temporal order (optional).** Compare the current path order with
    the raw 1/2/5/15-minute dDAVP phosphoproteomic time course. Replicate mode
    stabilizes the three-replicate variance with an empirical intensity trend,
    selects one phosphosite per gene by moderated signal-to-noise, applies a
@@ -115,7 +169,7 @@ server**.
    stage is off by default and never changes the Bayesian path probability or
    primary rank.
 
-The path count can be set from 1 to 500. All requested paths are shown in the
+The path count can be set from 1 to 2,000. All requested paths are shown in the
 scrollable result table and written to `ranked_paths.tsv`; the separate
 `ranked_path_edges.tsv` retains every constituent edge. The liberal intermediate
 policy retains a substantially denser search graph than the earlier conservative
@@ -128,7 +182,8 @@ supported edge list, path tables, eligibility audit, compact
 `top_path_network.json` union graph, and JSON summary.
 Directional runs additionally contain `propagation_adjacency_matrix.tsv`,
 `ontology_directionality_audit.tsv.gz`, `ontology_class_pair_catalog.tsv`, and
-`ontology_direction_rules.json`. Runs using OmniPath directions also contain
+`ontology_direction_rules.json`. Runs with enabled, supporting KinasePredictor
+records also contain `kinase_predictor_direction_evidence.tsv.gz`. Runs using OmniPath directions also contain
 `omnipath_direction_evidence.tsv.gz`, including mapped directions, record counts,
 resources, references, and consensus-direction counts.
 Temporal runs additionally contain `ranked_paths_temporal.tsv`,
@@ -177,6 +232,10 @@ STRING combined score relative to a reference score of 0.041, not the Gaussian
 complement kernel. STITCH messenger–protein associations use score odds relative
 to the database's 0.150 reporting floor. Their cards are labeled `Ref ×`; each
 control scales that stream's reference score rather than calling it `Tq`.
+Because the broad STRING combined score produced much larger factors than the
+other default edge streams, STRING uses a default power weight of 0.25. Thus its
+posterior contribution is `BF_STRING^0.25`; the raw score and BF remain visible
+for audit. See `docs/string_evidence_stabilization.md` for the empirical choice.
 
 Scaffold-mediated closure is calculated in a separate second pass. A protein is
 an anchor to an `adaptor_scaffold` node only when its pre-closure edge
@@ -259,6 +318,13 @@ arithmetic check makes stale or incomplete audit data visible instead of
 silently presenting a plausible-looking decomposition. Edge inspection is
 performed for only the requested unordered pair, so it does not rerun the
 full pairwise workflow.
+
+The ledger deliberately separates **record status** from **negative scope**.
+“Record retained” means the source supplied direct quantitative or curated
+evidence for the selected node or edge. “Absence scorable” asks the different
+counterfactual question of whether a missing record would have justified a
+negative-evidence penalty. Consequently, a retained positive record can support
+an edge even when absence for that source-pair combination was not scorable.
 
 The merged network uses fixed node sizes and fixed edge widths. Scored nodes
 and edges use separate monotone scales spanning the posterior probabilities
@@ -370,11 +436,16 @@ the standard factor table.
   selectable but share a dependence-group warning because they come from the
   same TMT experiment.
 - HPA alternatives are mutually exclusive.
+- IMCD basal and dDAVP are separate, correlated, presence-only streams. Each
+  supports a pair detected together in cytoplasm or nucleus in that condition;
+  `Support L` controls the fixed BF (`BF = L / 0.5`). Both are enabled by
+  default under the all-edge-evidence profile, while retaining their shared
+  dependence label and documented approximately 98% profiled-pair density.
 - Geometric-mean path scores summarize typical edge strength; they are not
   calibrated whole-path probabilities. Raw products remain secondary audit
   values.
 - Every run preserves its exact configuration and complete audit tables.
 - Scaffold closure is labeled as dependent proximity/co-complex evidence, not
-  proof of a direct binary PPI, and is disabled by default.
+  proof of a direct binary PPI. Both closure streams are enabled by default.
 - Every active stream records its normalization or fixed-rule parameters in
   the run summary.

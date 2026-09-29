@@ -32,6 +32,8 @@ node_modules/
 .env.*
 .venv/
 venv/
+.local_python_packages/
+.pip_tmp/
 .vscode/
 .idea/
 .DS_Store

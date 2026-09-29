@@ -1,14 +1,20 @@
 {
   "schema_version": 1,
-  "name": "Conservative ontology signal-propagation rules",
-  "semantics": "Within the ontology layer, a rule source_class -> target_class supports removal of the reverse traversal for a supported undirected edge.",
-  "conflict_policy": "If multi-role ontology annotations support both directions, the ontology layer leaves the pair unresolved. A unique external direction may subsequently resolve it under external_direction_policy. If no direction source resolves the pair, both traversals are retained.",
+  "name": "Conservative signal-propagation direction rules",
+  "semantics": "Within the ontology layer, a rule source_class -> target_class supports removal of the reverse traversal for a supported undirected edge. Positive KinasePredictor kinase-to-substrate evidence and mapped OmniPath source-to-target records supply additional ordered relationships without changing the undirected edge posterior.",
+  "conflict_policy": "Unique ontology directions are applied first. For ontology-unresolved pairs, unique KinasePredictor kinase-to-substrate directions are applied next. OmniPath can uniquely orient only pairs left unresolved by both earlier layers. A later source cannot reopen or reverse an earlier disallowed traversal. Bidirectional evidence remains unresolved, and all source conflicts are retained in the audit.",
   "sign_policy": "Direction and biochemical sign are separate. These rules orient possible propagation but do not label activation or inhibition.",
   "external_direction_policy": {
     "source": "OmniPath mouse core post-translational interactions",
-    "rule": "Mapped source-target records support their reported direction. A unique ontology orientation remains in force. OmniPath uniquely orients only pairs that ontology left unresolved, so it can add a disallowed reverse traversal but cannot reopen or reverse an ontology-disallowed traversal. Opposing source directions are recorded for audit. If OmniPath records occur in both directions for an otherwise unresolved pair, both traversals are retained.",
+    "rule": "Mapped source-target records support their reported direction. A unique ontology or KinasePredictor orientation remains in force. OmniPath uniquely orients only pairs that both earlier layers left unresolved, so it can add a disallowed reverse traversal but cannot reopen or reverse an earlier disallowed traversal. Opposing source directions are recorded for audit. If OmniPath records occur in both directions for an otherwise unresolved pair, both traversals are retained.",
     "consensus_direction_usage": "The OmniPath consensus_direction flag is retained for audit but is not required; agreement of all mapped directed records for a pair is the operational criterion.",
     "effect_on_probability": "None. The permitted traversal retains the undirected edge probability and only a uniquely disallowed reverse traversal is set to zero."
+  },
+  "kinase_predictor_direction_policy": {
+    "source": "Observed-site KinasePredictor top-ten predictions selected in the active edge-evidence configuration",
+    "rule": "When both the aggregate KinasePredictor Bayes factor for an ordered kinase-to-substrate relationship and the stream's complete undirected pair Bayes factor exceed one under the run's Tq and negative-evidence settings, kinase -> substrate is permitted and substrate -> kinase is removed unless a unique ontology rule already controls the pair. Bidirectional supported predictions do not orient an otherwise unresolved pair.",
+    "effect_on_probability": "None. KinasePredictor still contributes to one symmetric edge-existence posterior. Its retained kinase and substrate roles are used only to set the disallowed reverse traversal to zero in the propagation matrix.",
+    "path_effect": "A path cannot cross a resolved fork or collider by traversing a KinasePredictor-supported phosphorylation edge backwards."
   },
   "ontology_classes": [
     "receptor",

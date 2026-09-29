@@ -13,10 +13,12 @@ import numpy as np
 import pandas as pd
 
 from workflow_engine import (
+    BIOGRID_PHYSICAL_HANDLER,
     FACTOR_EPSILON,
     PROJECT_ROOT,
     UNIVERSE_RELATIVE,
     _canonical_undirected_pair,
+    _edge_incremental_scale,
     _raw_seed_edge_factor_table,
     _stream_multiplier,
     edge_stream_eligibility_matrix,
@@ -24,6 +26,7 @@ from workflow_engine import (
     load_registry,
     stable_expit,
 )
+from evidence_provenance import trace_database_evidence
 from incremental_edge_cache import incremental_pair_factor_table
 
 
@@ -425,12 +428,16 @@ def _factor_for_pair(
     continuous_floor: float,
 ) -> tuple[float, bool]:
     multiplier = _stream_multiplier(state)
-    if pair[0] in seed_set and pair[1] in seed_set:
+    if (
+        definition["normalization"]["handler"] == BIOGRID_PHYSICAL_HANDLER
+        or (pair[0] in seed_set and pair[1] in seed_set)
+    ):
         table = _raw_seed_edge_factor_table(
             project,
             definition,
             list(pair),
             multiplier,
+            stream_parameters=state.get("parameters", {}),
             continuous_negative=continuous_negative,
             minimum_bayes_factor=continuous_floor,
         )
@@ -438,7 +445,7 @@ def _factor_for_pair(
         table = incremental_pair_factor_table(
             project,
             definition["normalization"]["handler"],
-            multiplier,
+            _edge_incremental_scale(definition, state),
             [pair],
             continuous_negative=continuous_negative,
             minimum_bayes_factor=continuous_floor,
@@ -557,20 +564,60 @@ def inspect_edge_evidence(
             reconstructed_log_odds += weighted_log
         distribution = distribution_catalog.get(stream_id) if enabled else None
         distribution_position = _factor_position_from_summary(distribution, factor)
+        provenance_trace = None
+        if enabled:
+            try:
+                provenance_trace = trace_database_evidence(
+                    project,
+                    run,
+                    stream_id,
+                    pair,
+                    applied_bayes_factor=factor,
+                    weight=float(state["weight"]),
+                    multiplier=_stream_multiplier(state),
+                )
+            except Exception as exc:  # provenance must never break BF reconstruction
+                provenance_trace = {
+                    "database": definition["label"],
+                    "trace_status": "traceback_error",
+                    "summary": (
+                        "The Bayesian contribution was reconstructed, but its "
+                        f"database-native traceback could not be loaded: {exc}"
+                    ),
+                    "records": [],
+                    "factors": [],
+                    "links": [],
+                }
         if not enabled:
             note = "Disabled in this run; contribution to posterior odds was zero."
         elif definition.get("derived") and found:
-            note = "Derived scaffold-closure rule supplied a factor for this pair."
+            note = (
+                f"The derived {definition['label']} rule supplied a factor for "
+                "this pair."
+            )
         elif definition.get("derived"):
-            note = "Derived closure was enabled but its shared-scaffold rule did not trigger."
+            note = (
+                f"{definition['label']} was enabled, but its documented closure "
+                "rule did not trigger for this pair."
+            )
         elif penalty and continuous_negative:
             note = "Eligible pair had no retained record and received the continuous x=0 BF floor."
         elif penalty:
             note = "Eligible pair had no retained record and received the configured unsupported-pair BF."
+        elif found and eligible is False:
+            note = (
+                "A quantitative/curated source record supplied this Bayes factor. "
+                "The separate negative-scope flag is false, meaning that absence "
+                "of a record would not have been penalized; it does not invalidate "
+                "this observed positive record."
+            )
         elif found:
             note = "A quantitative/curated source record supplied this Bayes factor."
         elif eligible is False:
-            note = "Pair was outside this source's assay/mapping scope and remained neutral."
+            note = (
+                "No record was retained, and the source could not evaluate absence "
+                "reliably enough to apply negative evidence; the pair remained neutral."
+            )
         else:
             note = "No non-neutral factor record; pair remained neutral in this stream."
         streams.append(
@@ -593,6 +640,7 @@ def inspect_edge_evidence(
                 "derived": bool(definition.get("derived")),
                 "factor_distribution": distribution,
                 "distribution_position": distribution_position,
+                "provenance_trace": provenance_trace,
                 "note": note,
             }
         )
@@ -612,3 +660,275 @@ def inspect_edge_evidence(
         "equation": "posterior log-odds = prior log-odds + sum(weight x ln(BF))",
         "streams": streams,
     }
+
+
+def inspect_edge_evidence_batch(
+    run_directory: Path | str,
+    pair_queries: list[tuple[str, str]],
+    *,
+    project_root: Path | str = PROJECT_ROOT,
+) -> list[dict[str, Any]]:
+    """Rescore several stored graph pairs while loading each evidence source once.
+
+    The returned ledgers are intentionally identical to repeated
+    :func:`inspect_edge_evidence` calls.  This batched form exists for the
+    standalone-session exporter, where tens or hundreds of visible network
+    edges need to remain inspectable offline.  Re-reading the full adjacency
+    matrix and every source table once per edge made an otherwise ordinary
+    HTML export take many minutes.
+    """
+
+    if not pair_queries:
+        return []
+    run = Path(run_directory).resolve()
+    project = Path(project_root).resolve()
+    matrix_path = run / "edge_adjacency_matrix.tsv"
+    if not matrix_path.is_file():
+        raise FileNotFoundError("The completed run has no edge_adjacency_matrix.tsv file")
+
+    matrix = pd.read_csv(matrix_path, sep="\t", index_col=0)
+    matrix.index = matrix.index.astype(str)
+    matrix.columns = matrix.columns.astype(str)
+    graph_symbols = matrix.columns.tolist()
+    resolved_pairs: list[tuple[str, str, tuple[str, str]]] = []
+    for left_query, right_query in pair_queries:
+        left = _resolve_symbol(left_query, graph_symbols, "First edge node")
+        right = _resolve_symbol(right_query, graph_symbols, "Second edge node")
+        if left == right:
+            raise ValueError("An edge requires two different nodes")
+        resolved_pairs.append((left, right, _canonical_undirected_pair(left, right)))
+
+    wanted_pairs = {item[2] for item in resolved_pairs}
+    relevant_symbols = sorted(
+        {symbol for pair in wanted_pairs for symbol in pair}, key=str.casefold
+    )
+    config = _read_configuration(run)
+    registry = load_registry(project)
+    definitions = {item["id"]: item for item in registry["edge_streams"]}
+    metadata = _graph_metadata(project, run, graph_symbols)
+    relevant_metadata = metadata.loc[
+        metadata["symbol"].astype(str).isin(relevant_symbols)
+    ].copy()
+    seed_set = set(
+        pd.read_csv(project / UNIVERSE_RELATIVE, sep="\t", usecols=["symbol"])[
+            "symbol"
+        ].astype(str)
+    )
+    prior = float(config["edge_integration"]["prior_probability"])
+    prior_log_odds = math.log(prior / (1.0 - prior))
+    global_continuous = bool(
+        config["edge_integration"].get("continuous_negative_evidence", False)
+    )
+    continuous_floor = float(
+        config["edge_integration"].get("continuous_bayes_factor_floor", 1e-6)
+    )
+    penalize_unsupported = bool(
+        config["edge_integration"].get("penalize_unsupported", False)
+    )
+    unsupported_factor = float(
+        config["edge_integration"].get("unsupported_bayes_factor", 0.5)
+    )
+    distribution_catalog = _stream_distribution_catalog(
+        run, "edge_characterization"
+    )
+
+    prepared: dict[str, dict[str, Any]] = {}
+    for stream_id, definition in definitions.items():
+        state = _run_stream_state(config, "edge_streams", definition)
+        enabled = bool(state["enabled"] and float(state["weight"]) > 0)
+        factor_map: dict[tuple[str, str], float] = {}
+        eligibility_map: dict[tuple[str, str], bool] = {}
+        continuous_negative = False
+        if enabled and definition.get("derived"):
+            audit_path = run / f"{stream_id}_audit.tsv.gz"
+            if audit_path.is_file():
+                audit = pd.read_csv(audit_path, sep="\t")
+                required = {"node_a", "node_b", "bayes_factor"}
+                if not audit.empty and required.issubset(audit.columns):
+                    for row in audit.itertuples(index=False):
+                        pair = _canonical_undirected_pair(row.node_a, row.node_b)
+                        if pair in wanted_pairs:
+                            factor_map[pair] = factor_map.get(pair, 1.0) * float(
+                                row.bayes_factor
+                            )
+            eligibility_map = {pair: pair in factor_map for pair in wanted_pairs}
+        elif enabled:
+            continuous_negative = global_continuous or bool(
+                state.get("continuous_negative_evidence", False)
+            )
+            raw_pairs = {
+                pair
+                for pair in wanted_pairs
+                if definition["normalization"]["handler"] == BIOGRID_PHYSICAL_HANDLER
+                or (pair[0] in seed_set and pair[1] in seed_set)
+            }
+            incremental_pairs = wanted_pairs.difference(raw_pairs)
+            tables: list[pd.DataFrame] = []
+            if raw_pairs:
+                raw_symbols = sorted(
+                    {symbol for pair in raw_pairs for symbol in pair}, key=str.casefold
+                )
+                tables.append(
+                    _raw_seed_edge_factor_table(
+                        project,
+                        definition,
+                        raw_symbols,
+                        _stream_multiplier(state),
+                        stream_parameters=state.get("parameters", {}),
+                        continuous_negative=continuous_negative,
+                        minimum_bayes_factor=continuous_floor,
+                    )
+                )
+            if incremental_pairs:
+                tables.append(
+                    incremental_pair_factor_table(
+                        project,
+                        definition["normalization"]["handler"],
+                        _edge_incremental_scale(definition, state),
+                        sorted(incremental_pairs),
+                        continuous_negative=continuous_negative,
+                        minimum_bayes_factor=continuous_floor,
+                    )
+                )
+            for table in tables:
+                for row in table.itertuples(index=False):
+                    pair = _canonical_undirected_pair(row.node_a, row.node_b)
+                    if pair in wanted_pairs:
+                        factor_map[pair] = factor_map.get(pair, 1.0) * float(
+                            row.bayes_factor
+                        )
+            eligibility = edge_stream_eligibility_matrix(
+                project,
+                definition,
+                relevant_symbols,
+                graph_metadata=relevant_metadata,
+            )
+            symbol_index = {symbol: index for index, symbol in enumerate(relevant_symbols)}
+            eligibility_map = {
+                pair: bool(
+                    eligibility[symbol_index[pair[0]], symbol_index[pair[1]]]
+                )
+                for pair in wanted_pairs
+            }
+        prepared[stream_id] = {
+            "definition": definition,
+            "state": state,
+            "enabled": enabled,
+            "factor_map": factor_map,
+            "eligibility_map": eligibility_map,
+            "continuous_negative": continuous_negative,
+        }
+
+    results: list[dict[str, Any]] = []
+    cutoff = float(config["edge_integration"]["output_probability_cutoff"])
+    for left, right, pair in resolved_pairs:
+        stored_probability = float(matrix.loc[left, right])
+        reconstructed_log_odds = prior_log_odds
+        streams: list[dict[str, Any]] = []
+        for stream_id, item in prepared.items():
+            definition = item["definition"]
+            state = item["state"]
+            enabled = item["enabled"]
+            factor: float | None = None
+            found = False
+            eligible: bool | None = None
+            penalty = False
+            continuous_negative = bool(item["continuous_negative"])
+            if enabled:
+                found = pair in item["factor_map"]
+                factor = float(item["factor_map"].get(pair, 1.0))
+                eligible = bool(item["eligibility_map"].get(pair, False))
+                if (
+                    not definition.get("derived")
+                    and not found
+                    and eligible
+                    and definition.get("negative_evidence")
+                ):
+                    if continuous_negative:
+                        factor = continuous_floor
+                        penalty = True
+                    elif penalize_unsupported:
+                        factor = unsupported_factor
+                        penalty = True
+            weighted_log = 0.0
+            if enabled:
+                factor = float(factor if factor is not None else 1.0)
+                weighted_log = float(state["weight"]) * math.log(factor)
+                reconstructed_log_odds += weighted_log
+            distribution = distribution_catalog.get(stream_id) if enabled else None
+            distribution_position = _factor_position_from_summary(distribution, factor)
+            if not enabled:
+                note = "Disabled in this run; contribution to posterior odds was zero."
+            elif definition.get("derived") and found:
+                note = (
+                    f"The derived {definition['label']} rule supplied a factor for "
+                    "this pair."
+                )
+            elif definition.get("derived"):
+                note = (
+                    f"{definition['label']} was enabled, but its documented closure "
+                    "rule did not trigger for this pair."
+                )
+            elif penalty and continuous_negative:
+                note = "Eligible pair had no retained record and received the continuous x=0 BF floor."
+            elif penalty:
+                note = "Eligible pair had no retained record and received the configured unsupported-pair BF."
+            elif found and eligible is False:
+                note = (
+                    "A quantitative/curated source record supplied this Bayes factor. "
+                    "The separate negative-scope flag is false, meaning that absence "
+                    "of a record would not have been penalized; it does not invalidate "
+                    "this observed positive record."
+                )
+            elif found:
+                note = "A quantitative/curated source record supplied this Bayes factor."
+            elif eligible is False:
+                note = (
+                    "No record was retained, and the source could not evaluate absence "
+                    "reliably enough to apply negative evidence; the pair remained neutral."
+                )
+            else:
+                note = "No non-neutral factor record; pair remained neutral in this stream."
+            streams.append(
+                {
+                    "stream_id": stream_id,
+                    "label": definition["label"],
+                    "description": definition.get("description"),
+                    "enabled": enabled,
+                    "status": _status(enabled, factor),
+                    "weight": float(state["weight"]),
+                    "tq_multiplier": _clean(state.get("tq_multiplier")),
+                    "normalization_control": definition.get("normalization", {}).get("control_label"),
+                    "normalization_reference": definition.get("normalization", {}).get("reference"),
+                    "applied_bayes_factor": factor,
+                    "weighted_log2_odds_contribution": weighted_log / LOG_2,
+                    "source_record_retained": found if enabled else None,
+                    "negative_evidence_eligible": eligible,
+                    "absence_penalty_applied": penalty,
+                    "continuous_negative_evidence": continuous_negative if enabled else None,
+                    "derived": bool(definition.get("derived")),
+                    "factor_distribution": distribution,
+                    "distribution_position": distribution_position,
+                    "note": note,
+                }
+            )
+        reconstructed = _posterior_from_log_odds(reconstructed_log_odds)
+        results.append(
+            {
+                "kind": "edge",
+                "node_a": left,
+                "node_b": right,
+                "canonical_undirected_pair": list(pair),
+                "prior_probability": prior,
+                "stored_posterior_probability": stored_probability,
+                "reconstructed_posterior_probability": reconstructed,
+                "reconciliation_absolute_difference": abs(
+                    stored_probability - reconstructed
+                ),
+                "supported_above_output_cutoff": stored_probability > cutoff,
+                "output_probability_cutoff_exclusive": cutoff,
+                "equation": "posterior log-odds = prior log-odds + sum(weight x ln(BF))",
+                "streams": streams,
+            }
+        )
+    return results
