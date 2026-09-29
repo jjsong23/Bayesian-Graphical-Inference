@@ -6,7 +6,10 @@ const state = {
   pathNetwork: null,
   networkRankLimit: 50,
   networkLayoutSeed: 0,
+  networkZoom: 1,
+  networkPoppedOut: false,
   networkResizeTimer: null,
+  networkResizeObserver: null,
   selectedPathRank: null,
   inspectionHistory: [],
   currentEvidenceInspection: null,
@@ -22,6 +25,9 @@ const $ = (id) => document.getElementById(id);
 const formatInt = (value) => new Intl.NumberFormat("en-US").format(Number(value || 0));
 const formatScore = (value) => Number(value).toPrecision(8);
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const NETWORK_ZOOM_MIN = 0.6;
+const NETWORK_ZOOM_MAX = 2.4;
+const NETWORK_ZOOM_STEP = 0.2;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1154,6 +1160,62 @@ function clearPathNetworkSelection(nodeCount, edgeCount, pathCount) {
   $("path-network-detail").textContent = `${formatInt(nodeCount)} nodes and ${formatInt(edgeCount)} merged relationships from the top ${formatInt(pathCount)} path${pathCount === 1 ? "" : "s"}. Select a mark for exact probabilities, roles, and contributing path ranks.`;
 }
 
+function schedulePathNetworkDraw() {
+  if (!state.pathNetwork || $("path-network-section").classList.contains("hidden")) return;
+  window.clearTimeout(state.networkResizeTimer);
+  state.networkResizeTimer = window.setTimeout(drawPathNetwork, 140);
+}
+
+function applyPathNetworkZoom(layoutWidth, layoutHeight) {
+  const svg = $("path-network-svg");
+  const width = Number(layoutWidth || svg.dataset.layoutWidth || 1);
+  const height = Number(layoutHeight || svg.dataset.layoutHeight || 1);
+  const zoom = Math.max(NETWORK_ZOOM_MIN, Math.min(NETWORK_ZOOM_MAX, Number(state.networkZoom) || 1));
+  state.networkZoom = zoom;
+  const visibleWidth = width / zoom;
+  const visibleHeight = height / zoom;
+  const left = (width - visibleWidth) / 2;
+  const top = (height - visibleHeight) / 2;
+  svg.setAttribute("viewBox", `${left} ${top} ${visibleWidth} ${visibleHeight}`);
+  $("path-network-zoom-label").textContent = `${Math.round(zoom * 100)}%`;
+  $("path-network-zoom-out").disabled = zoom <= NETWORK_ZOOM_MIN + 0.001;
+  $("path-network-zoom-in").disabled = zoom >= NETWORK_ZOOM_MAX - 0.001;
+}
+
+function setPathNetworkZoom(value) {
+  state.networkZoom = Math.max(NETWORK_ZOOM_MIN, Math.min(NETWORK_ZOOM_MAX, Number(value) || 1));
+  applyPathNetworkZoom();
+}
+
+function setPathNetworkPoppedOut(poppedOut) {
+  const dialog = $("path-network-popout");
+  const section = $("path-network-section");
+  const button = $("path-network-popout-button");
+  const buttonLabel = $("path-network-popout-label");
+  state.networkPoppedOut = Boolean(poppedOut);
+  if (state.networkPoppedOut) {
+    $("path-network-popout-host").appendChild(section);
+    buttonLabel.textContent = "Dock";
+    button.setAttribute("aria-label", "Dock network in results page");
+    if (!dialog.open) dialog.showModal();
+  } else {
+    $("path-network-home").appendChild(section);
+    buttonLabel.textContent = "Pop out";
+    button.setAttribute("aria-label", "Open network in resizable pop-out");
+    dialog.classList.remove("is-fullscreen");
+    $("path-network-popout-fullscreen").textContent = "Fill screen";
+    if (dialog.open) dialog.close();
+  }
+  window.requestAnimationFrame(schedulePathNetworkDraw);
+}
+
+function togglePathNetworkPopoutSize() {
+  const dialog = $("path-network-popout");
+  const fullscreen = dialog.classList.toggle("is-fullscreen");
+  $("path-network-popout-fullscreen").textContent = fullscreen ? "Restore window" : "Fill screen";
+  window.requestAnimationFrame(schedulePathNetworkDraw);
+}
+
 function drawPathNetwork() {
   const network = state.pathNetwork;
   const svg = $("path-network-svg");
@@ -1170,11 +1232,16 @@ function drawPathNetwork() {
   );
   updatePathNetworkColorScale("node", nodeScale);
   updatePathNetworkColorScale("edge", edgeScale);
-  const width = Math.max(320, Math.round(svg.parentElement.getBoundingClientRect().width || 640));
-  const height = Math.max(520, Math.min(860, 390 + visible.nodes.length * 6.5));
+  const canvasBounds = svg.parentElement.getBoundingClientRect();
+  const width = Math.max(320, Math.round(canvasBounds.width || 640));
+  const height = state.networkPoppedOut
+    ? Math.max(440, Math.min(1600, Math.round(canvasBounds.height || 720)))
+    : Math.max(520, Math.min(860, 390 + visible.nodes.length * 6.5));
   svg.innerHTML = "";
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("height", String(height));
+  svg.dataset.layoutWidth = String(width);
+  svg.dataset.layoutHeight = String(height);
+  applyPathNetworkZoom(width, height);
 
   const defs = svgElement("defs");
   svg.appendChild(defs);
@@ -1365,6 +1432,7 @@ function renderPathNetwork(network) {
   state.networkRankLimit = Math.min(50, available);
   limitSelect.value = String(state.networkRankLimit);
   state.networkLayoutSeed = 0;
+  state.networkZoom = 1;
   drawPathNetwork();
   updateLiteratureControls();
 }
@@ -2230,6 +2298,21 @@ $("path-network-relayout").addEventListener("click", () => {
   state.networkLayoutSeed += 1;
   drawPathNetwork();
 });
+$("path-network-zoom-out").addEventListener("click", () => {
+  setPathNetworkZoom(state.networkZoom - NETWORK_ZOOM_STEP);
+});
+$("path-network-zoom-in").addEventListener("click", () => {
+  setPathNetworkZoom(state.networkZoom + NETWORK_ZOOM_STEP);
+});
+$("path-network-zoom-reset").addEventListener("click", () => setPathNetworkZoom(1));
+$("path-network-popout-button").addEventListener("click", () => {
+  setPathNetworkPoppedOut(!state.networkPoppedOut);
+});
+$("path-network-popout-close").addEventListener("click", () => setPathNetworkPoppedOut(false));
+$("path-network-popout-fullscreen").addEventListener("click", togglePathNetworkPopoutSize);
+$("path-network-popout").addEventListener("close", () => {
+  if (state.networkPoppedOut) setPathNetworkPoppedOut(false);
+});
 $("temporal-enabled").addEventListener("change", () => setTemporalControls($("path-enabled").checked));
 $("signal-only").addEventListener("change", () => setOntologyControls($("path-enabled").checked));
 $("penalize-unobserved").addEventListener("change", (event) => {
@@ -2247,8 +2330,12 @@ $("ontology-none").addEventListener("click", () => {
 $("dismiss-error").addEventListener("click", () => showPanel("empty-state"));
 $("reconnect-server").addEventListener("click", () => window.location.reload());
 window.addEventListener("resize", () => {
-  if (!state.pathNetwork || $("path-network-section").classList.contains("hidden")) return;
-  window.clearTimeout(state.networkResizeTimer);
-  state.networkResizeTimer = window.setTimeout(drawPathNetwork, 140);
+  schedulePathNetworkDraw();
 });
+if ("ResizeObserver" in window) {
+  state.networkResizeObserver = new ResizeObserver(() => {
+    if (state.networkPoppedOut) schedulePathNetworkDraw();
+  });
+  state.networkResizeObserver.observe($("path-network-canvas"));
+}
 initialize();

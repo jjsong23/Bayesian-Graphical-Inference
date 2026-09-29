@@ -276,11 +276,23 @@ class WorkflowEngineTests(unittest.TestCase):
             "path-network-section",
             "path-network-limit",
             "path-network-relayout",
+            "path-network-zoom-out",
+            "path-network-zoom-in",
+            "path-network-zoom-reset",
+            "path-network-popout-button",
+            "path-network-popout-label",
+            "path-network-popout",
+            "path-network-popout-fullscreen",
+            "path-network-popout-close",
             "path-network-svg",
             "path-network-detail",
         ):
             self.assertIn(f'id="{control}"', html)
         self.assertIn("function renderPathNetwork(network)", javascript)
+        self.assertIn("function setPathNetworkZoom(value)", javascript)
+        self.assertIn("function setPathNetworkPoppedOut(poppedOut)", javascript)
+        self.assertIn("const NETWORK_ZOOM_MIN = 0.6", javascript)
+        self.assertIn("const NETWORK_ZOOM_MAX = 2.4", javascript)
         self.assertIn("function layoutPathNetwork", javascript)
         self.assertIn("function assignPathTierJitter", javascript)
         self.assertIn("node.tierJitterX = offset", javascript)
@@ -293,6 +305,8 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("function observedProbabilityScale", javascript)
         self.assertIn("function updatePathNetworkColorScale", javascript)
         self.assertIn("Nodes and edges use separate monotone posterior scales", html)
+        self.assertIn("open the resizable pop-out", html)
+        self.assertIn("Open network in resizable pop-out", html)
         for kind in ("node", "edge"):
             self.assertIn(f'id="path-network-{kind}-color-gradient"', html)
             self.assertIn(f'id="path-network-{kind}-color-maximum"', html)

@@ -139,6 +139,9 @@ server**.
    Path order determines the horizontal tier. Nodes sharing a tier receive
    small deterministic horizontal offsets, preventing same-tier relationships
    from collapsing onto one line while preserving the overall path ordering.
+   The embedded graph retains its compact 430-pixel format. A clearly labeled,
+   resizable pop-out can fill the viewport, and bounded 60–240% zoom plus reset
+   controls make dense 50-path maps easier to inspect without runaway zoom.
 
 4. **Describe the full graph (enabled by default).** Threshold all unique undirected
    pairs at a separate user-selected cutoff. The ordinary interface uses four

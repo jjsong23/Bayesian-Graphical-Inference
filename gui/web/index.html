@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Configure and run the graphical Bayesian signaling workflow." />
     <title>Graphical Bayesian Inference</title>
-    <link rel="stylesheet" href="/styles.css?v=20260929-compact-stats" />
+    <link rel="stylesheet" href="/styles.css?v=20260929-stable-network-popout" />
   </head>
   <body>
     <header class="topbar">
@@ -436,6 +436,7 @@
             </div>
             <strong id="temporal-passing-genes">—</strong>
           </section>
+          <div id="path-network-home">
           <section id="path-network-section" class="path-network-section hidden" aria-labelledby="path-network-title">
             <div class="table-heading path-network-heading">
               <div>
@@ -446,11 +447,22 @@
                 <label for="path-network-limit">Show</label>
                 <select id="path-network-limit" aria-label="Number of top paths shown"></select>
                 <button id="path-network-relayout" type="button" class="secondary-button">Re-layout</button>
+                <div class="path-network-zoom-controls" aria-label="Network zoom controls">
+                  <button id="path-network-zoom-out" type="button" class="secondary-button" aria-label="Zoom network out">−</button>
+                  <output id="path-network-zoom-label" for="path-network-zoom-out path-network-zoom-in">100%</output>
+                  <button id="path-network-zoom-in" type="button" class="secondary-button" aria-label="Zoom network in">+</button>
+                  <button id="path-network-zoom-reset" type="button" class="secondary-button">Reset zoom</button>
+                </div>
+                <button id="path-network-popout-button" type="button" class="secondary-button path-network-popout-button" aria-label="Open network in resizable pop-out">
+                  <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.2 2.8 8 8M7 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V9" /></svg>
+                  <span id="path-network-popout-label">Pop out</span>
+                </button>
               </div>
             </div>
-            <p class="path-network-note">Nodes and edges use separate monotone posterior scales because their probability ranges differ. Within each mark type, the visible minimum is lightest and the visible maximum is darkest. Tier lanes and curved edge routing separate relationships that would otherwise overlap. Exact probabilities remain available by selecting a mark.</p>
+            <p class="path-network-note">Nodes and edges use separate monotone posterior scales because their probability ranges differ. Within each mark type, the visible minimum is lightest and the visible maximum is darkest. Tier lanes and curved edge routing separate relationships that would otherwise overlap. Use the bounded 60–240% zoom or open the resizable pop-out for dense networks. Exact probabilities remain available by selecting a mark.</p>
+            <div id="path-network-stage" class="path-network-stage">
             <div class="path-network-visual">
-              <div class="path-network-canvas">
+              <div id="path-network-canvas" class="path-network-canvas">
                 <svg id="path-network-svg" role="img" aria-labelledby="path-network-title path-network-description">
                   <desc id="path-network-description">Merged network of the most likely paths. Scored nodes and edges use separate monotone color scales spanning their respective visible posterior ranges.</desc>
                 </svg>
@@ -489,7 +501,25 @@
               <span><i class="legend-arrow">→</i>Constrained direction</span>
             </div>
             <p id="path-network-detail" class="path-network-detail" aria-live="polite"></p>
+            </div>
           </section>
+          </div>
+          <dialog id="path-network-popout" class="path-network-popout" aria-labelledby="path-network-popout-title">
+            <div class="path-network-popout-shell">
+              <header class="path-network-popout-header">
+                <div>
+                  <p class="eyebrow">Resizable network workspace</p>
+                  <h2 id="path-network-popout-title">Predicted signaling network</h2>
+                  <p class="path-network-popout-hint">Drag the lower-right corner to resize, or fill the viewport.</p>
+                </div>
+                <div>
+                  <button id="path-network-popout-fullscreen" type="button" class="secondary-button">Fill screen</button>
+                  <button id="path-network-popout-close" type="button" class="secondary-button">Close</button>
+                </div>
+              </header>
+              <div id="path-network-popout-host" class="path-network-popout-host"></div>
+            </div>
+          </dialog>
           <section id="network-literature-interpreter" class="literature-interpreter network-literature-interpreter" aria-labelledby="literature-interpreter-title">
             <div class="literature-interpreter-heading">
               <div>
@@ -669,6 +699,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20260929-compact-stats" defer></script>
+    <script src="/app.js?v=20260929-stable-network-popout" defer></script>
   </body>
 </html>

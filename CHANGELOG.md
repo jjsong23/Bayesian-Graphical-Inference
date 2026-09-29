@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-29 — Resizable pathway-network workspace
+
+- Retained the compact 430-pixel embedded network and isolated large-format
+  rendering to the pop-out, preventing resize feedback from slowly enlarging
+  the results page.
+- Added bounded 60–240% zoom with explicit zoom-out, zoom-in, and reset
+  controls.
+- Added a resizable modal pop-out that keeps the same interactive SVG,
+  evidence-selection behavior, path-count selector, posterior scales, and
+  re-layout control. A labeled pop-out icon makes it easier to discover; the
+  workspace can fill the browser viewport and dock back into the results page.
+
 ## 2026-09-29 — Simplified network statistics
 
 - Reduced the default full-graph calculation to degree/weighted degree,

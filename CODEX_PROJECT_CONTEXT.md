@@ -312,6 +312,10 @@ postdate the longer August methods summary and are part of the current code:
    available visualized paths in one nonlinear layout. Complete-session HTML
    export uses the same top-50 default and freezes evidence interpretations for
    every inspectable node and edge in that view.
+   The embedded live canvas retains its compact 430-pixel format. It can be
+   moved without cloning into a resizable modal workspace, expanded to the
+   viewport, and zoomed from 60% through 240%; docking preserves the same SVG
+   selection and evidence-inspection behavior.
    Node and edge geometry is fixed. The live and exported networks use separate
    monotone scales for visible node and edge posteriors: nodes use blue and
    edges use green, and each scale maps its own minimum to the lightest color
