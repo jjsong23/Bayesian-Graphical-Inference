@@ -107,7 +107,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "mpkccd_localization",
                 "kinase_predictor",
                 "string_v12",
-                "hpa_primary",
+                "compartments_localization",
                 "imcd_basal_compartment_presence",
                 "imcd_ddavp_compartment_presence",
                 "omnipath_core",
@@ -179,7 +179,10 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertFalse(config["path"]["include_node_probabilities"])
         self.assertTrue(config["graph_statistics"]["enabled"])
         self.assertEqual(config["graph_statistics"]["edge_probability_cutoff"], 0.5)
-        self.assertEqual(len(config["graph_statistics"]["metrics"]), 9)
+        self.assertEqual(
+            config["graph_statistics"]["metrics"],
+            ["degree_strength", "clustering", "betweenness"],
+        )
 
     def test_exact_half_priors_are_valid_html_values(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -1117,7 +1120,7 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(factor_distribution["hypothesis_count"], 1_133_265)
             self.assertEqual(sum(factor_distribution["bin_counts"]), 1_133_265)
 
-    def test_every_edge_stream_except_hpa_high_confidence_is_enabled_by_default(self) -> None:
+    def test_every_nonredundant_edge_stream_is_enabled_by_default(self) -> None:
         config = default_configuration(self.registry)
         enabled = {
             stream_id
@@ -1129,7 +1132,7 @@ class WorkflowEngineTests(unittest.TestCase):
             {
                 stream["id"]
                 for stream in self.registry["edge_streams"]
-                if stream["id"] != "hpa_high_confidence"
+                if stream["id"] not in {"hpa_primary", "hpa_high_confidence"}
             },
         )
 

@@ -184,6 +184,10 @@ HPA_PROFILES_RELATIVE = Path(
     "data/edge_characterization/localization/hpa/v25.1/processed/"
     "node_hpa_localization_profiles.tsv"
 )
+COMPARTMENTS_PROFILES_RELATIVE = Path(
+    "data/edge_characterization/compartments/integrated/processed/"
+    "node_compartments_profiles.tsv.gz"
+)
 IMCD_COMPARTMENT_PROFILES_RELATIVE = Path(
     "data/edge_characterization/imcd_compartment_presence/processed/"
     "imcd_compartment_node_profiles.tsv"
@@ -582,6 +586,16 @@ def normalize_configuration(
                     preferred_bounds[0],
                     preferred_bounds[1],
                 )
+    # Saved configurations predating the integrated COMPARTMENTS stream contain
+    # HPA primary but no COMPARTMENTS key.  Migrate those sessions to the new
+    # nonredundant default instead of enabling both mutually exclusive sources.
+    incoming_edges = supplied.get("edge_streams", {})
+    if (
+        "compartments_localization" not in incoming_edges
+        and "hpa_primary" in incoming_edges
+        and config["edge_streams"].get("compartments_localization", {}).get("enabled")
+    ):
+        config["edge_streams"]["hpa_primary"]["enabled"] = False
     config["node_integration"].update(supplied.get("node_integration", {}))
     config["edge_integration"].update(supplied.get("edge_integration", {}))
     config["graph_statistics"].update(supplied.get("graph_statistics", {}))
@@ -2275,6 +2289,98 @@ def _hpa_edge_factors(
     return _upper_factor_table(symbols, likelihood / NEUTRAL_LIKELIHOOD)
 
 
+def _compartments_weighted_profiles(
+    profiles: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Reconstruct aligned cross-species COMPARTMENTS GO profiles."""
+    parsed: list[dict[str, float]] = []
+    go_ids: set[str] = set()
+    for row in profiles.itertuples(index=False):
+        identifiers = [
+            value for value in str(getattr(row, "profile_go_ids", "")).split(";") if value
+        ]
+        raw_scores = [
+            value for value in str(getattr(row, "profile_scores", "")).split(";") if value
+        ]
+        if len(identifiers) != len(raw_scores):
+            raise ValueError(
+                f"COMPARTMENTS profile length mismatch for {getattr(row, 'symbol', '')}"
+            )
+        values = {
+            identifier: float(score) / 5.0
+            for identifier, score in zip(identifiers, raw_scores)
+        }
+        parsed.append(values)
+        go_ids.update(values)
+    ordered_go_ids = sorted(go_ids)
+    go_index = {go_id: index for index, go_id in enumerate(ordered_go_ids)}
+    weighted = np.zeros((len(profiles), len(ordered_go_ids)), dtype=float)
+    for row_index, values in enumerate(parsed):
+        for go_id, value in values.items():
+            weighted[row_index, go_index[go_id]] = value
+    observed = _observed_series(profiles["profile_observed"]).to_numpy(bool).copy()
+    observed &= weighted.sum(axis=1) > 0
+    thresholds = pd.to_numeric(profiles["Tq_q75"], errors="coerce").to_numpy(float)
+    return weighted, observed, thresholds
+
+
+def _compartments_edge_factors(
+    project: Path,
+    symbols: list[str],
+    multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
+) -> pd.DataFrame:
+    """Score the consolidated human/mouse/rat COMPARTMENTS stream once."""
+    profiles = (
+        pd.read_csv(project / COMPARTMENTS_PROFILES_RELATIVE, sep="\t")
+        .set_index("symbol")
+        .reindex(symbols)
+        .reset_index()
+        .fillna("")
+    )
+    weighted, observed, thresholds = _compartments_weighted_profiles(profiles)
+    likelihood = np.full((len(symbols), len(symbols)), NEUTRAL_LIKELIHOOD)
+    indices = np.flatnonzero(observed)
+    if len(indices):
+        selected = weighted[indices]
+        unit = selected / np.linalg.norm(selected, axis=1, keepdims=True)
+        similarity = np.clip(unit @ unit.T, 0.0, 1.0)
+        tq = thresholds[indices] * multiplier
+        directed = np.full_like(
+            similarity,
+            1.0 if continuous_negative else NEUTRAL_LIKELIHOOD,
+        )
+        valid_tq = np.isfinite(tq) & (tq > 0)
+        if np.any(valid_tq):
+            if continuous_negative:
+                directed[valid_tq] = continuous_complement_bayes_factor(
+                    similarity[valid_tq],
+                    tq[valid_tq, np.newaxis],
+                    minimum_bayes_factor=minimum_bayes_factor,
+                )
+            else:
+                directed[valid_tq] = complement_minimum_likelihood(
+                    similarity[valid_tq], tq[valid_tq, np.newaxis]
+                )
+        likelihood[np.ix_(indices, indices)] = (directed + directed.T) / 2.0
+    np.fill_diagonal(likelihood, NEUTRAL_LIKELIHOOD)
+    if continuous_negative:
+        factors = np.ones_like(likelihood)
+        factors[np.ix_(indices, indices)] = likelihood[np.ix_(indices, indices)]
+        eligible = np.zeros_like(factors, dtype=bool)
+        eligible[np.ix_(indices, indices)] = True
+        np.fill_diagonal(eligible, False)
+        return _upper_factor_table(
+            symbols,
+            factors,
+            include=eligible,
+            retain_included_neutral=True,
+        )
+    return _upper_factor_table(symbols, likelihood / NEUTRAL_LIKELIHOOD)
+
+
 def _imcd_compartment_edge_factors(
     project: Path,
     symbols: list[str],
@@ -2667,6 +2773,14 @@ def edge_stream_factor_table(
             continuous_negative=continuous_negative,
             minimum_bayes_factor=minimum_bayes_factor,
         )
+    if handler == "compartments_localization":
+        return _compartments_edge_factors(
+            project,
+            symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
     if handler in IMCD_COMPARTMENT_HANDLERS:
         return _imcd_compartment_edge_factors(
             project,
@@ -2776,6 +2890,14 @@ def edge_stream_eligibility_matrix(
             tq_column = "hpa_Tq_q75"
         observed = _observed_series(aligned[observed_column])
         tq = pd.to_numeric(aligned[tq_column], errors="coerce")
+        node_flag = (observed & tq.gt(0) & tq.notna()).to_numpy(bool)
+    elif eligibility == "both_compartments_profiles":
+        profiles = pd.read_csv(
+            project / COMPARTMENTS_PROFILES_RELATIVE, sep="\t"
+        ).set_index("symbol")
+        aligned = profiles.reindex(symbols)
+        observed = _observed_series(aligned["profile_observed"])
+        tq = pd.to_numeric(aligned["Tq_q75"], errors="coerce")
         node_flag = (observed & tq.gt(0) & tq.notna()).to_numpy(bool)
     elif eligibility in {
         "both_imcd_basal_profiles",
@@ -2922,6 +3044,12 @@ def _raw_seed_edge_factor_table(
     if handler == "hpa_high_confidence":
         return _hpa_edge_factors(
             project, symbols, multiplier, high_confidence=True,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+    if handler == "compartments_localization":
+        return _compartments_edge_factors(
+            project, symbols, multiplier,
             continuous_negative=continuous_negative,
             minimum_bayes_factor=minimum_bayes_factor,
         )
@@ -3888,6 +4016,29 @@ def external_target_stream_values(
             _imcd_support_likelihood(definition, state) / NEUTRAL_LIKELIHOOD
         )
         return result
+    if handler == "compartments_localization":
+        result = np.ones(len(symbols), dtype=float)
+        all_symbols = list(
+            dict.fromkeys([str(target_symbol), *symbols.astype(str).tolist()])
+        )
+        table = _compartments_edge_factors(
+            project,
+            all_symbols,
+            multiplier,
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+        lookup = {
+            _canonical_undirected_pair(row.node_a, row.node_b): float(
+                row.bayes_factor
+            )
+            for row in table.itertuples(index=False)
+        }
+        for position, symbol in enumerate(symbols.astype(str)):
+            result[position] = lookup.get(
+                _canonical_undirected_pair(str(target_symbol), symbol), 1.0
+            )
+        return result
     if handler == BIOGRID_PHYSICAL_HANDLER:
         result = np.ones(len(symbols), dtype=float)
         direct_bf, cocomplex_bf = _biogrid_parameter_values(definition, state)
@@ -4100,6 +4251,33 @@ def external_target_stream_eligibility(
             node_profiles[f"{condition}_profile_observed"]
         ).to_numpy(bool)
         return target_observed & node_observed
+    if handler == "compartments_localization":
+        profiles = pd.read_csv(
+            project / COMPARTMENTS_PROFILES_RELATIVE, sep="\t"
+        )
+        profiles["symbol_key"] = profiles["symbol"].astype(str).str.casefold()
+        profiles = profiles.drop_duplicates("symbol_key").set_index("symbol_key")
+        target_key = str(target_symbol).casefold()
+        if target_key not in profiles.index:
+            return np.zeros(len(symbols), dtype=bool)
+        target_observed = bool(
+            _observed_series(
+                pd.Series([profiles.loc[target_key, "profile_observed"]])
+            ).iloc[0]
+        )
+        target_tq = pd.to_numeric(
+            pd.Series([profiles.loc[target_key, "Tq_q75"]]), errors="coerce"
+        ).iloc[0]
+        if not target_observed or not np.isfinite(target_tq) or target_tq <= 0:
+            return np.zeros(len(symbols), dtype=bool)
+        aligned_profiles = profiles.reindex(symbols.astype(str).str.casefold())
+        node_observed = _observed_series(
+            aligned_profiles["profile_observed"]
+        ).to_numpy(bool)
+        node_tq = pd.to_numeric(
+            aligned_profiles["Tq_q75"], errors="coerce"
+        ).to_numpy(float)
+        return node_observed & np.isfinite(node_tq) & (node_tq > 0)
     if handler == BIOGRID_PHYSICAL_HANDLER:
         # BioGRID nonreporting is neutral, so this stream intentionally has no
         # negative-evidence eligibility region for an external target.

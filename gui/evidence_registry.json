@@ -342,15 +342,37 @@
       }
     },
     {
+      "id": "compartments_localization",
+      "label": "COMPARTMENTS integrated localization",
+      "description": "Confidence-weighted COMPARTMENTS localization consolidated across mouse, human, and rat orthologs. The human integrated channel subsumes HPA; corroborating species are collapsed before one pair-level BF is calculated.",
+      "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/compartments_localization_bf_gt1.tsv.gz",
+      "factor_column": "bayes_factor",
+      "target_factor_column": null,
+      "default_enabled": true,
+      "default_weight": 1.0,
+      "exclusive_group": "integrated_localization_reference",
+      "negative_evidence": {
+        "eligibility": "both_compartments_profiles",
+        "absence_definition": "Both proteins have consolidated cross-species COMPARTMENTS profiles, but their pair has no non-neutral localization factor."
+      },
+      "normalization": {
+        "handler": "compartments_localization",
+        "control_label": "Tq ×",
+        "default_multiplier": 1.0,
+        "reference": "per-node q75 confidence-weighted GO-profile cosine thresholds",
+        "help": "Multiplies the consolidated COMPARTMENTS per-node thresholds before reciprocal symmetrization. Mouse, human, and rat annotations are merged before scoring and are never multiplied as independent streams."
+      }
+    },
+    {
       "id": "hpa_primary",
-      "label": "HPA primary localization",
-      "description": "Enhanced, Supported, and Approved HPA localization calls.",
+      "label": "HPA primary localization (legacy sensitivity)",
+      "description": "Standalone Enhanced, Supported, and Approved HPA calls. Disabled because HPA is already incorporated in the default human COMPARTMENTS integrated channel.",
       "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/hpa_primary_bf_gt1.tsv.gz",
       "factor_column": "bayes_factor",
       "target_factor_column": "hpa_bayes_factor",
-      "default_enabled": true,
+      "default_enabled": false,
       "default_weight": 1.0,
-      "exclusive_group": "hpa_localization",
+      "exclusive_group": "integrated_localization_reference",
       "negative_evidence": {
         "eligibility": "both_hpa_primary_profiles",
         "absence_definition": "Both proteins have valid HPA primary localization profiles, but their pair has no non-neutral HPA localization factor."
@@ -365,14 +387,14 @@
     },
     {
       "id": "hpa_high_confidence",
-      "label": "HPA high confidence",
-      "description": "Enhanced and Supported HPA calls only; sensitivity alternative to HPA primary.",
+      "label": "HPA high confidence (legacy sensitivity)",
+      "description": "Enhanced and Supported HPA calls only; a legacy sensitivity alternative to integrated COMPARTMENTS.",
       "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/hpa_high_confidence_bf_gt1.tsv.gz",
       "factor_column": "bayes_factor",
       "target_factor_column": null,
       "default_enabled": false,
       "default_weight": 1.0,
-      "exclusive_group": "hpa_localization",
+      "exclusive_group": "integrated_localization_reference",
       "negative_evidence": {
         "eligibility": "both_hpa_high_profiles",
         "absence_definition": "Both proteins have valid HPA high-confidence localization profiles, but their pair has no non-neutral HPA localization factor."

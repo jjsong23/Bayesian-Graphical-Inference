@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-02 — Cross-species COMPARTMENTS replaces default HPA
+
+- Added a reproducible integrated COMPARTMENTS builder using the official
+  mouse, human, and rat releases.
+- Projected human and rat annotations into the mouse graph through the same
+  orthology resources used by the BioGRID workflow.
+- Consolidated species before edge scoring by retaining one maximum-confidence
+  node/GO-term observation and recording all corroborating species.
+- Added a 44,948-pair V1 factor catalog covering 869 of 871 protein nodes.
+- Enabled integrated COMPARTMENTS by default and disabled standalone HPA
+  primary/high-confidence to prevent double-counting HPA-derived localization.
+- Added Tq rescaling, negative-evidence eligibility, external-target reuse for
+  catalogued nodes, score-distribution support, provenance, and regression
+  tests for the new stream.
+- Added `docs/dataset_acquisition.md`, a source-by-source inventory with public
+  URLs, exact destination paths, rebuild commands, version caveats, provenance
+  requirements, and controlled-archive instructions for non-public inputs.
+
 ## 2026-09-29 — Resizable pathway-network workspace
 
 - Retained the compact 430-pixel embedded network and isolated large-format

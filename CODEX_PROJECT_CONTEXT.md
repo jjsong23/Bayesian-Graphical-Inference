@@ -138,7 +138,7 @@ The IMCD basal and dDAVP streams use the same binary rule independently: two pro
 
 Every primary edge dataset also has an independent continuous-negative switch. It retains measured low factors below 1 and fills eligible no-record pairs with the numerical floor; pairs whose absence cannot be scored fairly stay neutral. It is implemented for internal, incrementally cached, calibration, and external-target edges. Scaffold closure remains positive-only.
 
-Localization compatibility/adjacency matrices for mpkCCD, HPA, and COMPARTMENTS are stored with the archived data so a scientist can validate every assumed compartment relationship. COMPARTMENTS is used in the dedicated colocalization/AlphaFold candidate-filtering workflow. Experimental PPI tiers assembled from STRING, BioGRID, and IntAct support the prior-knowledge filter used before structural prediction.
+Localization compatibility/adjacency matrices for mpkCCD, HPA, and COMPARTMENTS are stored with the archived data so a scientist can validate every assumed compartment relationship. The older mouse-knowledge COMPARTMENTS input remains in the dedicated colocalization/AlphaFold candidate-filtering workflow. The current V1 default edge model instead uses one integrated COMPARTMENTS stream consolidated across mouse, human, and rat; it replaces standalone HPA by default because the human integrated channel already incorporates HPA. See `docs/compartments_cross_species_evidence.md`. Experimental PPI tiers assembled from STRING, BioGRID, and IntAct support the prior-knowledge filter used before structural prediction.
 
 The BioGRID 5.0.261 audit is built by
 `code/experimental_ppi/biogrid_ppi_counts.py` and documented in

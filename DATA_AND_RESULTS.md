@@ -1,6 +1,6 @@
 # Data and results handoff
 
-The GitHub repository intentionally omits `data/`, `results/`, `outputs/`, large spreadsheets, compressed source files, and the incremental SQLite cache. They are retained in the complete project ZIP prepared for OneDrive.
+The GitHub repository intentionally omits `data/`, `results/`, `outputs/`, large spreadsheets, compressed source files, and the incremental SQLite cache. They are retained in the complete project ZIP prepared for OneDrive. For the complete source-by-source download inventory, exact destination paths, rebuild commands, and restricted-data caveats, see [docs/dataset_acquisition.md](docs/dataset_acquisition.md).
 
 ## Restore the complete workspace
 
@@ -30,7 +30,9 @@ The archive is a point-in-time research record. Do not overwrite an older archiv
 
 ## External sources represented
 
-The working data tree includes derived or downloaded material from resources such as Gene Ontology, UniProt, Human Protein Atlas, STRING, STITCH, OmniPath, COMPARTMENTS, BioGRID, IntAct, the NHLBI rat IMCD cytoplasmic and nuclear proteomes, PhosphoSitePlus-derived site annotations where available, KinasePredictor, mpkCCD localization/proteomics, principal-cell RNA sequencing, and the PKA-knockout phosphoproteomic study data supplied for this project.
+The working data tree includes derived or downloaded material from Gene Ontology, UniProt, STRING, STITCH, OmniPath, integrated COMPARTMENTS, BioGRID, KinasePredictor, the NHLBI rat IMCD cytoplasmic and nuclear proteomes, mpkCCD localization/proteomics, principal-cell RNA sequencing, collecting-duct segment proteomics/transcriptomics, and PKA-knockout phosphoproteomic study inputs. Standalone HPA and IntAct resources are retained for historical or optional analyses but are not both required by the current default. The current code does not require a separate PhosphoSitePlus download; its phosphosite database is built from UniProt plus the PKA-KO observations.
+
+Do not infer that every source can be legally or technically downloaded from one public URL. [The acquisition guide](docs/dataset_acquisition.md) labels each input as public/rebuildable, public but layout-sensitive, project-supplied, or derived. Use the companion archive for byte-identical reconstruction.
 
 The IMCD source workbooks, mapping audits, binary node profiles, and pair catalog live under `data/edge_characterization/imcd_compartment_presence/`. Their two GUI factor catalogs are `results/backend_bayes_factor_catalogs/edge_factors_891/imcd_basal_compartment_presence_bf_gt1.tsv.gz` and `imcd_ddavp_compartment_presence_bf_gt1.tsv.gz`. Rebuild them with `python code/edge_characterization/integrate_imcd_compartment_presence.py`.
 

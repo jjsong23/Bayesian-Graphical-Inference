@@ -311,6 +311,41 @@ def _edge_distributions(
             )
         )
 
+    # Cross-species integrated COMPARTMENTS profile (default HPA replacement).
+    definition = definitions["compartments_localization"]
+    eligible = workflow.edge_stream_eligibility_matrix(
+        project, definition, symbols, graph_metadata=universe
+    )
+    compartments_profiles = (
+        pd.read_csv(project / workflow.COMPARTMENTS_PROFILES_RELATIVE, sep="\t")
+        .set_index("symbol")
+        .reindex(symbols)
+        .reset_index()
+        .fillna("")
+    )
+    weighted, observed, thresholds = workflow._compartments_weighted_profiles(
+        compartments_profiles
+    )
+    unit = np.zeros_like(weighted, dtype=float)
+    norms = np.linalg.norm(weighted, axis=1)
+    valid = observed & (norms > 0)
+    unit[valid] = weighted[valid] / norms[valid, np.newaxis]
+    distributions.append(
+        _matrix_distribution(
+            definition=definition,
+            symbols=symbols,
+            eligible=eligible,
+            raw_matrix=unit @ unit.T,
+            cutoffs=thresholds[valid],
+            score_unit="confidence-weighted GO-profile cosine similarity",
+            cutoff_label="endpoint Tq",
+            note=(
+                "Mouse, human, and rat ortholog annotations are collapsed before "
+                "scoring; the red band summarizes node-specific Tq values."
+            ),
+        )
+    )
+
     # OmniPath curation effort.
     definition = definitions["omnipath_core"]
     eligible = workflow.edge_stream_eligibility_matrix(

@@ -22,7 +22,7 @@ are enabled in the Version 1 default profile; the mapping audits are under
 
 GitHub contains the source code, tests, interface, documentation, and configuration. Large datasets and generated results are intentionally excluded from Git history and distributed separately in the complete project archive. Extract that archive so that `data/`, `results/`, and `outputs/` sit beside `code/` and `gui/`.
 
-Read [CODEX_PROJECT_CONTEXT.md](CODEX_PROJECT_CONTEXT.md) first when taking over the project in a new Codex session. It records the current scientific conventions, important entry points, canonical artifacts, and decisions that must not be silently reversed. See [DATA_AND_RESULTS.md](DATA_AND_RESULTS.md) for the data handoff layout.
+Read [CODEX_PROJECT_CONTEXT.md](CODEX_PROJECT_CONTEXT.md) first when taking over the project in a new Codex session. It records the current scientific conventions, important entry points, canonical artifacts, and decisions that must not be silently reversed. See [DATA_AND_RESULTS.md](DATA_AND_RESULTS.md) for the data handoff layout and [docs/dataset_acquisition.md](docs/dataset_acquisition.md) for the complete download/rebuild inventory.
 
 For the exact changes in the current code state, read [CHANGELOG.md](CHANGELOG.md)
 and the latest entry under [`docs/lab_notebook/`](docs/lab_notebook/).
@@ -75,9 +75,12 @@ reported by BioGRID is excluded from closure, so reported and closure BFs are
 never multiplied for the same endpoints. Exact methods and
 sensitivity caveats are documented in `docs/biogrid_ppi_evidence.md`.
 
-Every registered edge stream is enabled by default except HPA high-confidence.
-HPA primary remains enabled; the high-confidence alternative remains off so the
-two mutually exclusive HPA variants are never selected together by default.
+Every nonredundant primary edge stream is enabled by default. Cross-species
+integrated COMPARTMENTS replaces standalone HPA localization because its human
+channel already incorporates HPA. HPA primary and HPA high-confidence remain
+available only as mutually exclusive legacy sensitivity alternatives, so no
+default analysis counts HPA-derived localization twice. See
+[`docs/compartments_cross_species_evidence.md`](docs/compartments_cross_species_evidence.md).
 
 ### Full-graph statistics
 
