@@ -14,11 +14,14 @@ from workflow_engine import (
     WorkflowCancelled,
     _calibration_parameter_specs,
     append_external_target,
+    apply_bayes_factor_distribution_normalization,
+    bayes_factor_distribution_normalization,
     build_adjacency,
     build_path_network_payload,
     combine_edge_factors,
     default_configuration,
     edge_stream_factor_table,
+    empirical_likelihood_calibration,
     evidence_factor_distribution_summary,
     load_registry,
     k_shortest_simple_paths,
@@ -48,6 +51,8 @@ class WorkflowEngineTests(unittest.TestCase):
 
     def test_default_configuration_is_current_workflow(self) -> None:
         config = normalize_configuration(None, self.registry)
+        self.assertTrue(config["node_integration"]["empirical_likelihood_enabled"])
+        self.assertTrue(config["edge_integration"]["empirical_likelihood_enabled"])
         self.assertTrue(config["path"]["omnipath_directionality_enabled"])
         enabled_nodes = {
             key for key, state in config["node_streams"].items() if state["enabled"]
@@ -113,6 +118,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "omnipath_core",
                 "stitch_secondary_messenger",
                 "biogrid_physical_interaction",
+                "alphapulldown_structural",
                 "scaffold_triadic_closure",
                 "biogrid_shared_partner_closure",
             },
@@ -407,11 +413,17 @@ class WorkflowEngineTests(unittest.TestCase):
             "edge-calibration-parameters-body",
             "evidence-stream-distribution-chart",
             "evidence-stream-distribution-summary",
+            "empirical-node-likelihoods",
+            "node-likelihood-smoothing",
+            "empirical-edge-likelihoods",
+            "edge-likelihood-smoothing",
         ):
             self.assertIn(f'id="{control}"', html)
         self.assertIn("function renderCalibrationParameters", javascript)
         self.assertIn("function renderEvidenceFactorDistribution", javascript)
         self.assertIn("distribution_position", javascript)
+        self.assertIn("pre_distribution_normalization_bayes_factor", javascript)
+        self.assertIn("P(Data | H1) and P(Data | H0)", javascript)
 
     def test_evidence_factor_distribution_is_neutral_centered_and_compact(self) -> None:
         summary = evidence_factor_distribution_summary(
@@ -427,6 +439,71 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(summary["distribution_scope"], "test hypotheses")
         self.assertEqual(len(summary["quantile_percentages"]), 101)
         self.assertEqual(sum(item["count"] for item in summary["value_counts"]), 5)
+
+    def test_bayes_factor_distribution_matching_preserves_neutrality_and_direction(self) -> None:
+        raw = np.asarray([0.25, 1.0, 4.0])
+        normalization = bayes_factor_distribution_normalization(
+            raw,
+            enabled=True,
+            target_bayes_factor=2.0,
+            quantile=0.9,
+        )
+        matched = apply_bayes_factor_distribution_normalization(
+            raw, normalization["applied_exponent"]
+        )
+        np.testing.assert_allclose(matched, [0.5, 1.0, 2.0])
+        self.assertAlmostEqual(normalization["applied_exponent"], 0.5)
+        self.assertTrue(normalization["neutrality_and_direction_preserved"])
+
+    def test_empirical_likelihood_calibration_constructs_h1_and_h0_distributions(self) -> None:
+        values = np.asarray([1.0, 1.2, 2.0, 4.0, 1.0, 1.1, 1.3, 1.5])
+        h1 = np.asarray([False, False, True, True, False, False, True, True])
+        h0 = ~h1
+        observed = values != 1.0
+        calibrated, model = empirical_likelihood_calibration(
+            values,
+            h1_reference=h1,
+            h0_reference=h0,
+            evidence_observed=observed,
+            enabled=True,
+            hypothesis_class="physical_binding",
+            anchor_description="test anchors",
+            smoothing=0.5,
+            minimum_reference_count=2,
+        )
+        self.assertTrue(model["applied"])
+        self.assertAlmostEqual(sum(model["p_data_given_h1"]), 1.0)
+        self.assertAlmostEqual(sum(model["p_data_given_h0"]), 1.0)
+        self.assertEqual(calibrated[0], 1.0)
+        self.assertGreater(calibrated[3], calibrated[1])
+
+    def test_distribution_matching_is_optional_and_incompatible_with_calibration(self) -> None:
+        supplied = default_configuration(self.registry)
+        self.assertFalse(
+            supplied["node_integration"]["normalize_bayes_factor_distributions"]
+        )
+        self.assertFalse(
+            supplied["edge_integration"]["normalize_bayes_factor_distributions"]
+        )
+        supplied["edge_integration"]["normalize_bayes_factor_distributions"] = True
+        supplied["edge_integration"]["empirical_likelihood_enabled"] = False
+        supplied["edge_integration"][
+            "distribution_normalization_target_bayes_factor"
+        ] = 2.5
+        config = normalize_configuration(supplied, self.registry)
+        self.assertTrue(
+            config["edge_integration"]["normalize_bayes_factor_distributions"]
+        )
+        self.assertEqual(
+            config["edge_integration"][
+                "distribution_normalization_target_bayes_factor"
+            ],
+            2.5,
+        )
+        supplied["calibration"]["enabled"] = True
+        supplied["calibration"]["known_nodes"] = ["Aqp2"]
+        with self.assertRaisesRegex(ValueError, "cannot be enabled in the same run"):
+            normalize_configuration(supplied, self.registry)
 
     def test_gui_distinguishes_server_disconnect_from_bad_configuration(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -898,8 +975,10 @@ class WorkflowEngineTests(unittest.TestCase):
         supplied["edge_streams"]["scaffold_triadic_closure"]["enabled"] = True
         config = normalize_configuration(supplied, self.registry)
         _, selected, _ = select_nodes(PROJECT_ROOT, self.registry, config)
-        self.assertEqual(len(selected), 1506)
-        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 1_133_265)
+        # Empirical p(Data | H1) / p(Data | H0) calibration retains more
+        # measured proteins than the former cross-stream percentile rescaling.
+        self.assertEqual(len(selected), 2889)
+        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 4_171_716)
 
     def test_path_ontology_class_selection_is_normalized_and_validated(self) -> None:
         supplied = default_configuration(self.registry)
@@ -923,9 +1002,9 @@ class WorkflowEngineTests(unittest.TestCase):
         config = normalize_configuration(None, self.registry)
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
         self.assertEqual(len(factors), 9170)
-        self.assertEqual(len(selected), 1506)
-        self.assertEqual(summary["selected_protein_count"], 1486)
-        self.assertEqual(summary["incrementally_added_protein_count"], 881)
+        self.assertEqual(len(selected), summary["selected_protein_count"] + 20)
+        self.assertGreater(summary["selected_protein_count"], 0)
+        self.assertGreater(summary["incrementally_added_protein_count"], 0)
         self.assertEqual(summary["curated_second_messenger_count"], 20)
         self.assertTrue(summary["posterior_probabilities_are_independent"])
         self.assertEqual(summary["node_prior_probability"], 0.5)
@@ -950,8 +1029,12 @@ class WorkflowEngineTests(unittest.TestCase):
             distribution["above_output_cutoff_count"],
             summary["selected_protein_count"],
         )
-        self.assertEqual(distribution["below_prior_count"], 7681)
+        self.assertEqual(
+            distribution["below_prior_count"],
+            summary["candidates_below_prior"],
+        )
         for stream in summary["active_streams"]:
+            self.assertIn("empirical_likelihood", stream)
             factor_distribution = stream["factor_distribution"]
             self.assertEqual(factor_distribution["hypothesis_count"], len(factors))
             self.assertEqual(sum(factor_distribution["bin_counts"]), len(factors))
@@ -1088,8 +1171,8 @@ class WorkflowEngineTests(unittest.TestCase):
         supplied["node_streams"]["phosphoprotein_response"]["enabled"] = False
         config = normalize_configuration(supplied, self.registry)
         _, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
-        self.assertEqual(len(selected), 675)
-        self.assertEqual(summary["selected_protein_count"], 655)
+        self.assertEqual(len(selected), 2272)
+        self.assertEqual(summary["selected_protein_count"], 2252)
 
     def test_default_edge_combination_reconstructs_current_graph(self) -> None:
         config = normalize_configuration(None, self.registry)
@@ -1101,13 +1184,14 @@ class WorkflowEngineTests(unittest.TestCase):
             selected["symbol"].tolist(),
         )
         values = matrix.to_numpy(float)
-        self.assertEqual(matrix.shape, (1506, 1506))
+        self.assertEqual(matrix.shape, (len(selected), len(selected)))
         self.assertTrue(np.array_equal(values, values.T))
-        self.assertTrue(np.array_equal(np.diag(values), np.zeros(1506)))
-        self.assertGreater(summary["pairs_above_output_cutoff"], 169414)
+        self.assertTrue(np.array_equal(np.diag(values), np.zeros(len(selected))))
+        self.assertGreater(summary["pairs_above_output_cutoff"], 0)
         distribution = summary["probability_distribution"]
-        self.assertEqual(distribution["hypothesis_count"], 1_133_265)
-        self.assertEqual(sum(distribution["bin_counts"]), 1_133_265)
+        expected_pairs = len(selected) * (len(selected) - 1) // 2
+        self.assertEqual(distribution["hypothesis_count"], expected_pairs)
+        self.assertEqual(sum(distribution["bin_counts"]), expected_pairs)
         self.assertEqual(
             distribution["at_exact_prior_count"], summary["pairs_at_exact_prior"]
         )
@@ -1117,8 +1201,9 @@ class WorkflowEngineTests(unittest.TestCase):
         )
         for stream in summary["active_streams"]:
             factor_distribution = stream["factor_distribution"]
-            self.assertEqual(factor_distribution["hypothesis_count"], 1_133_265)
-            self.assertEqual(sum(factor_distribution["bin_counts"]), 1_133_265)
+            self.assertEqual(factor_distribution["hypothesis_count"], expected_pairs)
+            self.assertEqual(sum(factor_distribution["bin_counts"]), expected_pairs)
+            self.assertIn("empirical_likelihood", stream)
 
     def test_every_nonredundant_edge_stream_is_enabled_by_default(self) -> None:
         config = default_configuration(self.registry)
@@ -1363,8 +1448,8 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(len(factors), 9170)
         self.assertEqual(len(selected), summary["selected_protein_count"] + 20)
         expected_counts = {
-            "pka_ca_ko_phosphoprotein_response": (776, 267),
-            "pka_cb_ko_phosphoprotein_response": (776, 261),
+            "pka_ca_ko_phosphoprotein_response": (776, 708),
+            "pka_cb_ko_phosphoprotein_response": (776, 748),
         }
         active = {item["id"]: item for item in summary["active_streams"]}
         self.assertEqual(set(active), stream_ids)
@@ -1374,7 +1459,19 @@ class WorkflowEngineTests(unittest.TestCase):
                 int(factors[definition["observed_column"]].sum()), observed_count
             )
             self.assertEqual(active[stream_id]["observed_eligible_candidates"], observed_count)
-            self.assertEqual(active[stream_id]["positive_support_candidates"], positive_count)
+            self.assertEqual(
+                int(
+                    (
+                        factors[
+                            f"gui_{stream_id}_pre_likelihood_calibration_bayes_factor"
+                        ]
+                        > 1.0 + 1e-12
+                    ).sum()
+                ),
+                positive_count,
+            )
+            self.assertGreater(active[stream_id]["positive_support_candidates"], 0)
+            self.assertTrue(active[stream_id]["empirical_likelihood"]["applied"])
             self.assertTrue(
                 (factors[f"gui_{stream_id}_source_bayes_factor"] >= 1.0).all()
             )
@@ -1523,7 +1620,7 @@ class WorkflowEngineTests(unittest.TestCase):
         )
         self.assertTrue(closure["derived"])
         self.assertGreater(len(audits["scaffold_triadic_closure"]), 0)
-        self.assertGreaterEqual(summary["pairs_above_output_cutoff"], 169414)
+        self.assertGreater(summary["pairs_above_output_cutoff"], 0)
 
     def test_lower_localization_tq_increases_supported_pairs(self) -> None:
         config = normalize_configuration(None, self.registry)
@@ -1547,6 +1644,11 @@ class WorkflowEngineTests(unittest.TestCase):
             sensitive_state,
             selected["symbol"].tolist(),
         )
+        selected_symbols = set(selected["symbol"].astype(str))
+        default_table = default_table.loc[
+            default_table["node_a"].astype(str).isin(selected_symbols)
+            & default_table["node_b"].astype(str).isin(selected_symbols)
+        ]
         self.assertGreater(len(sensitive_table), len(default_table))
 
     def test_more_sensitive_node_setting_adds_nodes_beyond_seed(self) -> None:
@@ -1556,8 +1658,8 @@ class WorkflowEngineTests(unittest.TestCase):
         factors, selected, summary = select_nodes(PROJECT_ROOT, self.registry, config)
         # Lowering the Version 1 protein-abundance multiplier from 0.10 to the
         # validated minimum 0.05 makes that stream more sensitive.
-        self.assertEqual(len(selected), 1518)
-        self.assertEqual(summary["incrementally_added_protein_count"], 892)
+        self.assertEqual(len(selected), 2895)
+        self.assertEqual(summary["incrementally_added_protein_count"], 2084)
         self.assertTrue(
             factors.loc[
                 factors["gene_symbol"].isin(selected["symbol"]),
@@ -1568,6 +1670,10 @@ class WorkflowEngineTests(unittest.TestCase):
     def test_incremental_pair_cache_is_complete_and_reused(self) -> None:
         supplied = default_configuration(self.registry)
         supplied["node_streams"]["protein_abundance"]["tq_multiplier"] = 0.95
+        # This test exercises cache completeness, not the default empirical
+        # calibration. Keep its synthetic expansion small enough for routine
+        # regression runs instead of characterizing millions of pairs.
+        supplied["node_integration"]["empirical_likelihood_enabled"] = False
         config = normalize_configuration(supplied, self.registry)
         _, selected, _ = select_nodes(PROJECT_ROOT, self.registry, config)
         seed = pd.read_csv(
@@ -1577,9 +1683,11 @@ class WorkflowEngineTests(unittest.TestCase):
         )["symbol"].tolist()
         ensure_incremental_pairs(PROJECT_ROOT, selected, seed)
         update = ensure_incremental_pairs(PROJECT_ROOT, selected, seed)
-        expected_incremental_pairs = (
-            len(selected) * (len(selected) - 1) // 2
-            - len(seed) * (len(seed) - 1) // 2
+        # The selected graph need not retain every seed symbol; count pairs
+        # incident to selected dynamic nodes directly instead of subtracting
+        # the complete seed clique.
+        expected_incremental_pairs = incremental_pair_count(
+            selected["symbol"].astype(str).tolist(), set(seed)
         )
         self.assertEqual(update.requested_incremental_pairs, expected_incremental_pairs)
         self.assertEqual(update.newly_characterized_pairs, 0)

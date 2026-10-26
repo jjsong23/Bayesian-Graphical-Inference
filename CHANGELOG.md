@@ -1,5 +1,65 @@
 # Changelog
 
+## 2026-10-26 — Empirical class-conditional evidence likelihoods
+
+- Replaced cross-stream BF-magnitude matching in new configurations with
+  explicit smoothed estimates of `P(Data | H1)` and `P(Data | H0)`.
+- Routed streams to biologically appropriate hypothesis classes: physical
+  proximity/binding for localization, BioGRID, and AlphaPulldown; directed
+  phosphorylation for KinasePredictor; regulatory signaling for OmniPath;
+  functional association for STRING; messenger binding for STITCH; and
+  cellular-presence, kinase-activity, or transient-phosphoregulation classes
+  for node evidence.
+- Used independent references whenever possible (including AlphaPulldown
+  phase labels, BioGRID, OmniPath, and KinasePredictor) and leave-one-stream-out
+  peer evidence for nodes. Missing/out-of-scope data remain neutral.
+- Added Jeffreys-smoothed histograms, bounded likelihood ratios, minimum H1/H0
+  reference counts, saved per-bin distributions, evidence-inspector
+  reconstruction, and a source-likelihood fallback for sparse classes.
+- Retained the former q90 BF matcher only for historical configuration
+  reproduction; empirical calibration is the new default and bypasses it.
+
+## 2026-10-26 — Optional cross-stream Bayes-factor distribution matching
+
+- Added independent node-stage and edge-stage controls that robustly match
+  active evidence streams on the absolute log-BF scale.
+- Each stream's 90th-percentile non-neutral evidence magnitude is mapped to a
+  configurable target (default BF 2) by raising its BFs to one audited exponent.
+  BF 1 remains neutral and support/refute direction is preserved.
+- Bounded exponents (0.1–10) prevent unstable amplification of nearly neutral
+  streams; ordinary evidence weights remain a separate downstream operation.
+- Added raw/transformed distributions, source quantile, target, exponent, and
+  clipping status to run summaries, evidence audits, and node/edge inspectors.
+- Kept the feature disabled by default and made it mutually exclusive with
+  positive-control calibration because it is a sensitivity harmonizer, not a
+  learned calibration model.
+
+## 2026-10-14 — V1 colocalized-pair AlphaPulldown evidence campaign
+
+- Added a V1-owned two-phase structural-evidence campaign for pairs supported
+  by all four current colocalization streams and lacking direct BioGRID
+  evidence.
+- Phase 1 contains 732 BioGRID co-complex-only pairs; phase 2 contains the
+  other 6,164 eligible pairs. The phases are disjoint and total 6,896 pairs.
+- Added Biowulf manifests, compact one-model AlphaPulldown jobs, <=1000-task
+  phase-2 waves, result collection, raw-score provenance, and a V1-ready
+  heuristic BF table. Missing jobs remain unobserved rather than negative.
+- The jobs may read the already-completed monomer feature/MSA cache from the
+  sibling V2 checkout, but all selection logic, predictions, and evidence
+  products belong to V1 and never enter the V2 search cache.
+- Added audited UniProt sequence supplementation and a targeted V1 feature/MSA
+  array for selected proteins absent from the V2 run. Existing feature objects
+  are linked into a V1-owned combined directory; the source cache is unchanged.
+- Retained every valid AlphaPulldown prediction instead of allowing the
+  default inter-chain PAE < 5 reporting filter to discard low-support models.
+  ipTM remains the scored quantity; failed or missing computations remain
+  neutral.
+- Added a validated portable-bundle importer and registered the installed
+  catalog as a default-enabled V1 structural edge stream. The 2026-10-26
+  import contains 6,805 measured pairs (730 phase 1; 6,075 phase 2), preserves
+  all BFs below 1, keeps 91 missing jobs neutral, and exposes per-pair ipTM,
+  phase, selection basis, and audit provenance in the evidence inspector.
+
 ## 2026-10-02 — Cross-species COMPARTMENTS replaces default HPA
 
 - Added a reproducible integrated COMPARTMENTS builder using the official

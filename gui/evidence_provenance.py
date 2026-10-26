@@ -12,6 +12,7 @@ layer; it must not silently replace these primary database records.
 from __future__ import annotations
 
 import gzip
+import json
 import math
 import sqlite3
 from functools import lru_cache
@@ -73,6 +74,14 @@ PROTEIN_INDEX = Path(
 )
 INCREMENTAL_CACHE = Path(
     "data/edge_characterization/incremental_edge_cache/edge_pair_cache.sqlite3"
+)
+ALPHAPULLDOWN_FACTOR = Path(
+    "results/backend_bayes_factor_catalogs/edge_factors_891/"
+    "alphapulldown_structural_bf.tsv.gz"
+)
+ALPHAPULLDOWN_PROVENANCE = Path(
+    "data/edge_characterization/alphapulldown/"
+    "v1_colocalized_model1_cycles3_predictions1_compact"
 )
 
 
@@ -165,6 +174,104 @@ def _identity(project: Path, symbol: str) -> dict[str, str]:
     identity.update({key: value for key, value in _latest_cached_node(project, symbol).items() if value})
     identity["symbol"] = symbol
     return identity
+
+
+@lru_cache(maxsize=4)
+def _alphapulldown_audit(project_text: str) -> dict[tuple[str, str], dict[str, Any]]:
+    project = Path(project_text)
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for phase in ("phase1_cocomplex", "phase2_other"):
+        path = project / ALPHAPULLDOWN_PROVENANCE / phase / "structural_prediction_audit.tsv.gz"
+        if not path.is_file():
+            continue
+        frame = pd.read_csv(path, sep="\t").fillna("")
+        for row in frame.to_dict(orient="records"):
+            records[canonical_pair(row.get("node_a"), row.get("node_b"))] = row
+    return records
+
+
+def alphapulldown_trace(
+    project: Path,
+    pair: tuple[str, str],
+    *,
+    applied_bayes_factor: float | None,
+    weight: float,
+) -> dict[str, Any]:
+    columns = (
+        "node_a", "node_b", "bayes_factor", "iptm", "phase", "pair_id",
+        "selection_basis", "reference_score", "bayes_factor_floor",
+        "bayes_factor_ceiling", "score_file", "structure_file",
+    )
+    record = _table_lookup(
+        str((project / ALPHAPULLDOWN_FACTOR).resolve()), columns
+    ).get(pair)
+    audit = _alphapulldown_audit(str(project.resolve())).get(pair)
+    provenance_record = record or audit
+    import_path = project / ALPHAPULLDOWN_PROVENANCE / "import_summary.json"
+    metadata = (
+        json.loads(import_path.read_text(encoding="utf-8"))
+        if import_path.is_file()
+        else {}
+    )
+    if record:
+        status = "matched"
+        summary = (
+            f"AlphaPulldown produced ipTM {float(record['iptm']):.4g} for this "
+            "pair; the frozen odds mapping supplied the displayed structural BF."
+        )
+    elif audit:
+        status = str(audit.get("collection_status") or "prediction_missing")
+        summary = (
+            "This pair was selected for the V1 structural screen, but no valid "
+            "prediction was collected. It remained neutral."
+        )
+    else:
+        status = "not_screened"
+        summary = (
+            "This pair was not in the imported V1 AlphaPulldown screen and "
+            "therefore remained neutral."
+        )
+    reference = float(record["reference_score"]) if record else metadata.get("reference_score")
+    return {
+        "database": "AlphaPulldown",
+        "database_version": metadata.get(
+            "protocol_id", "V1 compact one-model structural screen"
+        ),
+        "trace_status": status,
+        "summary": summary,
+        "endpoint_mapping": [
+            {"symbol": pair[0]},
+            {"symbol": pair[1]},
+        ],
+        "score_derivation": {
+            "database_score": float(record["iptm"]) if record else None,
+            "score_name": "ipTM",
+            "reference_probability": reference,
+            "raw_bayes_factor": applied_bayes_factor if record else None,
+            "model_weight": float(weight),
+            "weighted_effective_bayes_factor": (
+                float(applied_bayes_factor) ** float(weight)
+                if record and applied_bayes_factor is not None and applied_bayes_factor > 0
+                else None
+            ),
+            "formula": "BF = odds(ipTM) / odds(0.6), clipped to [0.1, 10]; posterior contribution uses weight × ln(BF)",
+            "important_limit": (
+                "ipTM is not a calibrated probability of physical interaction. "
+                "The BF mapping is a frozen V1 heuristic pending empirical calibration; "
+                "failed and unscreened pairs remain neutral."
+            ),
+        },
+        "factors": ([
+            {"factor": "ipTM", "value": float(record["iptm"]), "description": "AlphaPulldown interface confidence score."},
+            {"factor": "Reference ipTM", "value": reference, "description": "Neutral point for the frozen odds-ratio mapping."},
+            {"factor": "Screen phase", "value": record.get("phase"), "description": record.get("selection_basis")},
+        ] if record else []),
+        "records": [provenance_record] if provenance_record else [],
+        "links": [
+            {"label": "NIH AlphaPulldown documentation", "url": "https://hpc.nih.gov/apps/alphapulldown.html", "kind": "software_documentation"},
+            {"label": "AlphaPulldown manuals", "url": "https://github.com/KosinskiLab/AlphaPulldown/tree/main/manuals", "kind": "software_documentation"},
+        ],
+    }
 
 
 @lru_cache(maxsize=256)
@@ -663,6 +770,13 @@ def trace_database_evidence(
             applied_bayes_factor=applied_bayes_factor,
             weight=weight,
             include_source_records=include_source_records,
+        )
+    if stream_id == "alphapulldown_structural":
+        return alphapulldown_trace(
+            project,
+            pair,
+            applied_bayes_factor=applied_bayes_factor,
+            weight=weight,
         )
     if stream_id in {"biogrid_shared_partner_closure", "scaffold_triadic_closure"}:
         return closure_trace(run, stream_id, pair)

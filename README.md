@@ -8,7 +8,7 @@ This research codebase builds and explores a probabilistic signaling graph for r
 4. **Path inference** ranks plausible paths from a chosen signaling receptor or regulator to a target protein.
 5. **Temporal validation** optionally tests whether measured dDAVP phosphoproteomic response times are consistent with the proposed path order.
 
-The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, optional scope-aware Bayes factors below 1 for node nondetections and unsupported edge pairs, partial directionality, path constraints, external-target insertion, and optional uncertainty-aware temporal annotations. Completed runs include posterior-distribution plots, a per-node/per-edge evidence ledger that reconstructs the Bayesian update, and an interactive merged network of the highest-ranked paths. In that ledger, “record retained” describes direct evidence actually found for the hypothesis, whereas “negative scope” describes whether a missing record would have been eligible for a penalty; these are independent properties. Negative evidence can use either a stage-wide fixed absence factor or a per-dataset continuous mode that removes the positive-only floor, treats eligible nondetections as `x=0`, and lets weak observations produce BF below 1. The optional regularized positive-control calibration stage independently fits node and edge weights/Tq scales to supplied known-present controls. Calibration, continuous negative evidence, edge-absence penalties, and temporal validation are disabled by default. The Version 1 profile enables the simple node-nondetection penalty and scaffold-mediated closure shown in the GUI.
+The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, and default class-conditional empirical estimates of `P(Data|H1)` and `P(Data|H0)`. Physical-proximity and structural streams are calibrated against physical-interaction references; kinase, regulatory, and broad association streams use their own biologically appropriate reference classes. Completed runs save both distributions, their reference counts, smoothing, bins, bounds, and the resulting likelihood ratios for reconstruction in the evidence inspector. Missing or out-of-scope data remain neutral. The legacy cross-stream BF-magnitude matcher remains available only for historical reproducibility and is bypassed by the new default. Scope-aware negative evidence, partial directionality, path constraints, external-target insertion, full-graph statistics, and temporal annotations remain independently configurable. See [the empirical likelihood method](docs/empirical_likelihood_models.md).
 
 Two default-enabled IMCD compartment co-detection streams separately encode basal and 30-minute dDAVP conditions from the NHLBI cytoplasmic and nuclear proteome resources. They use binary detection only—never spectral-count magnitude, fold change, or p-values—and support an undirected pair when both proteins occur in cytoplasm or both occur in nucleus. See [the IMCD evidence method](docs/imcd_compartment_presence_evidence.md).
 
@@ -53,6 +53,25 @@ competition in which probabilities sum to one. Edge existence remains an
 undirected hypothesis even when the separate propagation layer disallows one
 traversal direction.
 
+### Legacy cross-stream BF distribution matching
+
+Historical configuration files may still request the former Bayes-factor
+distribution matcher. For every active stream, that method measures the
+90th percentile of non-neutral `abs(ln(BF))` and raises all of that stream's
+factors to one audited exponent so the percentile approaches a configurable
+target magnitude (default BF 2). This compresses a broad stream such as STRING
+and can expand a weak stream without forcing their source-native scores or
+thresholds to share units. BF 1 stays exactly neutral, BF above/below 1 keeps
+its support/refute direction, and the exponent is bounded to 0.1–10. Explicit
+stream weights are applied afterward and remain independently user-controlled.
+
+This legacy feature is a sensitivity/scale-harmonization tool, not empirical
+calibration and not a guarantee of independence between databases. It is off
+by default, is no longer exposed as the ordinary GUI workflow, and is bypassed
+whenever the default empirical class-conditional model is enabled. Historical
+runs still retain raw and transformed BFs for exact reproduction. See
+[`docs/bayes_factor_distribution_normalization.md`](docs/bayes_factor_distribution_normalization.md).
+
 ### BioGRID physical-interaction catalog
 
 `code/experimental_ppi/biogrid_ppi_counts.py` builds an auditable physical-PPI
@@ -74,6 +93,21 @@ dependent proximity evidence, not proof of direct binding. A pair already
 reported by BioGRID is excluded from closure, so reported and closure BFs are
 never multiplied for the same endpoints. Exact methods and
 sensitivity caveats are documented in `docs/biogrid_ppi_evidence.md`.
+
+The separate V1 AlphaPulldown evidence campaign tests colocalization-supported
+pairs that still lack direct BioGRID evidence. It runs the 732 BioGRID
+co-complex-only pairs first, followed by the other 6,164 eligible pairs. This
+is not a V2 beam-search feature: V1 owns its manifests, compact predictions,
+raw ipTM audit, and candidate evidence table. The completed feature/MSA cache
+from the sibling V2 checkout may be mounted read-only to avoid recomputation.
+Completed portable bundles are validated by
+`code/alphafold/import_v1_alphapulldown_evidence.py`. The current import adds
+6,805 measured pairs as a default-enabled structural edge stream; measured low
+ipTM scores are retained below BF 1, while 91 missing computations remain
+neutral. Edge inspection traces each measurement back to ipTM, phase, pair ID,
+and selection basis. The frozen odds mapping around ipTM 0.6 is explicitly a
+heuristic pending empirical calibration.
+See [the V1 Biowulf screen guide](docs/v1_colocalized_biogrid_alphapulldown.md).
 
 Every nonredundant primary edge stream is enabled by default. Cross-species
 integrated COMPARTMENTS replaces standalone HPA localization because its human

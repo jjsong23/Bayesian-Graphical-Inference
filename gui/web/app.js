@@ -208,6 +208,9 @@ function renderDatabaseTrace(trace) {
   [
     ["Database score", derivationValues.database_score],
     ["Raw Bayes factor", derivationValues.raw_bayes_factor],
+    ["BF before distribution matching", derivationValues.pre_distribution_normalization_bayes_factor],
+    ["Distribution-matching exponent", derivationValues.distribution_normalization_exponent],
+    ["Distribution-matched BF", derivationValues.distribution_normalized_bayes_factor],
     ["Model weight", derivationValues.model_weight],
     ["Effective BF", derivationValues.weighted_effective_bayes_factor],
     ["Formula", derivationValues.formula],
@@ -723,6 +726,30 @@ function renderEvidenceInspection(payload) {
           : `; ${stream.normalization_control || "scale"} ${formatEvidenceNumber(stream.tq_multiplier)}`;
         parts.push(`Reference: ${stream.normalization_reference}${scale}.`);
       }
+      if (stream.distribution_normalization?.enabled) {
+        const normalization = stream.distribution_normalization;
+        const quantile = 100 * Number(normalization.quantile || 0.9);
+        parts.push(
+          `Distribution matching: raw BF ${formatEvidenceNumber(stream.pre_distribution_normalization_bayes_factor)} ` +
+          `raised to exponent ${formatEvidenceNumber(normalization.applied_exponent)} gives ` +
+          `BF ${formatEvidenceNumber(stream.applied_bayes_factor)}. The stream's ${formatEvidenceNumber(quantile)}th ` +
+          `percentile non-neutral evidence magnitude was targeted to BF ${formatEvidenceNumber(normalization.target_bayes_factor_magnitude)} ` +
+          `before applying the user weight.`
+        );
+      }
+      if (stream.empirical_likelihood?.enabled) {
+        const model = stream.empirical_likelihood;
+        if (model.applied) {
+          parts.push(
+            `Empirical ${stream.likelihood_hypothesis_class || model.hypothesis_class || "hypothesis"} model: ` +
+            `P(Data | H1) and P(Data | H0) were estimated from ${formatInt(model.h1_reference_count)} H1 ` +
+            `and ${formatInt(model.h0_reference_count)} H0 references using smoothing ${formatEvidenceNumber(model.smoothing_pseudocount)}. ` +
+            `Their likelihood ratio is the displayed BF. ${model.anchor_description || ""}`
+          );
+        } else {
+          parts.push(`Empirical likelihood model was not applied: ${model.fallback_reason || "insufficient references"}.`);
+        }
+      }
       if (stream.dependence_group) parts.push(`Shared-source group: ${stream.dependence_group}.`);
       $("evidence-stream-detail").textContent = `${stream.label}: ${parts.filter(Boolean).join(" ")}`;
       renderEvidenceFactorDistribution(stream);
@@ -739,7 +766,7 @@ function renderEvidenceInspection(payload) {
     });
     body.appendChild(row);
   });
-  $("evidence-stream-detail").textContent = "Select a stream row for its normalization, model weight, and score-distribution position.";
+  $("evidence-stream-detail").textContent = "Select a stream row for its H1/H0 likelihood model, model weight, and score-distribution position.";
   $("evidence-inspector-message").textContent = `${payload.streams.filter((stream) => stream.enabled).length} enabled streams evaluated for ${hypothesis}.`;
   result.classList.remove("hidden");
   renderSelectedLiterature(payload);
@@ -1557,6 +1584,9 @@ function populateControls() {
   $("unobserved-bf").value = node.unobserved_bayes_factor;
   $("unobserved-bf").disabled = !node.penalize_unobserved;
   $("continuous-node-bf-floor").value = node.continuous_bayes_factor_floor;
+  $("empirical-node-likelihoods").checked = node.empirical_likelihood_enabled;
+  $("node-likelihood-smoothing").value = node.empirical_likelihood_smoothing;
+  $("node-likelihood-minimum").value = node.empirical_likelihood_minimum_reference_count;
   $("node-prior").value = node.prior_probability;
   $("node-cutoff").value = node.output_probability_cutoff;
   const edge = state.defaults.edge_integration;
@@ -1564,6 +1594,9 @@ function populateControls() {
   $("unsupported-edge-bf").value = edge.unsupported_bayes_factor;
   $("unsupported-edge-bf").disabled = !edge.penalize_unsupported;
   $("continuous-edge-bf-floor").value = edge.continuous_bayes_factor_floor;
+  $("empirical-edge-likelihoods").checked = edge.empirical_likelihood_enabled;
+  $("edge-likelihood-smoothing").value = edge.empirical_likelihood_smoothing;
+  $("edge-likelihood-minimum").value = edge.empirical_likelihood_minimum_reference_count;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
   const graphStatistics = state.defaults.graph_statistics;
@@ -1637,6 +1670,10 @@ function collectConfiguration() {
       unobserved_bayes_factor: Number($("unobserved-bf").value),
       continuous_negative_evidence: false,
       continuous_bayes_factor_floor: Number($("continuous-node-bf-floor").value),
+      normalize_bayes_factor_distributions: false,
+      empirical_likelihood_enabled: $("empirical-node-likelihoods").checked,
+      empirical_likelihood_smoothing: Number($("node-likelihood-smoothing").value),
+      empirical_likelihood_minimum_reference_count: Number($("node-likelihood-minimum").value),
       prior_probability: Number($("node-prior").value),
       output_probability_cutoff: Number($("node-cutoff").value),
     },
@@ -1646,6 +1683,10 @@ function collectConfiguration() {
       unsupported_bayes_factor: Number($("unsupported-edge-bf").value),
       continuous_negative_evidence: false,
       continuous_bayes_factor_floor: Number($("continuous-edge-bf-floor").value),
+      normalize_bayes_factor_distributions: false,
+      empirical_likelihood_enabled: $("empirical-edge-likelihoods").checked,
+      empirical_likelihood_smoothing: Number($("edge-likelihood-smoothing").value),
+      empirical_likelihood_minimum_reference_count: Number($("edge-likelihood-minimum").value),
       prior_probability: Number($("edge-prior").value),
       output_probability_cutoff: Number($("edge-cutoff").value),
     },

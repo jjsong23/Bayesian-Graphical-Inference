@@ -231,11 +231,47 @@ STRING_REFERENCE_SCORE = 0.041
 STITCH_REFERENCE_SCORE = 0.150
 NEUTRAL_LIKELIHOOD = 0.5
 FACTOR_EPSILON = 1e-12
+BF_DISTRIBUTION_NORMALIZATION_QUANTILE = 0.90
+BF_DISTRIBUTION_NORMALIZATION_EXPONENT_BOUNDS = (0.1, 10.0)
+EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS = (0.05, 20.0)
+EMPIRICAL_LIKELIHOOD_MAX_BINS = 12
+EDGE_LIKELIHOOD_PROFILES = {
+    "mpkccd_localization": "physical_proximity",
+    "compartments_localization": "physical_proximity",
+    "hpa_primary": "physical_proximity",
+    "hpa_high_confidence": "physical_proximity",
+    "imcd_basal_compartment_presence": "physical_proximity",
+    "imcd_ddavp_compartment_presence": "physical_proximity",
+    "alphapulldown_structural": "physical_binding",
+    "biogrid_physical_interaction": "physical_binding",
+    "kinase_predictor": "directed_phosphorylation",
+    "omnipath_core": "regulatory_signaling",
+    "string_v12": "functional_association",
+    "stitch_secondary_messenger": "messenger_binding",
+    "scaffold_triadic_closure": "physical_binding",
+    "biogrid_shared_partner_closure": "physical_binding",
+}
+NODE_LIKELIHOOD_PROFILES = {
+    "protein_abundance": "cellular_presence",
+    "pc_transcript": "cellular_presence",
+    "collecting_duct_proteome_ccd": "cellular_presence",
+    "collecting_duct_proteome_omcd": "cellular_presence",
+    "collecting_duct_proteome_imcd": "cellular_presence",
+    "collecting_duct_rna_ccd": "cellular_presence",
+    "collecting_duct_rna_omcd": "cellular_presence",
+    "collecting_duct_rna_imcd": "cellular_presence",
+    "kinase_activity": "kinase_activity",
+    "phosphoprotein_response": "transient_phosphoregulation",
+    "pka_ca_ko_phosphoprotein_response": "transient_phosphoregulation",
+    "pka_cb_ko_phosphoprotein_response": "transient_phosphoregulation",
+}
 IMCD_COMPARTMENT_HANDLERS = {
     "imcd_basal_compartment_presence": "basal",
     "imcd_ddavp_compartment_presence": "ddavp",
 }
 BIOGRID_PHYSICAL_HANDLER = "biogrid_physical_interaction"
+ALPHAPULLDOWN_STRUCTURAL_HANDLER = "alphapulldown_structural"
+FIXED_CATALOG_EDGE_HANDLERS = {ALPHAPULLDOWN_STRUCTURAL_HANDLER}
 PHOSPHOPROTEOMIC_CALIBRATION_STREAMS = {
     "kinase_activity",
     "phosphoprotein_response",
@@ -351,7 +387,7 @@ def validate_registry(registry: dict[str, Any], project: Path) -> None:
 
 def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
     defaults = registry["defaults"]
-    return {
+    catalog = {
         "calibration": {
             "enabled": False,
             "known_nodes": [],
@@ -396,6 +432,23 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "continuous_bayes_factor_floor": float(
                 defaults["continuous_node_bayes_factor_floor"]
             ),
+            "normalize_bayes_factor_distributions": bool(
+                defaults.get("normalize_node_bayes_factor_distributions", False)
+            ),
+            "distribution_normalization_target_bayes_factor": float(
+                defaults.get(
+                    "node_distribution_normalization_target_bayes_factor", 2.0
+                )
+            ),
+            "empirical_likelihood_enabled": bool(
+                defaults.get("node_empirical_likelihood_enabled", True)
+            ),
+            "empirical_likelihood_smoothing": float(
+                defaults.get("node_empirical_likelihood_smoothing", 0.5)
+            ),
+            "empirical_likelihood_minimum_reference_count": int(
+                defaults.get("node_empirical_likelihood_minimum_reference_count", 10)
+            ),
         },
         "edge_streams": {
             stream["id"]: {
@@ -439,6 +492,23 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             ),
             "continuous_bayes_factor_floor": float(
                 defaults["continuous_edge_bayes_factor_floor"]
+            ),
+            "normalize_bayes_factor_distributions": bool(
+                defaults.get("normalize_edge_bayes_factor_distributions", False)
+            ),
+            "distribution_normalization_target_bayes_factor": float(
+                defaults.get(
+                    "edge_distribution_normalization_target_bayes_factor", 2.0
+                )
+            ),
+            "empirical_likelihood_enabled": bool(
+                defaults.get("edge_empirical_likelihood_enabled", True)
+            ),
+            "empirical_likelihood_smoothing": float(
+                defaults.get("edge_empirical_likelihood_smoothing", 0.5)
+            ),
+            "empirical_likelihood_minimum_reference_count": int(
+                defaults.get("edge_empirical_likelihood_minimum_reference_count", 20)
             ),
         },
         "graph_statistics": {
@@ -495,6 +565,7 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "minimum_scored_nodes": int(defaults["temporal_minimum_scored_nodes"]),
         },
     }
+    return catalog
 
 
 def _number(value: object, name: str, minimum: float, maximum: float) -> float:
@@ -695,6 +766,34 @@ def normalize_configuration(
         1e-12,
         1.0,
     )
+    node_integration["normalize_bayes_factor_distributions"] = bool(
+        node_integration.get("normalize_bayes_factor_distributions", False)
+    )
+    node_integration["distribution_normalization_target_bayes_factor"] = _number(
+        node_integration.get(
+            "distribution_normalization_target_bayes_factor", 2.0
+        ),
+        "node distribution-normalization target Bayes factor",
+        1.000001,
+        100.0,
+    )
+    node_integration["empirical_likelihood_enabled"] = bool(
+        node_integration.get("empirical_likelihood_enabled", True)
+    )
+    node_integration["empirical_likelihood_smoothing"] = _number(
+        node_integration.get("empirical_likelihood_smoothing", 0.5),
+        "node empirical-likelihood smoothing",
+        1e-6,
+        100.0,
+    )
+    node_integration["empirical_likelihood_minimum_reference_count"] = int(
+        _number(
+            node_integration.get("empirical_likelihood_minimum_reference_count", 10),
+            "node empirical-likelihood minimum reference count",
+            2,
+            1000000,
+        )
+    )
     node_integration["non_neutral_tolerance"] = _number(
         node_integration["non_neutral_tolerance"],
         "node non-neutral tolerance",
@@ -734,6 +833,46 @@ def normalize_configuration(
         1e-12,
         1.0,
     )
+    edge_integration["normalize_bayes_factor_distributions"] = bool(
+        edge_integration.get("normalize_bayes_factor_distributions", False)
+    )
+    edge_integration["distribution_normalization_target_bayes_factor"] = _number(
+        edge_integration.get(
+            "distribution_normalization_target_bayes_factor", 2.0
+        ),
+        "edge distribution-normalization target Bayes factor",
+        1.000001,
+        100.0,
+    )
+    edge_integration["empirical_likelihood_enabled"] = bool(
+        edge_integration.get("empirical_likelihood_enabled", True)
+    )
+    edge_integration["empirical_likelihood_smoothing"] = _number(
+        edge_integration.get("empirical_likelihood_smoothing", 0.5),
+        "edge empirical-likelihood smoothing",
+        1e-6,
+        100.0,
+    )
+    edge_integration["empirical_likelihood_minimum_reference_count"] = int(
+        _number(
+            edge_integration.get("empirical_likelihood_minimum_reference_count", 20),
+            "edge empirical-likelihood minimum reference count",
+            2,
+            10000000,
+        )
+    )
+    if node_integration["empirical_likelihood_enabled"]:
+        node_integration["normalize_bayes_factor_distributions"] = False
+    if edge_integration["empirical_likelihood_enabled"]:
+        edge_integration["normalize_bayes_factor_distributions"] = False
+    if calibration["enabled"] and (
+        node_integration["normalize_bayes_factor_distributions"]
+        or edge_integration["normalize_bayes_factor_distributions"]
+    ):
+        raise ValueError(
+            "positive-control calibration and Bayes-factor distribution "
+            "normalization cannot be enabled in the same run"
+        )
     edge_integration["prior_probability"] = _number(
         edge_integration["prior_probability"], "edge prior probability", 1e-9, 1 - 1e-9
     )
@@ -1005,6 +1144,224 @@ def evidence_factor_distribution_summary(
         "value_counts": compact_value_counts,
         "binning": f"{bin_count} equal-width bins on a symmetric log2(BF) domain",
     }
+
+
+def bayes_factor_distribution_normalization(
+    values: np.ndarray | pd.Series,
+    *,
+    enabled: bool,
+    target_bayes_factor: float,
+    quantile: float = BF_DISTRIBUTION_NORMALIZATION_QUANTILE,
+) -> dict[str, Any]:
+    """Return a neutral-preserving exponent for one stream's BF distribution.
+
+    The selected quantile is calculated from non-neutral ``abs(ln(BF))``
+    values. Raising every BF to the returned exponent maps that robust evidence
+    magnitude to ``ln(target_bayes_factor)`` while leaving BF=1 unchanged and
+    preserving whether evidence supports or refutes a hypothesis. Exponent
+    bounds prevent an almost-neutral stream from being amplified without limit.
+    """
+    factors = np.asarray(values, dtype=float).reshape(-1)
+    factors = factors[np.isfinite(factors) & (factors > 0)]
+    non_neutral_logs = np.abs(np.log(factors))
+    non_neutral_logs = non_neutral_logs[non_neutral_logs > FACTOR_EPSILON]
+    target_log_magnitude = math.log(float(target_bayes_factor))
+    reference_log_magnitude = (
+        float(np.quantile(non_neutral_logs, quantile))
+        if len(non_neutral_logs)
+        else None
+    )
+    unbounded_exponent = (
+        target_log_magnitude / reference_log_magnitude
+        if enabled
+        and reference_log_magnitude is not None
+        and reference_log_magnitude > FACTOR_EPSILON
+        else 1.0
+    )
+    lower, upper = BF_DISTRIBUTION_NORMALIZATION_EXPONENT_BOUNDS
+    exponent = float(np.clip(unbounded_exponent, lower, upper)) if enabled else 1.0
+    return {
+        "enabled": bool(enabled),
+        "method": "quantile_matched_absolute_log_bayes_factor",
+        "quantile": float(quantile),
+        "target_bayes_factor_magnitude": float(target_bayes_factor),
+        "target_absolute_log_bayes_factor": float(target_log_magnitude),
+        "source_absolute_log_bayes_factor_quantile": reference_log_magnitude,
+        "non_neutral_factor_count": int(len(non_neutral_logs)),
+        "unbounded_exponent": float(unbounded_exponent),
+        "applied_exponent": exponent,
+        "exponent_bounds": [float(lower), float(upper)],
+        "exponent_was_clipped": bool(
+            enabled and not math.isclose(exponent, unbounded_exponent, rel_tol=0, abs_tol=1e-15)
+        ),
+        "neutrality_and_direction_preserved": True,
+    }
+
+
+def apply_bayes_factor_distribution_normalization(
+    values: np.ndarray | pd.Series | float,
+    exponent: float,
+) -> np.ndarray:
+    """Raise positive BFs to an audited exponent without numerical overflow."""
+    factors = np.asarray(values, dtype=float)
+    if (~np.isfinite(factors) | (factors <= 0)).any():
+        raise ValueError("Bayes-factor normalization requires finite positive values")
+    if math.isclose(float(exponent), 1.0, rel_tol=0.0, abs_tol=0.0):
+        # Preserve exact historical values (including configured floors) when
+        # matching is disabled or a stream already has the target dispersion.
+        return factors.copy()
+    return np.exp(np.clip(float(exponent) * np.log(factors), -700.0, 700.0))
+
+
+def empirical_likelihood_calibration(
+    values: np.ndarray | pd.Series,
+    *,
+    h1_reference: np.ndarray | pd.Series,
+    h0_reference: np.ndarray | pd.Series,
+    evidence_observed: np.ndarray | pd.Series,
+    enabled: bool,
+    hypothesis_class: str,
+    anchor_description: str,
+    smoothing: float = 0.5,
+    minimum_reference_count: int = 10,
+    likelihood_ratio_bounds: tuple[float, float] = EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS,
+    maximum_bins: int = EMPIRICAL_LIKELIHOOD_MAX_BINS,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Estimate P(D|H1) and P(D|H0) and return their likelihood ratio.
+
+    The evidence datum is the source's pre-calibration log Bayes factor.  H1
+    and H0 are defined by independent reference masks chosen for the stream's
+    biological hypothesis class.  A Jeffreys pseudocount makes the discrete
+    histogram finite.  Missing/out-of-scope observations remain exactly
+    neutral: the model calibrates evidence that was actually observed (or an
+    explicitly requested negative-evidence value) and never turns database
+    noncoverage into a negative result.
+    """
+    factors = np.asarray(values, dtype=float)
+    h1 = np.asarray(h1_reference, dtype=bool)
+    h0 = np.asarray(h0_reference, dtype=bool)
+    observed = np.asarray(evidence_observed, dtype=bool)
+    if not (factors.shape == h1.shape == h0.shape == observed.shape):
+        raise ValueError("empirical likelihood arrays must have identical shapes")
+    if (~np.isfinite(factors) | (factors <= 0)).any():
+        raise ValueError("empirical likelihood calibration requires positive factors")
+    if not math.isfinite(smoothing) or smoothing <= 0:
+        raise ValueError("empirical likelihood smoothing must be positive")
+    lower, upper = map(float, likelihood_ratio_bounds)
+    if not (0 < lower <= 1.0 <= upper):
+        raise ValueError("empirical likelihood-ratio bounds must contain one")
+
+    finite = np.isfinite(factors) & (factors > 0)
+    h1 = h1 & finite
+    h0 = h0 & finite & ~h1
+    h1_count = int(h1.sum())
+    h0_count = int(h0.sum())
+    applied = bool(
+        enabled
+        and h1_count >= int(minimum_reference_count)
+        and h0_count >= int(minimum_reference_count)
+    )
+    # Preserve the source's likelihood ratio unless a sufficiently populated
+    # independent reference set can replace it.  Falling back to one would
+    # silently erase observed evidence from sparse hypothesis classes (for
+    # example curated messenger-binding records).
+    calibrated = factors.copy()
+    calibrated[~observed] = 1.0
+    metadata: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "applied": applied,
+        "method": "class_conditional_smoothed_histogram",
+        "hypothesis_class": str(hypothesis_class),
+        "anchor_description": str(anchor_description),
+        "datum": "pre-calibration log Bayes factor",
+        "h1_reference_count": h1_count,
+        "h0_reference_count": h0_count,
+        "minimum_reference_count": int(minimum_reference_count),
+        "smoothing_pseudocount": float(smoothing),
+        "likelihood_ratio_bounds": [lower, upper],
+        "missing_or_out_of_scope_is_neutral": True,
+        "bin_edges_log_bayes_factor": [],
+        "h1_bin_counts": [],
+        "h0_bin_counts": [],
+        "p_data_given_h1": [],
+        "p_data_given_h0": [],
+        "likelihood_ratio_by_bin": [],
+        "fallback_reason": None,
+    }
+    if not applied:
+        metadata["fallback_reason"] = (
+            "disabled" if not enabled else "insufficient independent H1/H0 references"
+        )
+        return calibrated, metadata
+
+    log_values = np.log(factors)
+    training = np.concatenate([log_values[h1], log_values[h0]])
+    unique = np.unique(np.round(training, decimals=12))
+    if len(unique) <= maximum_bins:
+        if len(unique) == 1:
+            edges = np.asarray([-np.inf, np.inf], dtype=float)
+        else:
+            midpoints = (unique[:-1] + unique[1:]) / 2.0
+            edges = np.concatenate(([-np.inf], midpoints, [np.inf]))
+    else:
+        quantiles = np.linspace(0.0, 1.0, maximum_bins + 1)
+        interior = np.unique(np.quantile(training, quantiles)[1:-1])
+        edges = np.concatenate(([-np.inf], interior, [np.inf]))
+    h1_counts, _ = np.histogram(log_values[h1], bins=edges)
+    h0_counts, _ = np.histogram(log_values[h0], bins=edges)
+    bin_count = len(edges) - 1
+    p_h1 = (h1_counts + smoothing) / (h1_count + smoothing * bin_count)
+    p_h0 = (h0_counts + smoothing) / (h0_count + smoothing * bin_count)
+    raw_ratios = p_h1 / p_h0
+    ratios = np.clip(raw_ratios, lower, upper)
+    positions = np.searchsorted(edges[1:-1], log_values, side="right")
+    calibrated[observed] = ratios[positions[observed]]
+    metadata.update(
+        {
+            "bin_edges_log_bayes_factor": [
+                None if not math.isfinite(float(value)) else float(value)
+                for value in edges
+            ],
+            "h1_bin_counts": [int(value) for value in h1_counts],
+            "h0_bin_counts": [int(value) for value in h0_counts],
+            "p_data_given_h1": [float(value) for value in p_h1],
+            "p_data_given_h0": [float(value) for value in p_h0],
+            "unclipped_likelihood_ratio_by_bin": [
+                float(value) for value in raw_ratios
+            ],
+            "likelihood_ratio_by_bin": [float(value) for value in ratios],
+            "calibrated_observation_count": int(observed.sum()),
+        }
+    )
+    return calibrated, metadata
+
+
+def apply_empirical_likelihood_model(
+    value: float,
+    metadata: dict[str, Any] | None,
+    *,
+    evidence_observed: bool,
+) -> float:
+    """Apply a saved class-conditional likelihood model to one observation."""
+    model = metadata or {}
+    if not evidence_observed:
+        return 1.0
+    if not model.get("applied"):
+        return float(value)
+    edges = model.get("bin_edges_log_bayes_factor") or []
+    ratios = model.get("likelihood_ratio_by_bin") or []
+    if len(edges) != len(ratios) + 1 or not ratios:
+        return 1.0
+    numeric_edges = np.asarray(
+        [
+            -np.inf if item is None and index == 0 else
+            np.inf if item is None else float(item)
+            for index, item in enumerate(edges)
+        ],
+        dtype=float,
+    )
+    position = int(np.searchsorted(numeric_edges[1:-1], math.log(float(value)), side="right"))
+    return float(ratios[position])
 
 
 def complement_minimum_likelihood(
@@ -1417,6 +1774,16 @@ def select_nodes(
     continuous_bf_floor = float(
         config["node_integration"]["continuous_bayes_factor_floor"]
     )
+    normalize_distributions = bool(
+        config["node_integration"].get(
+            "normalize_bayes_factor_distributions", False
+        )
+    )
+    distribution_target = float(
+        config["node_integration"].get(
+            "distribution_normalization_target_bayes_factor", 2.0
+        )
+    )
     prior_log_odds = math.log(prior_probability / (1.0 - prior_probability))
     log_odds = np.full(len(factors), prior_log_odds, dtype=float)
     if "initial_prior" in factors.columns:
@@ -1426,6 +1793,18 @@ def select_nodes(
     any_positive_support = np.zeros(len(factors), dtype=bool)
     active_streams: list[dict[str, Any]] = []
     stream_audit_columns: dict[str, np.ndarray] = {}
+    empirical_enabled = bool(
+        config["node_integration"].get("empirical_likelihood_enabled", True)
+    )
+    empirical_smoothing = float(
+        config["node_integration"].get("empirical_likelihood_smoothing", 0.5)
+    )
+    empirical_minimum = int(
+        config["node_integration"].get(
+            "empirical_likelihood_minimum_reference_count", 10
+        )
+    )
+    node_payloads: dict[str, dict[str, Any]] = {}
     for stream_id, state in config["node_streams"].items():
         if not state["enabled"] or state["weight"] <= 0:
             continue
@@ -1456,6 +1835,92 @@ def select_nodes(
             & unobserved_eligible
         )
         bayes_factors[penalty_applied] = unobserved_bayes_factor
+        node_payloads[stream_id] = {
+            "state": state,
+            "definition": definition,
+            "values": values,
+            "neutral_value": neutral_value,
+            "source_bayes_factors": source_bayes_factors,
+            "pre_calibration_bayes_factors": bayes_factors.copy(),
+            "eligible": eligible,
+            "observed": observed,
+            "unobserved_eligible": unobserved_eligible,
+            "penalty_applied": penalty_applied,
+            "stream_continuous_negative": stream_continuous_negative,
+            "profile": NODE_LIKELIHOOD_PROFILES.get(stream_id, "general_node_support"),
+        }
+
+    classes = factors.get(
+        "node_classes", pd.Series("", index=factors.index)
+    ).fillna("").astype(str)
+    kinase_candidates = classes.map(
+        lambda value: "kinase" in {token.strip() for token in value.split(";") if token.strip()}
+    ).to_numpy(bool)
+    for stream_id, payload in node_payloads.items():
+        state = payload["state"]
+        definition = payload["definition"]
+        values = payload["values"]
+        neutral_value = payload["neutral_value"]
+        source_bayes_factors = payload["source_bayes_factors"]
+        pre_distribution_bayes_factors = payload["pre_calibration_bayes_factors"]
+        eligible = payload["eligible"]
+        observed = payload["observed"]
+        unobserved_eligible = payload["unobserved_eligible"]
+        penalty_applied = payload["penalty_applied"]
+        stream_continuous_negative = payload["stream_continuous_negative"]
+        profile = payload["profile"]
+        peer_support = np.zeros(len(factors), dtype=bool)
+        peer_coverage = np.zeros(len(factors), dtype=bool)
+        for peer_id, peer in node_payloads.items():
+            if peer_id == stream_id:
+                continue
+            peer_profile = peer["profile"]
+            compatible = (
+                peer_profile == profile
+                or {peer_profile, profile}
+                <= {"kinase_activity", "transient_phosphoregulation"}
+            )
+            if not compatible:
+                continue
+            peer_support |= (
+                peer["pre_calibration_bayes_factors"] > 1.0 + tolerance
+            )
+            peer_coverage |= peer["eligible"]
+        class_scope = (
+            kinase_candidates if profile == "kinase_activity" else np.ones(len(factors), dtype=bool)
+        )
+        h1_reference = peer_support & class_scope
+        h0_reference = peer_coverage & ~peer_support & class_scope
+        evidence_event = (
+            np.abs(pre_distribution_bayes_factors - 1.0) > tolerance
+        )
+        empirical_factors, empirical_likelihood = empirical_likelihood_calibration(
+            pre_distribution_bayes_factors,
+            h1_reference=h1_reference,
+            h0_reference=h0_reference,
+            evidence_observed=evidence_event,
+            enabled=empirical_enabled,
+            hypothesis_class=profile,
+            anchor_description=(
+                "leave-one-stream-out support from biologically compatible node "
+                "streams; H0 is independently covered without peer support"
+            ),
+            smoothing=empirical_smoothing,
+            minimum_reference_count=empirical_minimum,
+        )
+        distribution_normalization = bayes_factor_distribution_normalization(
+            pre_distribution_bayes_factors,
+            enabled=normalize_distributions and not empirical_enabled,
+            target_bayes_factor=distribution_target,
+        )
+        bayes_factors = (
+            empirical_factors
+            if empirical_enabled
+            else apply_bayes_factor_distribution_normalization(
+                pre_distribution_bayes_factors,
+                distribution_normalization["applied_exponent"],
+            )
+        )
         continuous_negative_applied = (
             stream_continuous_negative
             & eligible
@@ -1473,6 +1938,12 @@ def select_nodes(
                 f"gui_{stream_id}_non_neutral": non_neutral,
                 f"gui_{stream_id}_factor": values,
                 f"gui_{stream_id}_source_bayes_factor": source_bayes_factors,
+                f"gui_{stream_id}_pre_distribution_normalization_bayes_factor": (
+                    pre_distribution_bayes_factors
+                ),
+                f"gui_{stream_id}_pre_likelihood_calibration_bayes_factor": (
+                    pre_distribution_bayes_factors
+                ),
                 f"gui_{stream_id}_bayes_factor": bayes_factors,
                 f"gui_{stream_id}_weighted_log_bayes_factor": weighted_log_bf,
                 f"gui_{stream_id}_negative_evidence_eligible": eligible,
@@ -1507,7 +1978,16 @@ def select_nodes(
                 "negative_evidence_scope": node_stream_negative_evidence_policy(
                     definition
                 ),
+                "distribution_normalization": distribution_normalization,
+                "empirical_likelihood": empirical_likelihood,
+                "likelihood_hypothesis_class": profile,
                 "source_neutral_value": neutral_value,
+                "pre_distribution_normalization_factor_distribution": (
+                    evidence_factor_distribution_summary(
+                        pre_distribution_bayes_factors,
+                        distribution_scope="all modeled protein candidates",
+                    )
+                ),
                 "factor_distribution": evidence_factor_distribution_summary(
                     bayes_factors,
                     distribution_scope="all modeled protein candidates",
@@ -1630,6 +2110,17 @@ def select_nodes(
             if stream["continuous_negative_evidence"]
         ],
         "continuous_bayes_factor_floor": continuous_bf_floor,
+        "normalize_bayes_factor_distributions": normalize_distributions,
+        "distribution_normalization_target_bayes_factor": distribution_target,
+        "distribution_normalization_quantile": (
+            BF_DISTRIBUTION_NORMALIZATION_QUANTILE
+        ),
+        "empirical_likelihood_enabled": empirical_enabled,
+        "empirical_likelihood_smoothing": empirical_smoothing,
+        "empirical_likelihood_minimum_reference_count": empirical_minimum,
+        "empirical_likelihood_ratio_bounds": list(
+            EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS
+        ),
         "total_unobserved_penalties_applied": int(
             sum(stream["unobserved_penalties_applied"] for stream in active_streams)
         ),
@@ -1653,7 +2144,14 @@ def select_nodes(
             "Each protein is an independent present-versus-absent hypothesis. Every "
             "protein begins at the configured Bernoulli prior (default 0.5). Source "
             "scores are divided by their neutral values to obtain BF=1 at neutrality; "
-            "weighted Bayes factors multiply prior odds. The fixed-absence mode gives "
+            "weighted likelihood ratios multiply prior odds. By default, each observed "
+            "stream datum is calibrated against leave-one-stream-out, biologically "
+            "compatible H1 and H0 reference nodes to estimate P(D|H1)/P(D|H0). "
+            "The saved model records both class-conditional distributions, reference "
+            "counts, smoothing, bins, and likelihood-ratio bounds. Missing or out-of-scope "
+            "data remain neutral. The legacy distribution matcher is retained only for "
+            "archived configuration compatibility and is bypassed by empirical calibration. "
+            "The fixed-absence mode gives "
             "each eligible nondetection one configured BF<1. Alternatively, continuous "
             "negative evidence removes the 0.5 likelihood floor and scores both weak "
             "detections and x=0 nondetections with the same Tq kernel, bounded only by "
@@ -2707,6 +3205,8 @@ def edge_stream_factor_table(
         if handler in IMCD_COMPARTMENT_HANDLERS
         else None
     )
+    if handler in FIXED_CATALOG_EDGE_HANDLERS:
+        return _fixed_catalog_edge_factors(project, definition, symbols)
     use_raw_negative_string = (
         (include_negative or continuous_negative) and handler == "string_v12"
     )
@@ -2810,6 +3310,38 @@ def edge_stream_factor_table(
             minimum_bayes_factor=minimum_bayes_factor,
         )
     raise ValueError(f"unsupported edge normalization handler: {handler}")
+
+
+def _fixed_catalog_edge_factors(
+    project: Path,
+    definition: dict[str, Any],
+    symbols: list[str],
+) -> pd.DataFrame:
+    """Load an imported pair catalog without inventing unmeasured negatives."""
+    columns = ["node_a", "node_b", "bayes_factor"]
+    if len(symbols) < 2:
+        return pd.DataFrame(columns=columns)
+    factor_column = str(definition["factor_column"])
+    table = pd.read_csv(
+        project / definition["factor_file"], sep="\t", compression="gzip"
+    )
+    required = {"node_a", "node_b", factor_column}
+    missing = required.difference(table.columns)
+    if missing:
+        raise ValueError(
+            f"fixed edge factor table for {definition['id']} lacks {sorted(missing)}"
+        )
+    selected = set(map(str, symbols))
+    table = table.loc[
+        table["node_a"].astype(str).isin(selected)
+        & table["node_b"].astype(str).isin(selected),
+        ["node_a", "node_b", factor_column],
+    ].copy()
+    table = table.rename(columns={factor_column: "bayes_factor"})
+    table["bayes_factor"] = pd.to_numeric(table["bayes_factor"], errors="raise")
+    if (table["bayes_factor"] <= 0).any():
+        raise ValueError(f"edge stream {definition['id']} contains non-positive factors")
+    return table[columns]
 
 
 def _metadata_for_graph(
@@ -3017,6 +3549,8 @@ def _raw_seed_edge_factor_table(
     handler = definition["normalization"]["handler"]
     if len(symbols) < 2:
         return pd.DataFrame(columns=["node_a", "node_b", "bayes_factor"])
+    if handler in FIXED_CATALOG_EDGE_HANDLERS:
+        return _fixed_catalog_edge_factors(project, definition, symbols)
     if handler == "mpkccd_localization":
         return _localization_edge_factors(
             project, symbols, multiplier,
@@ -3145,7 +3679,6 @@ def calibrate_edge_parameters(
     continuous_floor = float(
         config["edge_integration"]["continuous_bayes_factor_floor"]
     )
-
     def stream_factors(stream_id: str, multiplier: float) -> np.ndarray:
         cache_key = (stream_id, round(float(multiplier), 12))
         cached = factor_cache.get(cache_key)
@@ -3179,7 +3712,11 @@ def calibrate_edge_parameters(
                 minimum_bayes_factor=continuous_floor,
             )
         ]
-        if incremental_targets and handler != BIOGRID_PHYSICAL_HANDLER:
+        if (
+            incremental_targets
+            and handler != BIOGRID_PHYSICAL_HANDLER
+            and handler not in FIXED_CATALOG_EDGE_HANDLERS
+        ):
             tables.append(
                 incremental_pair_factor_table(
                     project,
@@ -3608,6 +4145,184 @@ def biogrid_shared_partner_closure_factors(
     return audit, summary
 
 
+def _pair_mask_from_table(
+    table: pd.DataFrame,
+    graph_symbols: list[str],
+    *,
+    row_mask: np.ndarray | pd.Series | None = None,
+) -> np.ndarray:
+    """Map an undirected pair table to a symmetric graph-sized mask."""
+    result = np.zeros((len(graph_symbols), len(graph_symbols)), dtype=bool)
+    if table.empty:
+        return result
+    index = {symbol: position for position, symbol in enumerate(graph_symbols)}
+    selected = table if row_mask is None else table.loc[np.asarray(row_mask, dtype=bool)]
+    left = selected["node_a"].astype(str).map(index)
+    right = selected["node_b"].astype(str).map(index)
+    valid = left.notna() & right.notna()
+    li = left[valid].astype(int).to_numpy()
+    ri = right[valid].astype(int).to_numpy()
+    result[li, ri] = True
+    result[ri, li] = True
+    return result
+
+
+def edge_likelihood_reference_catalog(
+    project: Path,
+    graph_symbols: list[str],
+    *,
+    graph_metadata: pd.DataFrame | None,
+    stream_defs: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Build independent biological reference sets for edge likelihood models."""
+    biogrid = pd.read_csv(project / BIOGRID_MAPPED_PAIRS_RELATIVE, sep="\t")
+    biogrid_positive = _pair_mask_from_table(biogrid, graph_symbols)
+
+    alphapulldown = pd.read_csv(
+        project / stream_defs["alphapulldown_structural"]["factor_file"],
+        sep="\t",
+        compression="gzip",
+    )
+    alpha_bf = pd.to_numeric(alphapulldown["bayes_factor"], errors="coerce")
+    alpha_positive = _pair_mask_from_table(
+        alphapulldown, graph_symbols, row_mask=alpha_bf.gt(1.0).to_numpy()
+    )
+    alpha_negative = _pair_mask_from_table(
+        alphapulldown, graph_symbols, row_mask=alpha_bf.lt(1.0).to_numpy()
+    )
+    phase1 = _pair_mask_from_table(
+        alphapulldown,
+        graph_symbols,
+        row_mask=alphapulldown.get("phase", pd.Series("", index=alphapulldown.index))
+        .astype(str)
+        .eq("phase1_cocomplex")
+        .to_numpy(),
+    )
+    phase2 = _pair_mask_from_table(
+        alphapulldown,
+        graph_symbols,
+        row_mask=alphapulldown.get("phase", pd.Series("", index=alphapulldown.index))
+        .astype(str)
+        .eq("phase2_other")
+        .to_numpy(),
+    )
+
+    kinase_def = stream_defs["kinase_predictor"]
+    kinase = pd.read_csv(
+        project / kinase_def["factor_file"], sep="\t", compression="gzip"
+    )
+    kinase_positive = _pair_mask_from_table(kinase, graph_symbols)
+    omni_def = stream_defs["omnipath_core"]
+    omnipath = pd.read_csv(
+        project / omni_def["factor_file"], sep="\t", compression="gzip"
+    )
+    omnipath_positive = _pair_mask_from_table(omnipath, graph_symbols)
+    kinase_eligible = edge_stream_eligibility_matrix(
+        project,
+        kinase_def,
+        graph_symbols,
+        graph_metadata=graph_metadata,
+    )
+    protein_eligible = edge_stream_eligibility_matrix(
+        project,
+        omni_def,
+        graph_symbols,
+        graph_metadata=graph_metadata,
+    )
+    np.fill_diagonal(kinase_eligible, False)
+    np.fill_diagonal(protein_eligible, False)
+    known_regulatory = kinase_positive | omnipath_positive
+    known_any = known_regulatory | biogrid_positive | alpha_positive
+    catalog = {
+        "physical_proximity": {
+            "h1": biogrid_positive | alpha_positive,
+            "h0": alpha_negative & ~biogrid_positive,
+            "description": (
+                "H1: BioGRID-reported physical pairs or positive AlphaPulldown; "
+                "H0: completed AlphaPulldown predictions below neutral without a "
+                "BioGRID physical report"
+            ),
+        },
+        "physical_binding": {
+            "h1": biogrid_positive | phase1 | alpha_positive,
+            "h0": (phase2 | alpha_negative) & ~biogrid_positive,
+            "description": (
+                "H1: BioGRID physical/co-complex anchors and positive AlphaPulldown; "
+                "H0: structurally tested non-complex background or AlphaPulldown BF<1"
+            ),
+        },
+        "directed_phosphorylation": {
+            "h1": known_regulatory,
+            "h0": kinase_eligible & ~known_regulatory,
+            "description": (
+                "H1: independently retained KinasePredictor or OmniPath signaling "
+                "relationships; H0: scorable kinase-substrate background with neither"
+            ),
+        },
+        "regulatory_signaling": {
+            "h1": known_regulatory,
+            "h0": protein_eligible & ~known_regulatory,
+            "description": (
+                "H1: retained KinasePredictor/OmniPath signaling relationships; "
+                "H0: protein-pair background lacking either regulatory anchor"
+            ),
+        },
+        "functional_association": {
+            "h1": known_any,
+            "h0": protein_eligible & ~known_any,
+            "description": (
+                "H1: independently supported physical, structural, or regulatory "
+                "pairs; H0: covered protein-pair background lacking those anchors"
+            ),
+        },
+        "messenger_binding": {
+            "h1": known_regulatory,
+            "h0": protein_eligible & ~known_regulatory,
+            "description": (
+                "H1: independently supported signaling pairs; H0: covered background. "
+                "If messenger-specific references are insufficient the stream remains "
+                "on its source scale"
+            ),
+        },
+    }
+    catalog["_by_stream"] = {
+        "alphapulldown_structural": {
+            "h1": phase1,
+            "h0": phase2,
+            "description": (
+                "H1: AlphaPulldown phase-1 pairs independently labeled as BioGRID "
+                "co-complex; H0: phase-2 pairs lacking BioGRID direct/contact and "
+                "co-complex evidence"
+            ),
+        },
+        "biogrid_physical_interaction": {
+            "h1": alpha_positive,
+            "h0": alpha_negative,
+            "description": (
+                "H1/H0: completed AlphaPulldown predictions above/below neutral, "
+                "independent of the BioGRID value being calibrated"
+            ),
+        },
+        "kinase_predictor": {
+            "h1": omnipath_positive & kinase_eligible,
+            "h0": kinase_eligible & ~omnipath_positive,
+            "description": (
+                "H1: independently retained OmniPath kinase-pair relationships; "
+                "H0: scorable kinase-substrate background without OmniPath support"
+            ),
+        },
+        "omnipath_core": {
+            "h1": kinase_positive,
+            "h0": kinase_eligible & ~kinase_positive,
+            "description": (
+                "H1: independently retained KinasePredictor relationships; H0: "
+                "scorable kinase-substrate background without KinasePredictor support"
+            ),
+        },
+    }
+    return catalog
+
+
 def combine_edge_factors(
     project: Path,
     registry: dict[str, Any],
@@ -3630,6 +4345,27 @@ def combine_edge_factors(
     continuous_floor = float(
         config["edge_integration"]["continuous_bayes_factor_floor"]
     )
+    normalize_distributions = bool(
+        config["edge_integration"].get(
+            "normalize_bayes_factor_distributions", False
+        )
+    )
+    distribution_target = float(
+        config["edge_integration"].get(
+            "distribution_normalization_target_bayes_factor", 2.0
+        )
+    )
+    empirical_enabled = bool(
+        config["edge_integration"].get("empirical_likelihood_enabled", True)
+    )
+    empirical_smoothing = float(
+        config["edge_integration"].get("empirical_likelihood_smoothing", 0.5)
+    )
+    empirical_minimum = int(
+        config["edge_integration"].get(
+            "empirical_likelihood_minimum_reference_count", 20
+        )
+    )
     base_log_odds = math.log(prior / (1.0 - prior))
     log_odds = np.full((len(graph_symbols), len(graph_symbols)), base_log_odds, dtype=float)
     unique_pair_indices = np.triu_indices(len(graph_symbols), 1)
@@ -3650,6 +4386,12 @@ def combine_edge_factors(
             if left in incremental_set or right in incremental_set
         ]
     stream_defs = {stream["id"]: stream for stream in registry["edge_streams"]}
+    likelihood_references = edge_likelihood_reference_catalog(
+        project,
+        graph_symbols,
+        graph_metadata=graph_metadata,
+        stream_defs=stream_defs,
+    ) if empirical_enabled else {}
     active_streams: list[dict[str, Any]] = []
     total_penalty_applications = 0
     derived_streams: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
@@ -3668,7 +4410,12 @@ def combine_edge_factors(
         )
         handler = definition["normalization"]["handler"]
         factor_symbols = (
-            graph_symbols if handler == BIOGRID_PHYSICAL_HANDLER else seed_graph_symbols
+            graph_symbols
+            if (
+                handler == BIOGRID_PHYSICAL_HANDLER
+                or handler in FIXED_CATALOG_EDGE_HANDLERS
+            )
+            else seed_graph_symbols
         )
         seed_table = edge_stream_factor_table(
             project,
@@ -3682,7 +4429,11 @@ def combine_edge_factors(
         if check_cancel is not None:
             check_cancel()
         tables = [seed_table]
-        if has_incremental_nodes and handler != BIOGRID_PHYSICAL_HANDLER:
+        if (
+            has_incremental_nodes
+            and handler != BIOGRID_PHYSICAL_HANDLER
+            and handler not in FIXED_CATALOG_EDGE_HANDLERS
+        ):
             incremental_loader = (
                 incremental_pair_factor_table
                 if len(incremental_pairs) <= 50_000
@@ -3711,12 +4462,11 @@ def combine_edge_factors(
         ).to_numpy(float)
         if (values <= 0).any():
             raise ValueError(f"edge stream {stream_id} contains non-positive factors")
-        weighted_logs = float(state["weight"]) * np.log(values)
         left_index = left[mask].astype(int).to_numpy()
         right_index = right[mask].astype(int).to_numpy()
-        stream_log_odds = np.zeros_like(log_odds)
-        np.add.at(stream_log_odds, (left_index, right_index), weighted_logs)
-        np.add.at(stream_log_odds, (right_index, left_index), weighted_logs)
+        raw_stream_log_bf = np.zeros_like(log_odds)
+        np.add.at(raw_stream_log_bf, (left_index, right_index), np.log(values))
+        np.add.at(raw_stream_log_bf, (right_index, left_index), np.log(values))
         observed_pairs = np.zeros_like(log_odds, dtype=bool)
         observed_pairs[left_index, right_index] = True
         observed_pairs[right_index, left_index] = True
@@ -3738,19 +4488,59 @@ def combine_edge_factors(
         elif penalize_unsupported and definition.get("negative_evidence"):
             negative_fill_factor = unsupported_factor
         if negative_fill_factor is not None:
-            penalty_log = float(state["weight"]) * math.log(negative_fill_factor)
+            penalty_log = math.log(negative_fill_factor)
             np.add.at(
-                stream_log_odds,
+                raw_stream_log_bf,
                 (unsupported_left, unsupported_right),
                 penalty_log,
             )
             np.add.at(
-                stream_log_odds,
+                raw_stream_log_bf,
                 (unsupported_right, unsupported_left),
                 penalty_log,
             )
             penalties_applied = int(len(unsupported_left))
             total_penalty_applications += penalties_applied
+        pre_distribution_factors = np.exp(
+            np.clip(raw_stream_log_bf[unique_pair_indices], -700.0, 700.0)
+        )
+        profile = EDGE_LIKELIHOOD_PROFILES.get(stream_id, "functional_association")
+        reference = likelihood_references.get("_by_stream", {}).get(
+            stream_id, likelihood_references.get(profile, {})
+        )
+        evidence_event = (
+            np.abs(pre_distribution_factors - 1.0) > FACTOR_EPSILON
+        )
+        empirical_factors, empirical_likelihood = empirical_likelihood_calibration(
+            pre_distribution_factors,
+            h1_reference=np.asarray(
+                reference.get("h1", np.zeros_like(log_odds, dtype=bool))
+            )[unique_pair_indices],
+            h0_reference=np.asarray(
+                reference.get("h0", np.zeros_like(log_odds, dtype=bool))
+            )[unique_pair_indices],
+            evidence_observed=evidence_event,
+            enabled=empirical_enabled,
+            hypothesis_class=profile,
+            anchor_description=str(reference.get("description", "no reference set")),
+            smoothing=empirical_smoothing,
+            minimum_reference_count=empirical_minimum,
+        )
+        distribution_normalization = bayes_factor_distribution_normalization(
+            pre_distribution_factors,
+            enabled=normalize_distributions and not empirical_enabled,
+            target_bayes_factor=distribution_target,
+        )
+        if empirical_enabled:
+            normalized_stream_log_bf = np.zeros_like(raw_stream_log_bf)
+            empirical_logs = np.log(empirical_factors)
+            normalized_stream_log_bf[unique_pair_indices] = empirical_logs
+            normalized_stream_log_bf[(unique_pair_indices[1], unique_pair_indices[0])] = empirical_logs
+        else:
+            normalized_stream_log_bf = (
+                raw_stream_log_bf * distribution_normalization["applied_exponent"]
+            )
+        stream_log_odds = float(state["weight"]) * normalized_stream_log_bf
         log_odds += stream_log_odds
         if contribution_collector is not None:
             contribution_collector[stream_id] = stream_log_odds
@@ -3775,10 +4565,19 @@ def combine_edge_factors(
                     negative_fill_factor if penalties_applied else None
                 ),
                 "negative_evidence_policy": definition.get("negative_evidence"),
+                "distribution_normalization": distribution_normalization,
+                "empirical_likelihood": empirical_likelihood,
+                "likelihood_hypothesis_class": profile,
+                "pre_distribution_normalization_factor_distribution": (
+                    evidence_factor_distribution_summary(
+                        pre_distribution_factors,
+                        distribution_scope="all unique undirected graph pairs",
+                    )
+                ),
                 "factor_distribution": evidence_factor_distribution_summary(
                     np.exp(
                         np.clip(
-                            stream_log_odds[unique_pair_indices] / float(state["weight"]),
+                            normalized_stream_log_bf[unique_pair_indices],
                             -700.0,
                             700.0,
                         )
@@ -3818,7 +4617,41 @@ def combine_edge_factors(
         left_index = table["node_a"].map(index).astype(int).to_numpy()
         right_index = table["node_b"].map(index).astype(int).to_numpy()
         values = table["bayes_factor"].to_numpy(float)
-        weighted_logs = float(state["weight"]) * np.log(values)
+        profile = EDGE_LIKELIHOOD_PROFILES.get(stream_id, "physical_binding")
+        reference = likelihood_references.get("_by_stream", {}).get(
+            stream_id, likelihood_references.get(profile, {})
+        )
+        h1_matrix = np.asarray(
+            reference.get("h1", np.zeros_like(log_odds, dtype=bool))
+        )
+        h0_matrix = np.asarray(
+            reference.get("h0", np.zeros_like(log_odds, dtype=bool))
+        )
+        empirical_values, empirical_likelihood = empirical_likelihood_calibration(
+            values,
+            h1_reference=h1_matrix[left_index, right_index],
+            h0_reference=h0_matrix[left_index, right_index],
+            evidence_observed=np.ones(len(values), dtype=bool),
+            enabled=empirical_enabled,
+            hypothesis_class=profile,
+            anchor_description=str(reference.get("description", "no reference set")),
+            smoothing=empirical_smoothing,
+            minimum_reference_count=empirical_minimum,
+        )
+        distribution_normalization = bayes_factor_distribution_normalization(
+            values,
+            enabled=normalize_distributions and not empirical_enabled,
+            target_bayes_factor=distribution_target,
+        )
+        applied_values = (
+            empirical_values
+            if empirical_enabled
+            else apply_bayes_factor_distribution_normalization(
+                values,
+                distribution_normalization["applied_exponent"],
+            )
+        )
+        weighted_logs = float(state["weight"]) * np.log(applied_values)
         np.add.at(log_odds, (left_index, right_index), weighted_logs)
         np.add.at(log_odds, (right_index, left_index), weighted_logs)
         derived_log_odds = np.zeros_like(log_odds)
@@ -3845,6 +4678,8 @@ def combine_edge_factors(
             )
         else:
             pair_posteriors = np.asarray([], dtype=float)
+        table["pre_distribution_normalization_bayes_factor"] = values
+        table["applied_bayes_factor"] = applied_values
         table["postclosure_probability"] = pair_posteriors
         cutoff = config["edge_integration"]["output_probability_cutoff"]
         closure_summary["newly_above_output_cutoff"] = int(
@@ -3866,6 +4701,23 @@ def combine_edge_factors(
                 "derived": True,
                 "parameters": dict(state.get("parameters", {})),
                 "derivation_summary": closure_summary,
+                "distribution_normalization": distribution_normalization,
+                "empirical_likelihood": empirical_likelihood,
+                "likelihood_hypothesis_class": profile,
+                "pre_distribution_normalization_factor_distribution": (
+                    evidence_factor_distribution_summary(
+                        np.exp(
+                            np.clip(
+                                derived_log_odds[unique_pair_indices]
+                                / float(state["weight"])
+                                / distribution_normalization["applied_exponent"],
+                                -700.0,
+                                700.0,
+                            )
+                        ),
+                        distribution_scope="all unique undirected graph pairs",
+                    )
+                ),
                 "factor_distribution": evidence_factor_distribution_summary(
                     np.exp(
                         np.clip(
@@ -3898,6 +4750,17 @@ def combine_edge_factors(
             if stream.get("continuous_negative_evidence")
         ],
         "continuous_bayes_factor_floor": continuous_floor,
+        "normalize_bayes_factor_distributions": normalize_distributions,
+        "distribution_normalization_target_bayes_factor": distribution_target,
+        "distribution_normalization_quantile": (
+            BF_DISTRIBUTION_NORMALIZATION_QUANTILE
+        ),
+        "empirical_likelihood_enabled": empirical_enabled,
+        "empirical_likelihood_smoothing": empirical_smoothing,
+        "empirical_likelihood_minimum_reference_count": empirical_minimum,
+        "empirical_likelihood_ratio_bounds": list(
+            EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS
+        ),
         "negative_penalty_applications": total_penalty_applications,
         "unique_pair_count": int(len(upper)),
         "pairs_above_output_cutoff": int((upper > cutoff).sum()),
@@ -3911,8 +4774,18 @@ def combine_edge_factors(
         ),
         "active_streams": active_streams,
         "integration_rule": (
-            "Edge prior odds are multiplied by each selected Bayes factor raised "
-            "to its user-specified weight. Fixed-absence mode gives a source-eligible "
+            "Edge prior odds are multiplied by each selected, class-conditional "
+            "likelihood ratio raised to its user-specified weight. By default each "
+            "stream is assigned to a biological hypothesis class (physical proximity, "
+            "physical binding, directed phosphorylation, regulatory signaling, "
+            "functional association, or messenger binding). Independent reference "
+            "pairs estimate P(D|H1) and P(D|H0) with a smoothed empirical histogram; "
+            "the saved audit records reference counts, bins, probabilities, and bounds. "
+            "Thus localization and AlphaPulldown are calibrated primarily against "
+            "physical hypotheses instead of being forced onto unrelated edge types. "
+            "Missing/out-of-scope data remain neutral. The legacy distribution matcher "
+            "is bypassed whenever empirical likelihood calibration is enabled. "
+            "Fixed-absence mode gives a source-eligible "
             "pair with no record one configured BF below 1. Alternatively, continuous "
             "negative mode removes the 0.5 likelihood floor, retains quantitative "
             "factors below 1, and scores eligible no-record pairs as x=0 using the "
@@ -4047,6 +4920,24 @@ def external_target_stream_values(
             list(dict.fromkeys([str(target_symbol), *symbols.astype(str).tolist()])),
             direct_bf,
             cocomplex_bf,
+        )
+        lookup = {
+            _canonical_undirected_pair(row.node_a, row.node_b): float(
+                row.bayes_factor
+            )
+            for row in table.itertuples(index=False)
+        }
+        for position, symbol in enumerate(symbols.astype(str)):
+            result[position] = lookup.get(
+                _canonical_undirected_pair(str(target_symbol), symbol), 1.0
+            )
+        return result
+    if handler in FIXED_CATALOG_EDGE_HANDLERS:
+        result = np.ones(len(symbols), dtype=float)
+        table = _fixed_catalog_edge_factors(
+            project,
+            definition,
+            list(dict.fromkeys([str(target_symbol), *symbols.astype(str).tolist()])),
         )
         lookup = {
             _canonical_undirected_pair(row.node_a, row.node_b): float(

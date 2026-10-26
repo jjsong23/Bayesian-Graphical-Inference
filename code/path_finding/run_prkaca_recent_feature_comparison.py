@@ -51,18 +51,20 @@ def build_configuration(target: str, include_nodes: bool) -> dict[str, Any]:
     config = default_configuration(registry)
 
     # Run every compatible primary/derived stream introduced or active in the
-    # current Version 1 profile. HPA high-confidence remains off because it is
-    # mutually exclusive with the enabled HPA primary stream.
+    # current Version 1 profile. Both standalone HPA sensitivity streams stay
+    # off because integrated COMPARTMENTS already contains the HPA channel and
+    # is mutually exclusive with them.
     for stream_id, state in config["node_streams"].items():
         state["enabled"] = True
     for stream_id, state in config["edge_streams"].items():
-        state["enabled"] = stream_id != "hpa_high_confidence"
-    config["edge_streams"]["hpa_primary"]["enabled"] = True
+        state["enabled"] = stream_id not in {"hpa_primary", "hpa_high_confidence"}
     config["edge_streams"]["imcd_basal_compartment_presence"]["enabled"] = True
     config["edge_streams"]["imcd_ddavp_compartment_presence"]["enabled"] = True
     config["edge_streams"]["biogrid_physical_interaction"]["enabled"] = True
     config["edge_streams"]["biogrid_shared_partner_closure"]["enabled"] = True
     config["edge_streams"]["scaffold_triadic_closure"]["enabled"] = True
+    config["node_integration"]["empirical_likelihood_enabled"] = True
+    config["edge_integration"]["empirical_likelihood_enabled"] = True
 
     # Compute both the thresholded full-graph statistics and the exact union of
     # all returned paths. Large-graph triangle/distance measures use the

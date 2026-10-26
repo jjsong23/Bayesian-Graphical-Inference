@@ -43,12 +43,11 @@ geometric-mean-ranked loopless paths
 The validated seed graph contains **891 nodes: 871 proteins and 20 curated secondary messengers**. The GUI is no longer capped at 891: newly selected protein nodes are characterized against the active universe and added as needed. Raw observations for new unordered pairs are cached so later runs calculate only previously unseen pairs under the current source signature. The Git repository contains code, tests, configuration, and documentation; the large `data/`, `results/`, `outputs/`, and SQLite cache trees are restored from the companion OneDrive archive and are intentionally ignored by Git.
 
 A lab-specific Aqp2/collecting-duct profile additionally enables proteome and
-RNA abundance for CCD, OMCD, and IMCD. All six new streams plus the existing
-four select **3,330 proteins**, or **3,350 total nodes** with second messengers.
-This large profile is stored separately. The 891-node graph remains the
-immutable edge-catalog seed, but the current generic node defaults select
-1,051 proteins (1,071 nodes with messengers) after the site-centric
-phosphoprotein revision and therefore extend beyond that seed dynamically.
+RNA abundance for CCD, OMCD, and IMCD. The 891-node graph remains the immutable
+edge-catalog seed, but the current default empirical-likelihood profile selects
+**2,869 proteins**, or **2,889 total nodes** with second messengers, and thus
+extends beyond that seed dynamically. These counts are deterministic for the
+current companion evidence archive and are regression-tested.
 
 ## Bayesian conventions
 
@@ -61,6 +60,19 @@ phosphoprotein revision and therefore extend beyond that seed dynamically.
   `BF_STRING^0.25`. This power-likelihood stabilization preserves the raw score
   and BF while preventing the broad combined stream from dominating edge odds.
   Do not silently restore weight 1; see `docs/string_evidence_stabilization.md`.
+- V1 now defaults to class-conditional empirical likelihood calibration. Each
+  observed datum is assigned to a biological hypothesis class and scored as
+  `P(Data|H1) / P(Data|H0)` using saved, Jeffreys-smoothed reference
+  distributions. Localization/AlphaPulldown use physical anchors;
+  KinasePredictor uses kinase-substrate anchors; regulatory and broad
+  association streams use their corresponding independent reference sets;
+  node streams use leave-one-stream-out compatible evidence. Sparse classes
+  retain their source likelihood rather than being erased. Missing or
+  out-of-scope observations remain neutral. See
+  `docs/empirical_likelihood_models.md`.
+- The older q90 BF-distribution matcher remains code-compatible only for
+  historical run reproduction. It is bypassed when empirical calibration is
+  enabled and must not be described as the current default.
 - The historical phrase "complement of the minimum Bayes factor" refers to converting complementary tail evidence into positive likelihood/Bayes support while preserving a neutral floor. Confirm the exact implementation in `code/bayes_factors.py` before describing equations.
 - Node and edge posteriors are independent Bernoulli updates. Every protein and every edge begins at probability 0.5 by default, and posterior values are not normalized across candidates or pairs. The default primary path score is the geometric mean of constituent edge posteriors. An explicit optional mode also includes internal-node posteriors in the geometric mean; both are length-normalized ranking statistics, not calibrated probabilities that an entire pathway is correct.
 
@@ -139,6 +151,29 @@ The IMCD basal and dDAVP streams use the same binary rule independently: two pro
 Every primary edge dataset also has an independent continuous-negative switch. It retains measured low factors below 1 and fills eligible no-record pairs with the numerical floor; pairs whose absence cannot be scored fairly stay neutral. It is implemented for internal, incrementally cached, calibration, and external-target edges. Scaffold closure remains positive-only.
 
 Localization compatibility/adjacency matrices for mpkCCD, HPA, and COMPARTMENTS are stored with the archived data so a scientist can validate every assumed compartment relationship. The older mouse-knowledge COMPARTMENTS input remains in the dedicated colocalization/AlphaFold candidate-filtering workflow. The current V1 default edge model instead uses one integrated COMPARTMENTS stream consolidated across mouse, human, and rat; it replaces standalone HPA by default because the human integrated channel already incorporates HPA. See `docs/compartments_cross_species_evidence.md`. Experimental PPI tiers assembled from STRING, BioGRID, and IntAct support the prior-knowledge filter used before structural prediction.
+
+The current bulk AlphaPulldown campaign is V1 evidence generation, not a V2
+frontier search. Its eligible set is the intersection of positive mpkCCD,
+integrated COMPARTMENTS, IMCD basal, and IMCD dDAVP support after excluding
+BioGRID direct/contact pairs. Run the 732 co-complex-only pairs first and the
+remaining 6,164 pairs second. V1 owns all manifests, compact predictions,
+scores, and evidence tables. Reusing the completed monomer feature/MSA folder
+from the sibling V2 checkout is compute-cache reuse only and must not import
+V2 search semantics or write to the V2 pair cache. Missing predictions remain
+unobserved/neutral. Proteins absent from the V2 run FASTA are resolved through
+the audited V1 protein-index/UniProt table and receive targeted feature/MSA jobs
+inside the V1 screen directory. Existing V2 feature objects are symlinked into
+that V1-owned combined directory; the V2 source cache is never modified. See
+`docs/v1_colocalized_biogrid_alphapulldown.md`.
+
+Completed V1 AlphaPulldown bundles are installed with
+`code/alphafold/import_v1_alphapulldown_evidence.py`. The current catalog has
+6,805 measured unordered pairs (730 phase 1 and 6,075 phase 2). It is a
+default-enabled fixed-catalog edge stream: observed low ipTM results may lower
+the odds, but the 91 missing computations and all unscreened pairs remain BF 1.
+The BF is the frozen heuristic odds(ipTM)/odds(0.6), clipped to [0.1, 10], not
+a calibrated interaction probability. Per-pair GUI traceback reports ipTM,
+screen phase, selection basis, pair ID, and the imported audit record.
 
 The BioGRID 5.0.261 audit is built by
 `code/experimental_ppi/biogrid_ppi_counts.py` and documented in

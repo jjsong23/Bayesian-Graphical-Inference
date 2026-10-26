@@ -63,8 +63,8 @@ server**.
    collecting-duct streams (proteome and RNA for CCD, OMCD, and IMCD). Each enabled
    factor can be raised to a nonnegative user weight. Every protein is an
    independent present-versus-absent hypothesis with prior probability 0.5 by
-   default. Weighted Bayes factors update its odds without normalization across
-   proteins. Proteins whose posterior is strictly above the selected node
+   default. Weighted class-conditional likelihood ratios update its odds
+   without normalization across proteins. Proteins whose posterior is strictly above the selected node
    cutoff (default 0.5) are retained; curated second messengers can be included
    separately. Candidates outside the validated 891-node seed are inserted
    after incremental edge characterization. Every node dataset also has its
@@ -75,24 +75,25 @@ server**.
    remain neutral in that stream.
    The six collecting-duct streams and two selective PKA-subunit-KO streams are
    enabled in the Version 1 profile. The 891-node edge catalog remains the immutable
-   seed; the revised site-centric double-KO stream expands the current default
-   to 1,051 proteins, or 1,071 nodes with curated messengers.
+   seed; the current empirical-likelihood profile selects 2,869 proteins, or
+   2,889 nodes with curated messengers, for the present evidence archive.
 2. **Characterize edges.** Enable any subset of mpkCCD localization,
-   KinasePredictor, STRING, HPA, presence-only IMCD basal/dDAVP compartment
-   co-detection, OmniPath, STITCH, and the optional derived
+   KinasePredictor, STRING, integrated cross-species COMPARTMENTS,
+   presence-only IMCD basal/dDAVP compartment co-detection, OmniPath, STITCH,
+   BioGRID, AlphaPulldown, and the derived
    scaffold-closure stream. Edge prior odds are multiplied by
-   each sparse Bayes factor raised to its selected weight. HPA primary and HPA
-   high-confidence are alternatives and cannot be enabled together. Each edge
-   dataset has an independent normalization control. An optional global rule
+   each sparse likelihood ratio raised to its selected weight. The two legacy
+   standalone HPA sensitivity streams and integrated COMPARTMENTS are mutually
+   exclusive. Each edge dataset has an independent normalization control. An optional global rule
    assigns a configurable BF below 1 to a pair that is eligible for an enabled
    source but has no non-neutral relationship in that source. Pairs that the
    source could not fairly evaluate for absence remain neutral. The option is
    off by default and its default penalty is BF 0.5. Scaffold closure is positive-only and enabled in the Version 1
    profile; it reuses the selected pre-closure graph rather than adding an
    independent experiment.
-   The Version 1 default enables every registered edge stream except HPA
-   high-confidence. HPA primary remains enabled, preserving the required
-   mutual exclusion between the two HPA alternatives.
+   The Version 1 default enables integrated COMPARTMENTS and every compatible
+   edge stream; standalone HPA primary/high-confidence remain off to avoid
+   recounting the HPA channel already present in COMPARTMENTS.
 3. **Find paths.** Choose a selected start node and any mouse protein target.
    Targets outside the node universe are characterized from the same evidence
    streams and appended as an undirected row/column. Paths are ranked by the
@@ -240,6 +241,18 @@ Because the broad STRING combined score produced much larger factors than the
 other default edge streams, STRING uses a default power weight of 0.25. Thus its
 posterior contribution is `BF_STRING^0.25`; the raw score and BF remain visible
 for audit. See `docs/string_evidence_stabilization.md` for the empirical choice.
+
+Node and edge integration default to empirical class-conditional likelihoods.
+Each observed source datum is calibrated against a biologically compatible H1
+and H0 reference set, and the update uses `P(Data|H1) / P(Data|H0)`. Physical
+proximity/binding, directed phosphorylation, regulatory signaling, functional
+association, messenger binding, cellular presence, kinase activity, and
+transient phosphoregulation have separate reference definitions. Every run
+saves the smoothed H1/H0 distributions, bin counts, bounds, and fallback state.
+Missing/out-of-scope data remain neutral; a stream with too few independent
+references keeps its source likelihood. See
+`docs/empirical_likelihood_models.md`. The older q90 BF matcher remains only
+for reproducing historical configurations.
 
 Scaffold-mediated closure is calculated in a separate second pass. A protein is
 an anchor to an `adaptor_scaffold` node only when its pre-closure edge

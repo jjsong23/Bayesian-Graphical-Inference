@@ -1,0 +1,16 @@
+{
+  "phospho_workbook": "data/phospho_data_original.xlsx",
+  "ranked_paths": "results/gui_runs/Prkaca_to_Aqp2_top100/ranked_paths.tsv",
+  "ko_workbooks": [
+    "data/pka_ko/PKA-KO_database_raw.xlsx",
+    "data/node_selection/pka_subunit_ko/raw/Phosphopeptides-PKAsKO.xlsx"
+  ],
+  "maximum_states": 6,
+  "path_cutoffs": [1, 5, 20, 100],
+  "ridge": 0.1,
+  "starts": 2,
+  "max_nfev": 2500,
+  "seed": 20261015,
+  "maximum_edge_ablations": 10,
+  "maximum_repairs": 8
+}

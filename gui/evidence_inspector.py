@@ -15,12 +15,15 @@ import pandas as pd
 from workflow_engine import (
     BIOGRID_PHYSICAL_HANDLER,
     FACTOR_EPSILON,
+    FIXED_CATALOG_EDGE_HANDLERS,
     PROJECT_ROOT,
     UNIVERSE_RELATIVE,
     _canonical_undirected_pair,
     _edge_incremental_scale,
     _raw_seed_edge_factor_table,
     _stream_multiplier,
+    apply_empirical_likelihood_model,
+    apply_bayes_factor_distribution_normalization,
     edge_stream_eligibility_matrix,
     evidence_factor_distribution_summary,
     load_registry,
@@ -132,13 +135,54 @@ def _stream_distribution_catalog(
     summary_path = run / "analysis_summary.json"
     if not summary_path.is_file():
         return {}
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # Historical runs and lightweight mocked ledgers may not include the
+        # newer stream-analysis metadata. Their factors remain untransformed.
+        return {}
     streams = summary.get(section, {}).get("active_streams", [])
     return {
         str(stream["id"]): stream["factor_distribution"]
         for stream in streams
         if stream.get("factor_distribution")
     }
+
+
+def _stream_analysis_catalog(
+    run: Path,
+    section: str,
+) -> dict[str, dict[str, Any]]:
+    summary_path = run / "analysis_summary.json"
+    if not summary_path.is_file():
+        return {}
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        str(stream["id"]): stream
+        for stream in summary.get(section, {}).get("active_streams", [])
+        if stream.get("id")
+    }
+
+
+def _distribution_normalization_metadata(
+    stream_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    metadata = dict((stream_summary or {}).get("distribution_normalization") or {})
+    metadata.setdefault("enabled", False)
+    metadata.setdefault("applied_exponent", 1.0)
+    return metadata
+
+
+def _empirical_likelihood_metadata(
+    stream_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    metadata = dict((stream_summary or {}).get("empirical_likelihood") or {})
+    metadata.setdefault("enabled", False)
+    metadata.setdefault("applied", False)
+    return metadata
 
 
 def _factor_position_from_summary(
@@ -254,6 +298,7 @@ def inspect_node_evidence(
     prior = float(config["node_integration"]["prior_probability"])
     prior_log_odds = math.log(prior / (1.0 - prior))
     reconstructed_log_odds = prior_log_odds
+    stream_analysis = _stream_analysis_catalog(run, "node_selection")
     streams: list[dict[str, Any]] = []
     for stream_id, definition in definitions.items():
         state = _run_stream_state(config, "node_streams", definition)
@@ -263,6 +308,22 @@ def inspect_node_evidence(
         source_factor = _clean(row.get(prefix + "factor")) if enabled else None
         source_bayes_factor = (
             _clean(row.get(prefix + "source_bayes_factor")) if enabled else None
+        )
+        pre_distribution_bayes_factor = (
+            _clean(
+                row.get(
+                    prefix + "pre_distribution_normalization_bayes_factor",
+                    bayes_factor,
+                )
+            )
+            if enabled
+            else None
+        )
+        distribution_normalization = _distribution_normalization_metadata(
+            stream_analysis.get(stream_id)
+        )
+        empirical_likelihood = _empirical_likelihood_metadata(
+            stream_analysis.get(stream_id)
         )
         weighted_log = (
             _clean(row.get(prefix + "weighted_log_bayes_factor")) if enabled else None
@@ -320,7 +381,15 @@ def inspect_node_evidence(
                 "raw_value_label": raw_label,
                 "source_factor": source_factor,
                 "source_bayes_factor_before_absence_rule": source_bayes_factor,
+                "pre_distribution_normalization_bayes_factor": (
+                    pre_distribution_bayes_factor
+                ),
                 "applied_bayes_factor": bayes_factor,
+                "distribution_normalization": distribution_normalization,
+                "empirical_likelihood": empirical_likelihood,
+                "likelihood_hypothesis_class": (stream_analysis.get(stream_id) or {}).get(
+                    "likelihood_hypothesis_class"
+                ),
                 "weighted_log2_odds_contribution": weighted_log / LOG_2,
                 "negative_evidence_eligible": eligible,
                 "observed": observed,
@@ -430,6 +499,7 @@ def _factor_for_pair(
     multiplier = _stream_multiplier(state)
     if (
         definition["normalization"]["handler"] == BIOGRID_PHYSICAL_HANDLER
+        or definition["normalization"]["handler"] in FIXED_CATALOG_EDGE_HANDLERS
         or (pair[0] in seed_set and pair[1] in seed_set)
     ):
         table = _raw_seed_edge_factor_table(
@@ -518,6 +588,7 @@ def inspect_edge_evidence(
     distribution_catalog = _stream_distribution_catalog(
         run, "edge_characterization"
     )
+    stream_analysis = _stream_analysis_catalog(run, "edge_characterization")
     streams: list[dict[str, Any]] = []
     for stream_id, definition in definitions.items():
         state = _run_stream_state(config, "edge_streams", definition)
@@ -557,9 +628,40 @@ def inspect_edge_evidence(
                 elif penalize_unsupported:
                     factor = unsupported_factor
                     penalty = True
+        pre_distribution_factor = factor
+        distribution_normalization = _distribution_normalization_metadata(
+            stream_analysis.get(stream_id)
+        )
+        empirical_likelihood = _empirical_likelihood_metadata(
+            stream_analysis.get(stream_id)
+        )
         weighted_log = 0.0
         if enabled:
-            factor = float(factor if factor is not None else 1.0)
+            pre_distribution_factor = float(
+                pre_distribution_factor
+                if pre_distribution_factor is not None
+                else 1.0
+            )
+            factor = (
+                apply_empirical_likelihood_model(
+                    pre_distribution_factor,
+                    empirical_likelihood,
+                    evidence_observed=(
+                        found
+                        or penalty
+                        or not math.isclose(
+                            pre_distribution_factor, 1.0, rel_tol=0.0, abs_tol=1e-12
+                        )
+                    ),
+                )
+                if empirical_likelihood.get("enabled")
+                else float(
+                    apply_bayes_factor_distribution_normalization(
+                        pre_distribution_factor,
+                        float(distribution_normalization["applied_exponent"]),
+                    )
+                )
+            )
             weighted_log = float(state["weight"]) * math.log(factor)
             reconstructed_log_odds += weighted_log
         distribution = distribution_catalog.get(stream_id) if enabled else None
@@ -572,10 +674,22 @@ def inspect_edge_evidence(
                     run,
                     stream_id,
                     pair,
-                    applied_bayes_factor=factor,
+                    applied_bayes_factor=pre_distribution_factor,
                     weight=float(state["weight"]),
                     multiplier=_stream_multiplier(state),
                 )
+                if provenance_trace and distribution_normalization.get("enabled"):
+                    derivation = provenance_trace.setdefault("score_derivation", {})
+                    derivation["pre_distribution_normalization_bayes_factor"] = (
+                        pre_distribution_factor
+                    )
+                    derivation["distribution_normalization_exponent"] = float(
+                        distribution_normalization["applied_exponent"]
+                    )
+                    derivation["distribution_normalized_bayes_factor"] = factor
+                    derivation["weighted_effective_bayes_factor"] = (
+                        factor ** float(state["weight"])
+                    )
             except Exception as exc:  # provenance must never break BF reconstruction
                 provenance_trace = {
                     "database": definition["label"],
@@ -631,7 +745,15 @@ def inspect_edge_evidence(
                 "tq_multiplier": _clean(state.get("tq_multiplier")),
                 "normalization_control": definition.get("normalization", {}).get("control_label"),
                 "normalization_reference": definition.get("normalization", {}).get("reference"),
+                "pre_distribution_normalization_bayes_factor": (
+                    pre_distribution_factor
+                ),
                 "applied_bayes_factor": factor,
+                "distribution_normalization": distribution_normalization,
+                "empirical_likelihood": empirical_likelihood,
+                "likelihood_hypothesis_class": (stream_analysis.get(stream_id) or {}).get(
+                    "likelihood_hypothesis_class"
+                ),
                 "weighted_log2_odds_contribution": weighted_log / LOG_2,
                 "source_record_retained": found if enabled else None,
                 "negative_evidence_eligible": eligible,
@@ -657,7 +779,10 @@ def inspect_edge_evidence(
         "reconciliation_absolute_difference": abs(stored_probability - reconstructed),
         "supported_above_output_cutoff": stored_probability > cutoff,
         "output_probability_cutoff_exclusive": cutoff,
-        "equation": "posterior log-odds = prior log-odds + sum(weight x ln(BF))",
+        "equation": (
+            "posterior log-odds = prior log-odds + "
+            "sum(weight x ln(applied P(Data|H1)/P(Data|H0)))"
+        ),
         "streams": streams,
     }
 
@@ -731,6 +856,7 @@ def inspect_edge_evidence_batch(
     distribution_catalog = _stream_distribution_catalog(
         run, "edge_characterization"
     )
+    stream_analysis = _stream_analysis_catalog(run, "edge_characterization")
 
     prepared: dict[str, dict[str, Any]] = {}
     for stream_id, definition in definitions.items():
@@ -760,6 +886,8 @@ def inspect_edge_evidence_batch(
                 pair
                 for pair in wanted_pairs
                 if definition["normalization"]["handler"] == BIOGRID_PHYSICAL_HANDLER
+                or definition["normalization"]["handler"]
+                in FIXED_CATALOG_EDGE_HANDLERS
                 or (pair[0] in seed_set and pair[1] in seed_set)
             }
             incremental_pairs = wanted_pairs.difference(raw_pairs)
@@ -817,6 +945,12 @@ def inspect_edge_evidence_batch(
             "factor_map": factor_map,
             "eligibility_map": eligibility_map,
             "continuous_negative": continuous_negative,
+            "distribution_normalization": _distribution_normalization_metadata(
+                stream_analysis.get(stream_id)
+            ),
+            "empirical_likelihood": _empirical_likelihood_metadata(
+                stream_analysis.get(stream_id)
+            ),
         }
 
     results: list[dict[str, Any]] = []
@@ -834,6 +968,8 @@ def inspect_edge_evidence_batch(
             eligible: bool | None = None
             penalty = False
             continuous_negative = bool(item["continuous_negative"])
+            distribution_normalization = item["distribution_normalization"]
+            empirical_likelihood = item["empirical_likelihood"]
             if enabled:
                 found = pair in item["factor_map"]
                 factor = float(item["factor_map"].get(pair, 1.0))
@@ -850,9 +986,37 @@ def inspect_edge_evidence_batch(
                     elif penalize_unsupported:
                         factor = unsupported_factor
                         penalty = True
+            pre_distribution_factor = factor
             weighted_log = 0.0
             if enabled:
-                factor = float(factor if factor is not None else 1.0)
+                pre_distribution_factor = float(
+                    pre_distribution_factor
+                    if pre_distribution_factor is not None
+                    else 1.0
+                )
+                factor = (
+                    apply_empirical_likelihood_model(
+                        pre_distribution_factor,
+                        empirical_likelihood,
+                        evidence_observed=(
+                            found
+                            or penalty
+                            or not math.isclose(
+                                pre_distribution_factor,
+                                1.0,
+                                rel_tol=0.0,
+                                abs_tol=1e-12,
+                            )
+                        ),
+                    )
+                    if empirical_likelihood.get("enabled")
+                    else float(
+                        apply_bayes_factor_distribution_normalization(
+                            pre_distribution_factor,
+                            float(distribution_normalization["applied_exponent"]),
+                        )
+                    )
+                )
                 weighted_log = float(state["weight"]) * math.log(factor)
                 reconstructed_log_odds += weighted_log
             distribution = distribution_catalog.get(stream_id) if enabled else None
@@ -900,7 +1064,15 @@ def inspect_edge_evidence_batch(
                     "tq_multiplier": _clean(state.get("tq_multiplier")),
                     "normalization_control": definition.get("normalization", {}).get("control_label"),
                     "normalization_reference": definition.get("normalization", {}).get("reference"),
+                    "pre_distribution_normalization_bayes_factor": (
+                        pre_distribution_factor
+                    ),
                     "applied_bayes_factor": factor,
+                    "distribution_normalization": distribution_normalization,
+                    "empirical_likelihood": empirical_likelihood,
+                    "likelihood_hypothesis_class": (
+                        stream_analysis.get(stream_id) or {}
+                    ).get("likelihood_hypothesis_class"),
                     "weighted_log2_odds_contribution": weighted_log / LOG_2,
                     "source_record_retained": found if enabled else None,
                     "negative_evidence_eligible": eligible,
@@ -927,7 +1099,10 @@ def inspect_edge_evidence_batch(
                 ),
                 "supported_above_output_cutoff": stored_probability > cutoff,
                 "output_probability_cutoff_exclusive": cutoff,
-                "equation": "posterior log-odds = prior log-odds + sum(weight x ln(BF))",
+                "equation": (
+                    "posterior log-odds = prior log-odds + "
+                    "sum(weight x ln(applied P(Data|H1)/P(Data|H0)))"
+                ),
                 "streams": streams,
             }
         )

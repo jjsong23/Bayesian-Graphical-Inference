@@ -2,6 +2,7 @@
 /data/
 /results/
 /outputs/
+/runtime/
 /*.xlsx
 /*.inspect.ndjson
 
