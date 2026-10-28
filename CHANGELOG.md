@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-28 — Literature-curated H1/H0 edge distributions
+
+- Added a versioned, reproducible calibration catalog from the four supplied
+  evidence-curation workbooks, including the retained source rows and a builder.
+- Required collecting-duct evidence for physical/localization and acute
+  regulatory profiles, while permitting context-general direct biochemical
+  evidence for KinasePredictor and messenger binding.
+- Calibrated STRING and OmniPath as acute regulatory signaling; excluded
+  transcription-mediated regulation from the acute reference set.
+- Prioritized explicit tested negatives and clearly labeled generated
+  endpoint-matched H0 pairs as unlabeled background rather than proven absence.
+- Kept derived closure source-native to prevent a second count of its physical
+  anchors; sparse messenger references fall back to the original source factor.
+- Added the context policy and explicit/background H0 counts to the GUI evidence
+  inspector and saved run metadata.
+
 ## 2026-10-26 — Empirical class-conditional evidence likelihoods
 
 - Replaced cross-stream BF-magnitude matching in new configurations with

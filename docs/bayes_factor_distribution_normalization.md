@@ -9,7 +9,10 @@ is a faithful transformation of the source score, it can make one stream
 numerically dominate the posterior.
 
 V1 therefore provides optional, separate distribution-matching controls for
-node and edge evidence. They are disabled by default.
+node and edge evidence. In each GUI section, choose **Match Bayes-factor
+distributions** from **Evidence calibration method**. Empirical likelihood,
+distribution matching, and source-native factors are mutually exclusive;
+empirical likelihood is the default.
 
 ## Transformation
 

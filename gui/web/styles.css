@@ -116,8 +116,10 @@ input:disabled, select:disabled, textarea:disabled { opacity: .45; background: #
 .parameter-grid label:not(.check-field) { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .compact-grid { grid-template-columns: 1fr 165px; align-items: end; }
 .span-two { grid-column: span 1; }
+.span-full { grid-column: 1 / -1; }
 .check-field { display: flex; align-items: center; gap: 9px; color: var(--ink); font-size: 12px; }
 .check-field input { width: 16px; height: 16px; accent-color: var(--green); }
+.calibration-setting-inactive { opacity: .45; }
 .scientific-note { margin: 12px 0 0 42px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .path-rules { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
 .ontology-selector { min-width: 0; position: relative; margin: 18px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(251, 251, 248, .72); transition: opacity .16s ease; }

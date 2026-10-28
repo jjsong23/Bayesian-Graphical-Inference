@@ -739,6 +739,14 @@ function renderEvidenceInspection(payload) {
       }
       if (stream.empirical_likelihood?.enabled) {
         const model = stream.empirical_likelihood;
+        if (model.reference_source === "positive_cases_20261028") {
+          const context = (model.context_policy || []).join(", ").replaceAll("_", " ");
+          parts.push(
+            `Curated reference: Positive Cases (2026-10-28); context ${context || "profile-specific"}; ` +
+            `${formatInt(model.explicit_h0_count || 0)} explicit tested H0 and ` +
+            `${formatInt(model.background_h0_count || 0)} endpoint-matched background H0.`
+          );
+        }
         if (model.applied) {
           parts.push(
             `Empirical ${stream.likelihood_hypothesis_class || model.hypothesis_class || "hypothesis"} model: ` +
@@ -1584,9 +1592,12 @@ function populateControls() {
   $("unobserved-bf").value = node.unobserved_bayes_factor;
   $("unobserved-bf").disabled = !node.penalize_unobserved;
   $("continuous-node-bf-floor").value = node.continuous_bayes_factor_floor;
-  $("empirical-node-likelihoods").checked = node.empirical_likelihood_enabled;
+  $("node-evidence-calibration-mode").value = node.empirical_likelihood_enabled
+    ? "empirical"
+    : node.normalize_bayes_factor_distributions ? "distribution" : "source";
   $("node-likelihood-smoothing").value = node.empirical_likelihood_smoothing;
   $("node-likelihood-minimum").value = node.empirical_likelihood_minimum_reference_count;
+  $("node-distribution-target").value = node.distribution_normalization_target_bayes_factor;
   $("node-prior").value = node.prior_probability;
   $("node-cutoff").value = node.output_probability_cutoff;
   const edge = state.defaults.edge_integration;
@@ -1594,9 +1605,12 @@ function populateControls() {
   $("unsupported-edge-bf").value = edge.unsupported_bayes_factor;
   $("unsupported-edge-bf").disabled = !edge.penalize_unsupported;
   $("continuous-edge-bf-floor").value = edge.continuous_bayes_factor_floor;
-  $("empirical-edge-likelihoods").checked = edge.empirical_likelihood_enabled;
+  $("edge-evidence-calibration-mode").value = edge.empirical_likelihood_enabled
+    ? "empirical"
+    : edge.normalize_bayes_factor_distributions ? "distribution" : "source";
   $("edge-likelihood-smoothing").value = edge.empirical_likelihood_smoothing;
   $("edge-likelihood-minimum").value = edge.empirical_likelihood_minimum_reference_count;
+  $("edge-distribution-target").value = edge.distribution_normalization_target_bayes_factor;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
   const graphStatistics = state.defaults.graph_statistics;
@@ -1628,6 +1642,8 @@ function populateControls() {
   $("temporal-p-adjust").value = temporal.p_adjust_method;
   $("temporal-min-scored").value = temporal.minimum_scored_nodes;
   setCalibrationControls(calibration.enabled);
+  setEvidenceCalibrationControls("node");
+  setEvidenceCalibrationControls("edge");
   setGraphStatisticsControls(graphStatistics.enabled);
   setPathControls(path.enabled);
 }
@@ -1655,6 +1671,8 @@ function collectStreams(group) {
 }
 
 function collectConfiguration() {
+  const nodeCalibrationMode = $("node-evidence-calibration-mode").value;
+  const edgeCalibrationMode = $("edge-evidence-calibration-mode").value;
   return {
     calibration: {
       enabled: $("calibration-enabled").checked,
@@ -1670,8 +1688,9 @@ function collectConfiguration() {
       unobserved_bayes_factor: Number($("unobserved-bf").value),
       continuous_negative_evidence: false,
       continuous_bayes_factor_floor: Number($("continuous-node-bf-floor").value),
-      normalize_bayes_factor_distributions: false,
-      empirical_likelihood_enabled: $("empirical-node-likelihoods").checked,
+      normalize_bayes_factor_distributions: nodeCalibrationMode === "distribution",
+      distribution_normalization_target_bayes_factor: Number($("node-distribution-target").value),
+      empirical_likelihood_enabled: nodeCalibrationMode === "empirical",
       empirical_likelihood_smoothing: Number($("node-likelihood-smoothing").value),
       empirical_likelihood_minimum_reference_count: Number($("node-likelihood-minimum").value),
       prior_probability: Number($("node-prior").value),
@@ -1683,8 +1702,9 @@ function collectConfiguration() {
       unsupported_bayes_factor: Number($("unsupported-edge-bf").value),
       continuous_negative_evidence: false,
       continuous_bayes_factor_floor: Number($("continuous-edge-bf-floor").value),
-      normalize_bayes_factor_distributions: false,
-      empirical_likelihood_enabled: $("empirical-edge-likelihoods").checked,
+      normalize_bayes_factor_distributions: edgeCalibrationMode === "distribution",
+      distribution_normalization_target_bayes_factor: Number($("edge-distribution-target").value),
+      empirical_likelihood_enabled: edgeCalibrationMode === "empirical",
       empirical_likelihood_smoothing: Number($("edge-likelihood-smoothing").value),
       empirical_likelihood_minimum_reference_count: Number($("edge-likelihood-minimum").value),
       prior_probability: Number($("edge-prior").value),
@@ -1734,6 +1754,22 @@ function setCalibrationControls(enabled) {
     const card = control.closest(".stream-card");
     control.disabled = !enabled || !card.querySelector(".stream-toggle").checked;
   });
+}
+
+function setEvidenceCalibrationControls(group) {
+  const mode = $(`${group}-evidence-calibration-mode`).value;
+  const empirical = mode === "empirical";
+  const distribution = mode === "distribution";
+  for (const suffix of ["likelihood-smoothing", "likelihood-minimum"]) {
+    const input = $(`${group}-${suffix}`);
+    const field = $(`${group}-${suffix}-field`);
+    input.disabled = !empirical;
+    field.classList.toggle("calibration-setting-inactive", !empirical);
+  }
+  const target = $(`${group}-distribution-target`);
+  const targetField = $(`${group}-distribution-target-field`);
+  target.disabled = !distribution;
+  targetField.classList.toggle("calibration-setting-inactive", !distribution);
 }
 
 function setGraphStatisticsControls(enabled) {
@@ -2327,6 +2363,8 @@ $("literature-key-visibility").addEventListener("click", () => {
 });
 $("reset-button").addEventListener("click", () => { populateControls(); showPanel("empty-state"); });
 $("calibration-enabled").addEventListener("change", (event) => setCalibrationControls(event.target.checked));
+$("node-evidence-calibration-mode").addEventListener("change", () => setEvidenceCalibrationControls("node"));
+$("edge-evidence-calibration-mode").addEventListener("change", () => setEvidenceCalibrationControls("edge"));
 $("graph-statistics-enabled").addEventListener("change", (event) => setGraphStatisticsControls(event.target.checked));
 $("path-enabled").addEventListener("change", (event) => setPathControls(event.target.checked));
 $("ontology-directionality").addEventListener("change", () => setDirectionalityControls($("path-enabled").checked));

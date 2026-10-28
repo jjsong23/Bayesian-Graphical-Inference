@@ -413,10 +413,12 @@ class WorkflowEngineTests(unittest.TestCase):
             "edge-calibration-parameters-body",
             "evidence-stream-distribution-chart",
             "evidence-stream-distribution-summary",
-            "empirical-node-likelihoods",
+            "node-evidence-calibration-mode",
             "node-likelihood-smoothing",
-            "empirical-edge-likelihoods",
+            "node-distribution-target",
+            "edge-evidence-calibration-mode",
             "edge-likelihood-smoothing",
+            "edge-distribution-target",
         ):
             self.assertIn(f'id="{control}"', html)
         self.assertIn("function renderCalibrationParameters", javascript)
@@ -424,6 +426,8 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("distribution_position", javascript)
         self.assertIn("pre_distribution_normalization_bayes_factor", javascript)
         self.assertIn("P(Data | H1) and P(Data | H0)", javascript)
+        self.assertIn('nodeCalibrationMode === "distribution"', javascript)
+        self.assertIn('edgeCalibrationMode === "empirical"', javascript)
 
     def test_evidence_factor_distribution_is_neutral_centered_and_compact(self) -> None:
         summary = evidence_factor_distribution_summary(

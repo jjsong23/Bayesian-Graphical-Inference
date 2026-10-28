@@ -235,6 +235,9 @@ BF_DISTRIBUTION_NORMALIZATION_QUANTILE = 0.90
 BF_DISTRIBUTION_NORMALIZATION_EXPONENT_BOUNDS = (0.1, 10.0)
 EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS = (0.05, 20.0)
 EMPIRICAL_LIKELIHOOD_MAX_BINS = 12
+CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE = Path(
+    "gui/calibration/positive_cases_20261028/curated_edge_likelihood_training.tsv"
+)
 EDGE_LIKELIHOOD_PROFILES = {
     "mpkccd_localization": "physical_proximity",
     "compartments_localization": "physical_proximity",
@@ -246,7 +249,10 @@ EDGE_LIKELIHOOD_PROFILES = {
     "biogrid_physical_interaction": "physical_binding",
     "kinase_predictor": "directed_phosphorylation",
     "omnipath_core": "regulatory_signaling",
-    "string_v12": "functional_association",
+    # The curated acute-regulatory profile also calibrates STRING.  In this
+    # workflow STRING is evidence about an acute signaling edge, not a generic
+    # same-process association.
+    "string_v12": "regulatory_signaling",
     "stitch_secondary_messenger": "messenger_binding",
     "scaffold_triadic_closure": "physical_binding",
     "biogrid_shared_partner_closure": "physical_binding",
@@ -1362,6 +1368,134 @@ def apply_empirical_likelihood_model(
     )
     position = int(np.searchsorted(numeric_edges[1:-1], math.log(float(value)), side="right"))
     return float(ratios[position])
+
+
+def apply_empirical_likelihood_model_array(
+    values: np.ndarray | pd.Series,
+    metadata: dict[str, Any] | None,
+    *,
+    evidence_observed: np.ndarray | pd.Series,
+) -> np.ndarray:
+    """Apply one saved class-conditional model to an array of observations."""
+    factors = np.asarray(values, dtype=float)
+    observed = np.asarray(evidence_observed, dtype=bool)
+    if factors.shape != observed.shape:
+        raise ValueError("empirical likelihood values and observation mask must match")
+    if (~np.isfinite(factors) | (factors <= 0)).any():
+        raise ValueError("empirical likelihood application requires positive factors")
+    model = metadata or {}
+    calibrated = factors.copy()
+    calibrated[~observed] = 1.0
+    if not model.get("applied"):
+        return calibrated
+    edges = model.get("bin_edges_log_bayes_factor") or []
+    ratios = model.get("likelihood_ratio_by_bin") or []
+    if len(edges) != len(ratios) + 1 or not ratios:
+        return calibrated
+    numeric_edges = np.asarray(
+        [
+            -np.inf
+            if item is None and index == 0
+            else np.inf
+            if item is None
+            else float(item)
+            for index, item in enumerate(edges)
+        ],
+        dtype=float,
+    )
+    positions = np.searchsorted(
+        numeric_edges[1:-1], np.log(factors), side="right"
+    )
+    ratio_values = np.asarray(ratios, dtype=float)
+    calibrated[observed] = ratio_values[positions[observed]]
+    return calibrated
+
+
+def curated_edge_likelihood_models(
+    project: Path,
+    *,
+    smoothing: float,
+    minimum_reference_count: int,
+    enabled: bool = True,
+) -> dict[str, dict[str, Any]]:
+    """Fit stream models from the versioned 2026-10-28 curation catalog.
+
+    The table stores the source-scale BF for every curated H1/H0 reference.
+    Physical/localization and acute-regulatory profiles require collecting-duct
+    evidence; kinase-substrate and messenger-binding profiles may use direct
+    biochemical evidence from other model systems.
+    """
+    path = project / CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE
+    if not path.exists():
+        return {}
+    training = pd.read_csv(path, sep="\t")
+    required = {
+        "stream_id",
+        "profile",
+        "class_label",
+        "context_policy",
+        "negative_kind",
+        "source_bayes_factor",
+    }
+    missing = sorted(required.difference(training.columns))
+    if missing:
+        raise ValueError(
+            f"curated edge likelihood catalog is missing columns: {', '.join(missing)}"
+        )
+    models: dict[str, dict[str, Any]] = {}
+    for stream_id, group in training.groupby("stream_id", sort=True):
+        values = pd.to_numeric(group["source_bayes_factor"], errors="raise").to_numpy(
+            float
+        )
+        labels = group["class_label"].astype(str)
+        h1 = labels.str.startswith("H1").to_numpy(bool)
+        h0 = labels.str.startswith("H0").to_numpy(bool)
+        profiles = sorted(set(group["profile"].astype(str)))
+        if len(profiles) != 1:
+            raise ValueError(
+                f"curated stream {stream_id} spans multiple profiles: {profiles}"
+            )
+        context_policies = sorted(set(group["context_policy"].astype(str)))
+        context_description = (
+            "Collecting-duct specificity required"
+            if context_policies == ["collecting_duct_specific"]
+            else "Direct biochemical evidence accepted across model contexts"
+        )
+        _, model = empirical_likelihood_calibration(
+            values,
+            h1_reference=h1,
+            h0_reference=h0,
+            evidence_observed=np.ones(len(values), dtype=bool),
+            enabled=enabled,
+            hypothesis_class=profiles[0],
+            anchor_description=(
+                "Primary-literature curation dated 2026-10-28. "
+                f"{context_description}. Explicit tested nulls are preferred; "
+                "otherwise H0 is deterministic endpoint-matched unlabeled background."
+            ),
+            smoothing=smoothing,
+            minimum_reference_count=minimum_reference_count,
+        )
+        model.update(
+            {
+                "reference_source": "positive_cases_20261028",
+                "reference_file": str(
+                    CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE
+                ).replace("\\", "/"),
+                "context_policy": context_policies,
+                "explicit_h0_count": int(
+                    group["negative_kind"].eq("explicit_tested_null").sum()
+                ),
+                "background_h0_count": int(
+                    group["negative_kind"]
+                    .eq("matched_unlabeled_background")
+                    .sum()
+                ),
+                "training_reference_count": int(len(group)),
+            }
+        )
+        models[str(stream_id)] = model
+    return models
 
 
 def complement_minimum_likelihood(
@@ -4386,12 +4520,20 @@ def combine_edge_factors(
             if left in incremental_set or right in incremental_set
         ]
     stream_defs = {stream["id"]: stream for stream in registry["edge_streams"]}
+    curated_likelihood_models = curated_edge_likelihood_models(
+        project,
+        smoothing=empirical_smoothing,
+        minimum_reference_count=empirical_minimum,
+        enabled=empirical_enabled,
+    ) if empirical_enabled else {}
+    # Retain the historical graph-derived references only as a compatibility
+    # fallback for installations that have not downloaded the curated catalog.
     likelihood_references = edge_likelihood_reference_catalog(
         project,
         graph_symbols,
         graph_metadata=graph_metadata,
         stream_defs=stream_defs,
-    ) if empirical_enabled else {}
+    ) if empirical_enabled and not curated_likelihood_models else {}
     active_streams: list[dict[str, Any]] = []
     total_penalty_applications = 0
     derived_streams: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
@@ -4505,27 +4647,46 @@ def combine_edge_factors(
             np.clip(raw_stream_log_bf[unique_pair_indices], -700.0, 700.0)
         )
         profile = EDGE_LIKELIHOOD_PROFILES.get(stream_id, "functional_association")
-        reference = likelihood_references.get("_by_stream", {}).get(
-            stream_id, likelihood_references.get(profile, {})
-        )
         evidence_event = (
             np.abs(pre_distribution_factors - 1.0) > FACTOR_EPSILON
         )
-        empirical_factors, empirical_likelihood = empirical_likelihood_calibration(
-            pre_distribution_factors,
-            h1_reference=np.asarray(
-                reference.get("h1", np.zeros_like(log_odds, dtype=bool))
-            )[unique_pair_indices],
-            h0_reference=np.asarray(
-                reference.get("h0", np.zeros_like(log_odds, dtype=bool))
-            )[unique_pair_indices],
-            evidence_observed=evidence_event,
-            enabled=empirical_enabled,
-            hypothesis_class=profile,
-            anchor_description=str(reference.get("description", "no reference set")),
-            smoothing=empirical_smoothing,
-            minimum_reference_count=empirical_minimum,
-        )
+        if stream_id in curated_likelihood_models:
+            empirical_likelihood = copy.deepcopy(
+                curated_likelihood_models[stream_id]
+            )
+            empirical_factors = apply_empirical_likelihood_model_array(
+                pre_distribution_factors,
+                empirical_likelihood,
+                evidence_observed=evidence_event,
+            )
+            empirical_likelihood["calibrated_observation_count"] = int(
+                evidence_event.sum()
+            )
+            empirical_likelihood["application_scope"] = (
+                "all unique undirected graph pairs; only observed/non-neutral "
+                "source factors are transformed"
+            )
+        else:
+            reference = likelihood_references.get("_by_stream", {}).get(
+                stream_id, likelihood_references.get(profile, {})
+            )
+            empirical_factors, empirical_likelihood = empirical_likelihood_calibration(
+                pre_distribution_factors,
+                h1_reference=np.asarray(
+                    reference.get("h1", np.zeros_like(log_odds, dtype=bool))
+                )[unique_pair_indices],
+                h0_reference=np.asarray(
+                    reference.get("h0", np.zeros_like(log_odds, dtype=bool))
+                )[unique_pair_indices],
+                evidence_observed=evidence_event,
+                enabled=empirical_enabled,
+                hypothesis_class=profile,
+                anchor_description=str(
+                    reference.get("description", "no reference set")
+                ),
+                smoothing=empirical_smoothing,
+                minimum_reference_count=empirical_minimum,
+            )
         distribution_normalization = bayes_factor_distribution_normalization(
             pre_distribution_factors,
             enabled=normalize_distributions and not empirical_enabled,
@@ -4618,26 +4779,26 @@ def combine_edge_factors(
         right_index = table["node_b"].map(index).astype(int).to_numpy()
         values = table["bayes_factor"].to_numpy(float)
         profile = EDGE_LIKELIHOOD_PROFILES.get(stream_id, "physical_binding")
-        reference = likelihood_references.get("_by_stream", {}).get(
-            stream_id, likelihood_references.get(profile, {})
-        )
-        h1_matrix = np.asarray(
-            reference.get("h1", np.zeros_like(log_odds, dtype=bool))
-        )
-        h0_matrix = np.asarray(
-            reference.get("h0", np.zeros_like(log_odds, dtype=bool))
-        )
-        empirical_values, empirical_likelihood = empirical_likelihood_calibration(
-            values,
-            h1_reference=h1_matrix[left_index, right_index],
-            h0_reference=h0_matrix[left_index, right_index],
-            evidence_observed=np.ones(len(values), dtype=bool),
-            enabled=empirical_enabled,
-            hypothesis_class=profile,
-            anchor_description=str(reference.get("description", "no reference set")),
-            smoothing=empirical_smoothing,
-            minimum_reference_count=empirical_minimum,
-        )
+        # Closure is a deterministic transformation of already integrated
+        # anchors. Re-fitting it to the same physical references would count
+        # that evidence twice, so it deliberately retains its fixed source BF.
+        empirical_values = values.copy()
+        empirical_likelihood = {
+            "enabled": bool(empirical_enabled),
+            "applied": False,
+            "method": "source_native_derived_rule",
+            "hypothesis_class": profile,
+            "anchor_description": (
+                "Derived closure retains its documented fixed source factor; "
+                "it is not independently recalibrated."
+            ),
+            "h1_reference_count": 0,
+            "h0_reference_count": 0,
+            "minimum_reference_count": empirical_minimum,
+            "fallback_reason": "derived closure is not an independent observation",
+            "missing_or_out_of_scope_is_neutral": True,
+            "reference_source": "derived_rule",
+        }
         distribution_normalization = bayes_factor_distribution_normalization(
             values,
             enabled=normalize_distributions and not empirical_enabled,
@@ -4775,14 +4936,17 @@ def combine_edge_factors(
         "active_streams": active_streams,
         "integration_rule": (
             "Edge prior odds are multiplied by each selected, class-conditional "
-            "likelihood ratio raised to its user-specified weight. By default each "
-            "stream is assigned to a biological hypothesis class (physical proximity, "
-            "physical binding, directed phosphorylation, regulatory signaling, "
-            "functional association, or messenger binding). Independent reference "
-            "pairs estimate P(D|H1) and P(D|H0) with a smoothed empirical histogram; "
-            "the saved audit records reference counts, bins, probabilities, and bounds. "
-            "Thus localization and AlphaPulldown are calibrated primarily against "
-            "physical hypotheses instead of being forced onto unrelated edge types. "
+            "likelihood ratio raised to its user-specified weight. Each stream is "
+            "assigned to a biological hypothesis class (physical proximity, physical "
+            "binding, directed phosphorylation, acute regulatory signaling, or "
+            "messenger binding). Versioned primary-literature references dated "
+            "2026-10-28 estimate P(D|H1) and P(D|H0) with a smoothed empirical "
+            "histogram; the saved audit records reference counts, bins, probabilities, "
+            "and bounds. Physical/localization and acute-regulatory references require "
+            "collecting-duct support, whereas direct biochemical kinase-substrate and "
+            "messenger-binding evidence may come from other model contexts. Explicit "
+            "tested nulls are preferred; labeled endpoint-matched background is used "
+            "where no defensible experimental negatives were curated. "
             "Missing/out-of-scope data remain neutral. The legacy distribution matcher "
             "is bypassed whenever empirical likelihood calibration is enabled. "
             "Fixed-absence mode gives a source-eligible "
@@ -4792,8 +4956,8 @@ def combine_edge_factors(
             "numerical BF floor. Out-of-scope pairs remain at BF=1. When both negative "
             "modes are off, missing sparse-table entries receive BF=1. "
             "If enabled, closure streams are derived once from their documented "
-            "pre-closure anchors and appended without recursive feedback or absence "
-            "penalties."
+            "pre-closure anchors and appended without recursive feedback, absence "
+            "penalties, or a second empirical recalibration."
         ),
     }
     return matrix, summary

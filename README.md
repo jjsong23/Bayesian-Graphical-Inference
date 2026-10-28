@@ -8,7 +8,7 @@ This research codebase builds and explores a probabilistic signaling graph for r
 4. **Path inference** ranks plausible paths from a chosen signaling receptor or regulator to a target protein.
 5. **Temporal validation** optionally tests whether measured dDAVP phosphoproteomic response times are consistent with the proposed path order.
 
-The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, and default class-conditional empirical estimates of `P(Data|H1)` and `P(Data|H0)`. Physical-proximity and structural streams are calibrated against physical-interaction references; kinase, regulatory, and broad association streams use their own biologically appropriate reference classes. Completed runs save both distributions, their reference counts, smoothing, bins, bounds, and the resulting likelihood ratios for reconstruction in the evidence inspector. Missing or out-of-scope data remain neutral. The legacy cross-stream BF-magnitude matcher remains available only for historical reproducibility and is bypassed by the new default. Scope-aware negative evidence, partial directionality, path constraints, external-target insertion, full-graph statistics, and temporal annotations remain independently configurable. See [the empirical likelihood method](docs/empirical_likelihood_models.md).
+The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, and default class-conditional empirical estimates of `P(Data|H1)` and `P(Data|H0)`. Versioned literature references calibrate physical/localization and acute-regulatory streams with collecting-duct-specific evidence, while direct biochemical KinasePredictor evidence may use other model contexts. Completed runs save both distributions, context policy, explicit/background H0 counts, smoothing, bins, bounds, and the resulting likelihood ratios for reconstruction in the evidence inspector. Missing or out-of-scope data remain neutral. The cross-stream BF-magnitude matcher is available in the same GUI as a mutually exclusive sensitivity-analysis alternative to the empirical model; empirical likelihood remains the default. Scope-aware negative evidence, partial directionality, path constraints, external-target insertion, full-graph statistics, and temporal annotations remain independently configurable. See [the empirical likelihood method](docs/empirical_likelihood_models.md).
 
 Two default-enabled IMCD compartment co-detection streams separately encode basal and 30-minute dDAVP conditions from the NHLBI cytoplasmic and nuclear proteome resources. They use binary detection only—never spectral-count magnitude, fold change, or p-values—and support an undirected pair when both proteins occur in cytoplasm or both occur in nucleus. See [the IMCD evidence method](docs/imcd_compartment_presence_evidence.md).
 
@@ -53,10 +53,9 @@ competition in which probabilities sum to one. Edge existence remains an
 undirected hypothesis even when the separate propagation layer disallows one
 traversal direction.
 
-### Legacy cross-stream BF distribution matching
+### Optional cross-stream BF distribution matching
 
-Historical configuration files may still request the former Bayes-factor
-distribution matcher. For every active stream, that method measures the
+For every active stream, the distribution matcher measures the
 90th percentile of non-neutral `abs(ln(BF))` and raises all of that stream's
 factors to one audited exponent so the percentile approaches a configurable
 target magnitude (default BF 2). This compresses a broad stream such as STRING
@@ -65,10 +64,10 @@ thresholds to share units. BF 1 stays exactly neutral, BF above/below 1 keeps
 its support/refute direction, and the exponent is bounded to 0.1–10. Explicit
 stream weights are applied afterward and remain independently user-controlled.
 
-This legacy feature is a sensitivity/scale-harmonization tool, not empirical
+This feature is a sensitivity/scale-harmonization tool, not empirical
 calibration and not a guarantee of independence between databases. It is off
-by default, is no longer exposed as the ordinary GUI workflow, and is bypassed
-whenever the default empirical class-conditional model is enabled. Historical
+by default and is selectable in the GUI only as an alternative to empirical
+class-conditional calibration. Historical
 runs still retain raw and transformed BFs for exact reproduction. See
 [`docs/bayes_factor_distribution_normalization.md`](docs/bayes_factor_distribution_normalization.md).
 

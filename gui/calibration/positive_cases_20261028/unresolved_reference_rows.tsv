@@ -1,0 +1,162 @@
+profile	source_workbook	source_sheet	source_row	source_record_id	node_a_label	node_b_label	reason
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	7	F0001	14-3-3 family	ARHGEF7 + NEDD4L (set)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	10	F0004	AKAP5 (AKAP150)	PRKAR family (isoform unresolved) (PKA regulatory subunit)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	11	F0005	AQP2	14-3-3 (pan antibody; isoforms unresolved in CCD assay)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	13	F0007	AQP2	Hsp70 (isoform unresolved)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	20	F0014	ARHGEF7	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	42	F0036	MAL	MARCKSL1	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	43	F0037	MAL	SCNN1A	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	45	F0039	NEDD4L	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	46	F0040	NEDD4L	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	61	F0055	PDE4C (PDE4C)	PRKAR family (isoform unresolved) (PKA regulatory subunit)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	85	F0079	TMEM27 (collectrin)	ACTG1 (γ-actin)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	86	F0080	TMEM27 (collectrin)	IFT88 (polaris)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	87	F0081	TMEM27 (collectrin)	MYH9 (nonmuscle myosin IIA)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	88	F0082	TMEM27 (collectrin)	PKD2	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	89	F0083	TMEM27 (collectrin)	SNAP23	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	90	F0084	TMEM27 (collectrin)	SNAPIN	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	91	F0085	TMEM27 (collectrin)	STX4	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	92	F0086	TMEM27 (collectrin)	tropomyosin (isoform unresolved)	no unambiguous gene-resolved endpoint
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	9	E0003	AMPK [catalytic isoform unresolved]	ATP6V1A	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	22	E0016	CAMKK2	AMPK (alpha isoform unresolved)	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	34	E0028	CK2 [catalytic isoform unresolved]	SCNN1B	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	35	E0029	CK2 [catalytic isoform unresolved]	SCNN1B	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	36	E0030	CK2 [catalytic isoform unresolved]	SCNN1B	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	37	E0031	CK2 [catalytic isoform unresolved]	SCNN1G	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	50	E0044	EGFR	EGFR	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	55	E0049	IKBKB	IKBKB	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	61	E0055	JAK2 [JH2 domain]	JAK2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	62	E0056	JNK (assay isoform unresolved)	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	63	E0057	LIMK1	Cofilin [isoform unresolved]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	79	E0073	MAPK14	MAPK14 [WT]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	99	E0093	MYLK	MRLC [regulatory light-chain gene unresolved]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	102	E0096	NEK8 [ANKS6 present]	ANKS6	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	103	E0097	NEK8 [ANKS6 present]	INVS	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	104	E0098	NEK8 [ANKS6 present]	NEK8	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	116	E0110	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	117	E0111	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	118	E0112	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	119	E0113	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	120	E0114	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	121	E0115	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	122	E0116	PKA [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	123	E0117	PKA [catalytic isoform unresolved]	ARHGDIA	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	124	E0118	PKA [catalytic isoform unresolved]	ARHGDIA	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	125	E0119	PKA [catalytic isoform unresolved]	ATP6V1A	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	126	E0120	PKA [catalytic isoform unresolved]	BOK	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	127	E0121	PKA [catalytic isoform unresolved]	CDK18	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	128	E0122	PKA [catalytic isoform unresolved]	Cofilin [isoform unresolved]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	129	E0123	PKA [catalytic isoform unresolved]	ITPR1 [SI(-)/SII(+) rat splice variant]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	130	E0124	PKA [catalytic isoform unresolved]	KCNJ1 [ROMK1]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	131	E0125	PKA [catalytic isoform unresolved]	KCNJ1 [ROMK2]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	132	E0126	PKA [catalytic isoform unresolved]	KCNJ1 [ROMK2]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	133	E0127	PKA [catalytic isoform unresolved]	KCNJ1 [ROMK2]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	134	E0128	PKA [catalytic isoform unresolved]	KCNQ1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	135	E0129	PKA [catalytic isoform unresolved]	LIMK1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	136	E0130	PKA [catalytic isoform unresolved]	MAP4K4	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	137	E0131	PKA [catalytic isoform unresolved]	MARK2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	138	E0132	PKA [catalytic isoform unresolved]	MYLK	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	139	E0133	PKA [catalytic isoform unresolved]	NEDD4L	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	140	E0134	PKA [catalytic isoform unresolved]	NEDD4L	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	141	E0135	PKA [catalytic isoform unresolved]	NSFL1C [p47]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	142	E0136	PKA [catalytic isoform unresolved]	PKN2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	143	E0137	PKA [catalytic isoform unresolved]	PPP1R12A	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	144	E0138	PKA [catalytic isoform unresolved]	PPP2R1A	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	145	E0139	PKA [catalytic isoform unresolved]	PPP2R5A	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	146	E0140	PKA [catalytic isoform unresolved]	PRKAA1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	147	E0141	PKA [catalytic isoform unresolved]	RAF1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	148	E0142	PKA [catalytic isoform unresolved]	RAF1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	149	E0143	PKA [catalytic isoform unresolved]	RHOA	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	150	E0144	PKA [catalytic isoform unresolved]	RHOC	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	151	E0145	PKA [catalytic isoform unresolved]	SLC14A2 [UT-A1]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	152	E0146	PKA [catalytic isoform unresolved]	SLC9A1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	153	E0147	PKA [catalytic isoform unresolved]	SLK	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	154	E0148	PKA [catalytic isoform unresolved]	UFD1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	155	E0149	PKC [isoform unresolved]	MARCKS	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	156	E0150	PKC [isoform unresolved]	PKD2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	157	E0151	PKC [isoform unresolved]	SLC14A2 [UT-A1]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	158	E0152	PKC [isoform unresolved]	SLC14A2 [UT-A1]	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	159	E0153	PKG [catalytic isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	210	E0204	RSK [assay isoform unresolved]	AQP2	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	235	E0229	SLK	SLK	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	236	E0230	SLK	SLK	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	239	E0233	SRC	SRC	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	251	E0245	WNK1	WNK1	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	253	E0247	WNK3	WNK3	kinase/substrate endpoint is unresolved or non-gene
+directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	259	E0253	p38 MAPK (assay isoform unresolved)	AQP2	kinase/substrate endpoint is unresolved or non-gene
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	8	CD002	HDAC6	Alpha-tubulin (TUBA family)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	9	CD003	Calcineurin (PP2B; catalytic isoform unresolved)	AQP2	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	12	CD006	G-actin (isoform unresolved)	AQP2	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	14	CD008	PKA catalytic subunit (PRKACA/PRKACB unresolved)	AQP2	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	15	CD009	PKG (PRKG isoform unresolved)	AQP2	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	23	CD017	AMPK (catalytic isoform unresolved)	ARHGEF7 (beta1PIX)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	25	CD019	AMPK (PRKAA1-containing complex; PRKAA2 contribution unresolved)	ATP6V1A	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	26	CD020	PKA catalytic subunit (PRKACA/PRKACB unresolved)	ATP6V1A	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	31	CD025	KLHL3-containing CUL3 E3 ubiquitin-ligase complex	CLDN8	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	37	CD031	GRK2	GNAQ/GNA11 (Galphaq/11)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	45	CD039	AMPK (alpha1-containing holoenzyme)	NEDD4L (Nedd4-2)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	46	CD040	IKBKB (IKKbeta)	NEDD4L (Nedd4-2)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	47	CD041	SGK1	NEDD4L (Nedd4-2)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	48	CD042	YWHAB:YWHAE (14-3-3beta/epsilon heterodimer)	NEDD4L (Nedd4-2)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	51	CD045	PKA catalytic subunit(s)	PDE4D	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	52	CD046	AKAP7 (AKAP18 delta)	PKA regulatory RII subunits	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	53	CD047	AKAP11 (AKAP220)	PP1 catalytic subunit(s)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	56	CD050	RAPGEF3 (EPAC1)	RAP1A/RAP1B (Rap1 unresolved)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	57	CD051	SIPA1 (SPA-1)	RAP1A/RAP1B (Rap1 unresolved)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	61	CD055	NEDD4L (Nedd4-2)	SCNN1A (alpha-ENaC)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	63	CD057	NEDD4L (Nedd4-2)	SCNN1B (beta-ENaC)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	64	CD058	CK2 (catalytic isoform unresolved)	SCNN1G (gamma-ENaC)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	67	CD061	NEDD4L (Nedd4-2)	SCNN1G (gamma-ENaC)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	69	CD063	AMPK (PRKAA catalytic isoform unresolved)	SLC14A2 (UT-A1)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	72	CD066	PKA catalytic subunit (PRKACA/PRKACB unresolved)	SLC14A2 (UT-A1)	regulator/target endpoint is unresolved or multi-protein
+regulatory_signaling	collecting_duct_direct_regulation.xlsx	Direct + CD support	75	CD069	PKA catalytic subunit (PRKACA/PRKACB unresolved)	SLC14A2 (UT-A3)	regulator/target endpoint is unresolved or multi-protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	2		(R,S)-rolipram	PDE4B	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	3		2-Cl-8-hexylamino-cAMP	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	4		2-Cl-cAMP	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	5		8-[Pharos-575]-2′-O-Me-cAMP (Φ-O-Me-cAMP)	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	6		8-[Pharos-575]-2′-O-Me-cAMP (Φ-O-Me-cAMP)	RAPGEF4 (EPAC2)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	7		8-[Pharos-575]-cAMP	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	8		8-[Pharos-575]-cAMP	PRKAR2A (PKA RIIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	9		8-[Pharos-575]-cAMP	PRKAR2B (PKA RIIβ)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	10		8-azido-[32P]cAMP	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	11		8-azido-[32P]cAMP	PRKAR1B (PKA RIβ)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	12		8-azido-[32P]cAMP	PRKAR2A (PKA RIIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	13		8-azido-[32P]cAMP	PRKAR2B (PKA RIIβ)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	14		8-CPT-cAMP	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	16		8-NBD-cAMP	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	17		8-NBD-cAMP	RAPGEF4 (EPAC2)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	20		8-pCPT-2′-O-Me-cAMP (007; OMe-CPT)	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	21		BLU0588	PRKACA (PKA-Cα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	29		conivaptan (YM087)	AVPR1A	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	30		conivaptan (YM087)	AVPR1B	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	31		conivaptan (YM087)	AVPR2	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	35		FMP-API-1	Ovalbumin	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	36		FMP-API-1	PRKAR2A (PKA RIIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	38		FMP-API-1/27 (4-benzylpyrocatechol)	PRKAR2A (PKA RIIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	40		forskolin	ADCY5-C1 / ADCY2-C2 reconstituted complex (VC1/IIC2)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	41		forskolin	ADCY6 (ACVI)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	44		forskolin	SLC2A1 (GLUT1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	45		forskolin	SLC2A2 (GLUT2)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	46		forskolin	SLC2A4 (GLUT4)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	53		H-89 (H89)	PRKACA (PKA-Cα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	57		I178	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	58		I178	RAPGEF4 (EPAC2)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	59		I288	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	61		I942	RAPGEF3 (EPAC1)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	62		I942	RAPGEF4 (EPAC2)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	63		IBMX (3-isobutyl-1-methylxanthine)	SLC2A4 (GLUT4)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	67		mozavaptan (OPC-31260)	AVPR1A	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	68		mozavaptan (OPC-31260)	AVPR1B	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	69		mozavaptan (OPC-31260)	AVPR2	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	70		N6-monobutyryl-cAMP	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	71		OPC-51803	AVPR1A	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	73		OPC-51803	AVPR2	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	75		relcovaptan (SR49059)	AVPR1A	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	76		relcovaptan (SR49059)	AVPR1B	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	77		relcovaptan (SR49059)	AVPR2	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	80		Rp-cAMPS	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	82		satavaptan (SR121463A)	AVPR1A	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	84		satavaptan (SR121463A)	AVPR2	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	85		Sp-cAMPS	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	87		tolvaptan (OPC-41061)	AVPR1A	noncanonical messenger analog or unresolved protein
+messenger_binding	messenger_binding_review.xlsx	Pair Classifications	89		tolvaptan (OPC-41061)	AVPR2	noncanonical messenger analog or unresolved protein

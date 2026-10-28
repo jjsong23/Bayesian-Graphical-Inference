@@ -244,15 +244,21 @@ for audit. See `docs/string_evidence_stabilization.md` for the empirical choice.
 
 Node and edge integration default to empirical class-conditional likelihoods.
 Each observed source datum is calibrated against a biologically compatible H1
-and H0 reference set, and the update uses `P(Data|H1) / P(Data|H0)`. Physical
-proximity/binding, directed phosphorylation, regulatory signaling, functional
-association, messenger binding, cellular presence, kinase activity, and
-transient phosphoregulation have separate reference definitions. Every run
-saves the smoothed H1/H0 distributions, bin counts, bounds, and fallback state.
-Missing/out-of-scope data remain neutral; a stream with too few independent
-references keeps its source likelihood. See
-`docs/empirical_likelihood_models.md`. The older q90 BF matcher remains only
-for reproducing historical configurations.
+and H0 reference set, and the update uses `P(Data|H1) / P(Data|H0)`. Edge H1/H0
+references are versioned under `gui/calibration/positive_cases_20261028`:
+physical and acute-regulatory positives require collecting-duct support,
+whereas KinasePredictor can use direct biochemical kinase/substrate evidence
+from other model contexts. Explicit tested nulls are preferred; any generated
+endpoint-matched H0 is labeled as an unlabeled background rather than a proven
+noninteraction. STRING and OmniPath share the acute-regulatory profile.
+Derived closure retains its source factor so the physical anchors are not
+counted twice. Every run saves the smoothed H1/H0 distributions, bin counts,
+bounds, context policy, and fallback state. Missing/out-of-scope data remain
+neutral; a stream with too few independent references keeps its source
+likelihood. See
+`docs/empirical_likelihood_models.md`. The q90 BF matcher is available in the
+same interface as a mutually exclusive sensitivity-analysis mode; source-native
+factors are the third selectable mode.
 
 Scaffold-mediated closure is calculated in a separate second pass. A protein is
 an anchor to an `adaptor_scaffold` node only when its pre-closure edge

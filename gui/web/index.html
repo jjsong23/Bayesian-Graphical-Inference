@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Configure and run the graphical Bayesian signaling workflow." />
     <title>Graphical Bayesian Inference</title>
-    <link rel="stylesheet" href="/styles.css?v=20260929-stable-network-popout" />
+    <link rel="stylesheet" href="/styles.css?v=20261028-curated-h1h0" />
   </head>
   <body>
     <header class="topbar">
@@ -79,17 +79,25 @@
               <span>Continuous-mode BF floor</span>
               <input id="continuous-node-bf-floor" type="number" min="0.000000000001" max="1" step="any" inputmode="decimal" />
             </label>
-            <label class="check-field span-two">
-              <input id="empirical-node-likelihoods" type="checkbox" />
-              <span>Estimate node P(Data | H1) and P(Data | H0)</span>
+            <label class="span-full">
+              <span>Evidence calibration method</span>
+              <select id="node-evidence-calibration-mode">
+                <option value="empirical">Empirical P(Data | H1) / P(Data | H0)</option>
+                <option value="distribution">Match Bayes-factor distributions</option>
+                <option value="source">Source-native Bayes factors</option>
+              </select>
             </label>
-            <label>
+            <label id="node-likelihood-smoothing-field">
               <span>Histogram smoothing</span>
               <input id="node-likelihood-smoothing" type="number" min="0.000001" max="100" step="any" inputmode="decimal" />
             </label>
-            <label>
+            <label id="node-likelihood-minimum-field">
               <span>Minimum H1/H0 references</span>
               <input id="node-likelihood-minimum" type="number" min="2" max="1000000" step="1" inputmode="numeric" />
+            </label>
+            <label id="node-distribution-target-field">
+              <span>Matched evidence magnitude</span>
+              <input id="node-distribution-target" type="number" min="1.000001" max="100" step="any" inputmode="decimal" />
             </label>
             <label>
               <span>Node prior</span>
@@ -100,7 +108,7 @@
                   <input id="node-cutoff" type="number" min="0" max="1" step="any" inputmode="decimal" />
             </label>
           </div>
-          <p class="scientific-note">Each protein is an independent present-versus-absent hypothesis. The default empirical model estimates P(Data | H1) and P(Data | H0) for each stream from leave-one-stream-out reference nodes in a biologically compatible class (cellular presence, kinase activity, or transient phosphoregulation). Their ratio updates prior odds. Every run saves reference counts, histogram bins, both probability distributions, smoothing, and likelihood-ratio bounds. Missing or out-of-scope measurements remain neutral. If either reference class is too small, that stream retains its source likelihood instead of inventing a calibration or erasing observed evidence. The legacy cross-stream magnitude matcher is no longer used by default. Negative-evidence controls remain explicit and scope-aware.</p>
+          <p class="scientific-note"><strong>Empirical likelihood</strong> estimates P(Data | H1) and P(Data | H0) from biologically matched references. <strong>BF distribution matching</strong> instead rescales each stream so its 90th-percentile non-neutral |log BF| equals the selected evidence magnitude while preserving BF=1 and support/refute direction. <strong>Source-native</strong> applies neither transformation. Only one method can be active. Positive-control calibration in stage 00 cannot be combined with BF distribution matching.</p>
         </section>
 
         <section class="stage" aria-labelledby="edge-title">
@@ -125,17 +133,25 @@
               <span>Continuous-mode BF floor</span>
               <input id="continuous-edge-bf-floor" type="number" min="0.000000000001" max="1" step="any" inputmode="decimal" />
             </label>
-            <label class="check-field span-two">
-              <input id="empirical-edge-likelihoods" type="checkbox" />
-              <span>Estimate edge P(Data | H1) and P(Data | H0)</span>
+            <label class="span-full">
+              <span>Evidence calibration method</span>
+              <select id="edge-evidence-calibration-mode">
+                <option value="empirical">Empirical P(Data | H1) / P(Data | H0)</option>
+                <option value="distribution">Match Bayes-factor distributions</option>
+                <option value="source">Source-native Bayes factors</option>
+              </select>
             </label>
-            <label>
+            <label id="edge-likelihood-smoothing-field">
               <span>Histogram smoothing</span>
               <input id="edge-likelihood-smoothing" type="number" min="0.000001" max="100" step="any" inputmode="decimal" />
             </label>
-            <label>
+            <label id="edge-likelihood-minimum-field">
               <span>Minimum H1/H0 references</span>
               <input id="edge-likelihood-minimum" type="number" min="2" max="10000000" step="1" inputmode="numeric" />
+            </label>
+            <label id="edge-distribution-target-field">
+              <span>Matched evidence magnitude</span>
+              <input id="edge-distribution-target" type="number" min="1.000001" max="100" step="any" inputmode="decimal" />
             </label>
             <label>
               <span>Edge prior</span>
@@ -146,7 +162,7 @@
                   <input id="edge-cutoff" type="number" min="0" max="1" step="any" inputmode="decimal" />
             </label>
           </div>
-          <p class="scientific-note">Each stream is assigned to a biological hypothesis class. Colocalization and AlphaPulldown are calibrated against physical-proximity/binding references; KinasePredictor against directed-phosphorylation references; OmniPath against regulatory-signaling references; STRING against independently supported functional associations. A smoothed empirical histogram estimates P(Data | H1) and P(Data | H0), and their ratio—not a forced shared BF magnitude—updates the edge. The run audit saves the complete model. Missing assay coverage remains neutral; source-eligible absence is negative only when you explicitly enable a negative-evidence rule.</p>
+          <p class="scientific-note"><strong>Empirical likelihood</strong> uses the versioned 2026-10-28 literature curation. Physical/localization and acute-regulatory references require collecting-duct support; direct kinase–substrate and messenger-binding evidence may come from other model contexts. Explicit tested nulls are preferred. Where none exist, H0 is a labeled endpoint-matched background—not a proven noninteraction. Derived closure remains source-native to avoid counting its anchors twice. <strong>BF distribution matching</strong> and <strong>Source-native</strong> are mutually exclusive alternatives. Missing assay coverage remains neutral.</p>
         </section>
 
         <section class="stage" aria-labelledby="graph-statistics-title">
@@ -723,6 +739,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20260929-stable-network-popout" defer></script>
+    <script src="/app.js?v=20261028-curated-h1h0" defer></script>
   </body>
 </html>

@@ -1,0 +1,883 @@
+{
+  "curation_date": "2026-10-28",
+  "policy_notes": [
+    "KinasePredictor and messenger binding use context-general biochemical references.",
+    "Localization, structural/physical, OmniPath, and STRING references require collecting-duct support.",
+    "STRING is calibrated as acute regulatory signaling, not generic functional association.",
+    "Transcription/promoter-mediated records are excluded.",
+    "A background H0 is an unlabeled comparison set, not proof of noninteraction.",
+    "Derived closure streams retain their documented fixed source factor and are not independently recalibrated."
+  ],
+  "profile_counts": {
+    "directed_phosphorylation": {
+      "background_h0": 0,
+      "context_policy": [
+        "context_general_biochemical"
+      ],
+      "explicit_h0": 22,
+      "h0": 22,
+      "h1": 88
+    },
+    "messenger_binding": {
+      "background_h0": 3,
+      "context_policy": [
+        "context_general_biochemical"
+      ],
+      "explicit_h0": 0,
+      "h0": 3,
+      "h1": 3
+    },
+    "physical_binding": {
+      "background_h0": 390,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "explicit_h0": 0,
+      "h0": 390,
+      "h1": 78
+    },
+    "physical_proximity": {
+      "background_h0": 390,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "explicit_h0": 0,
+      "h0": 390,
+      "h1": 78
+    },
+    "regulatory_signaling": {
+      "background_h0": 240,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "explicit_h0": 0,
+      "h0": 240,
+      "h1": 48
+    }
+  },
+  "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+  "reference_pair_count": 1340,
+  "schema_version": 1,
+  "source_package": "Positive Cases.zip supplied 2026-10-28",
+  "stream_models_default_settings": {
+    "alphapulldown_structural": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        -2.1790890651475,
+        -2.009349379292,
+        -1.813805298644,
+        -1.6594850997425001,
+        -0.82723266174,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        1,
+        0,
+        1,
+        0,
+        1,
+        387
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        0,
+        1,
+        0,
+        1,
+        0,
+        76
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_binding",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        1.617283950617284,
+        14.555555555555554,
+        1.617283950617284,
+        14.555555555555554,
+        1.617283950617284,
+        0.9578494623655914
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.003816793893129771,
+        0.001272264631043257,
+        0.003816793893129771,
+        0.001272264631043257,
+        0.003816793893129771,
+        0.9860050890585241
+      ],
+      "p_data_given_h1": [
+        0.006172839506172839,
+        0.018518518518518517,
+        0.006172839506172839,
+        0.018518518518518517,
+        0.006172839506172839,
+        0.9444444444444444
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        1.617283950617284,
+        14.555555555555554,
+        1.617283950617284,
+        14.555555555555554,
+        1.617283950617284,
+        0.9578494623655914
+      ]
+    },
+    "biogrid_physical_interaction": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.804718956217,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        372,
+        18
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        56,
+        22
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_binding",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.7507093704867895,
+        6.0195005131713994
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.9526854219948849,
+        0.04731457800511509
+      ],
+      "p_data_given_h1": [
+        0.7151898734177216,
+        0.2848101265822785
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.7507093704867895,
+        6.0195005131713994
+      ]
+    },
+    "compartments_localization": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.003965532893,
+        0.010517052398,
+        0.019747591095,
+        0.026566698667,
+        0.0341749463945,
+        0.044832776545,
+        0.060708861633,
+        0.0773955950715,
+        0.081658713584,
+        0.1156197606205,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        384,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        1,
+        0,
+        1
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        74,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        1,
+        0
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_proximity",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.9177405916385695,
+        14.209580838323351,
+        1.5788423153692617,
+        1.5788423153692617,
+        1.5788423153692617,
+        1.5788423153692617,
+        14.209580838323351,
+        14.209580838323351,
+        1.5788423153692617,
+        14.209580838323351,
+        1.5788423153692617
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.9721871049304678,
+        0.0012642225031605564,
+        0.0037926675094816687,
+        0.0037926675094816687,
+        0.0037926675094816687,
+        0.0037926675094816687,
+        0.0012642225031605564,
+        0.0012642225031605564,
+        0.0037926675094816687,
+        0.0012642225031605564,
+        0.0037926675094816687
+      ],
+      "p_data_given_h1": [
+        0.8922155688622755,
+        0.017964071856287425,
+        0.005988023952095809,
+        0.005988023952095809,
+        0.005988023952095809,
+        0.005988023952095809,
+        0.017964071856287425,
+        0.017964071856287425,
+        0.005988023952095809,
+        0.017964071856287425,
+        0.005988023952095809
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.9177405916385695,
+        14.209580838323351,
+        1.5788423153692617,
+        1.5788423153692617,
+        1.5788423153692617,
+        1.5788423153692617,
+        14.209580838323351,
+        14.209580838323351,
+        1.5788423153692617,
+        14.209580838323351,
+        1.5788423153692617
+      ]
+    },
+    "hpa_high_confidence": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.117236017722,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        389,
+        1
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        75,
+        3
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_proximity",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.9593766757121269,
+        11.548523206751055
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.9961636828644501,
+        0.0038363171355498722
+      ],
+      "p_data_given_h1": [
+        0.9556962025316456,
+        0.04430379746835443
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.9593766757121269,
+        11.548523206751055
+      ]
+    },
+    "hpa_primary": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.0620462379385,
+        0.1792822564515,
+        0.296253819924,
+        0.452884661737,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        385,
+        3,
+        0,
+        1,
+        1
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        75,
+        1,
+        2,
+        0,
+        0
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_proximity",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.9549185940659465,
+        2.0896184560780835,
+        20.0,
+        1.6252587991718426,
+        1.6252587991718426
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.9821656050955414,
+        0.008917197452229299,
+        0.0012738853503184713,
+        0.003821656050955414,
+        0.003821656050955414
+      ],
+      "p_data_given_h1": [
+        0.937888198757764,
+        0.018633540372670808,
+        0.031055900621118012,
+        0.006211180124223602,
+        0.006211180124223602
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.9549185940659465,
+        2.0896184560780835,
+        24.37888198757764,
+        1.6252587991718426,
+        1.6252587991718426
+      ]
+    },
+    "imcd_basal_compartment_presence": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.202732554054,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        350,
+        40
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        69,
+        9
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_proximity",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.9814008920348869,
+        1.1609626504141273
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.8964194373401535,
+        0.10358056265984655
+      ],
+      "p_data_given_h1": [
+        0.879746835443038,
+        0.12025316455696203
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.9814008920348869,
+        1.1609626504141273
+      ]
+    },
+    "imcd_ddavp_compartment_presence": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.202732554054,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        350,
+        40
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        69,
+        9
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_proximity",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.9814008920348869,
+        1.1609626504141273
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.8964194373401535,
+        0.10358056265984655
+      ],
+      "p_data_given_h1": [
+        0.879746835443038,
+        0.12025316455696203
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.9814008920348869,
+        1.1609626504141273
+      ]
+    },
+    "kinase_predictor": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Biochemical mechanism accepted across model contexts. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 0,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.1472792018515,
+        0.3141398693165,
+        0.5007428347464999,
+        0.6794546284705,
+        0.794201557541,
+        0.9483393517855,
+        1.0412698172765,
+        1.1373320142995,
+        1.338787897089,
+        null
+      ],
+      "calibrated_observation_count": 110,
+      "context_policy": [
+        "context_general_biochemical"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 22,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        21,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "h0_reference_count": 22,
+      "h1_bin_counts": [
+        80,
+        1,
+        1,
+        1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "h1_reference_count": 88,
+      "hypothesis_class": "directed_phosphorylation",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        1.0870217554388597,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.09677419354838711,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.7962962962962963,
+        0.018518518518518517,
+        0.018518518518518517,
+        0.018518518518518517,
+        0.05555555555555555,
+        0.018518518518518517,
+        0.018518518518518517,
+        0.018518518518518517,
+        0.018518518518518517,
+        0.018518518518518517
+      ],
+      "p_data_given_h1": [
+        0.8655913978494624,
+        0.016129032258064516,
+        0.016129032258064516,
+        0.016129032258064516,
+        0.005376344086021506,
+        0.016129032258064516,
+        0.016129032258064516,
+        0.016129032258064516,
+        0.016129032258064516,
+        0.016129032258064516
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        1.0870217554388597,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.09677419354838711,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839,
+        0.8709677419354839
+      ]
+    },
+    "mpkccd_localization": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 390,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.0,
+        null
+      ],
+      "calibrated_observation_count": 468,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        0,
+        390
+      ],
+      "h0_reference_count": 390,
+      "h1_bin_counts": [
+        0,
+        78
+      ],
+      "h1_reference_count": 78,
+      "hypothesis_class": "physical_proximity",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        4.949367088607595,
+        0.9949431919480056
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.0012787723785166241,
+        0.9987212276214834
+      ],
+      "p_data_given_h1": [
+        0.006329113924050633,
+        0.9936708860759493
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        4.949367088607595,
+        0.9949431919480056
+      ]
+    },
+    "omnipath_core": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 240,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.006849311975,
+        0.03316476342,
+        0.226931659558,
+        null
+      ],
+      "calibrated_observation_count": 288,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        239,
+        1,
+        0,
+        0
+      ],
+      "h0_reference_count": 240,
+      "h1_bin_counts": [
+        46,
+        0,
+        1,
+        1
+      ],
+      "h1_reference_count": 48,
+      "hypothesis_class": "regulatory_signaling",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        0.9397077244258873,
+        1.6133333333333333,
+        14.52,
+        14.52
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.9896694214876033,
+        0.006198347107438017,
+        0.002066115702479339,
+        0.002066115702479339
+      ],
+      "p_data_given_h1": [
+        0.93,
+        0.01,
+        0.03,
+        0.03
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        0.9397077244258873,
+        1.6133333333333333,
+        14.52,
+        14.52
+      ]
+    },
+    "stitch_secondary_messenger": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Biochemical mechanism accepted across model contexts. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": false,
+      "background_h0_count": 3,
+      "bin_edges_log_bayes_factor": [],
+      "context_policy": [
+        "context_general_biochemical"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": "insufficient independent H1/H0 references",
+      "h0_bin_counts": [],
+      "h0_reference_count": 3,
+      "h1_bin_counts": [],
+      "h1_reference_count": 3,
+      "hypothesis_class": "messenger_binding",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [],
+      "p_data_given_h1": [],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5
+    },
+    "string_v12": {
+      "anchor_description": "Primary-literature curation dated 2026-10-28. Collecting-duct specificity required. H0 uses explicit tested nulls when available; otherwise deterministic endpoint-matched unlabeled background pairs.",
+      "applied": true,
+      "background_h0_count": 240,
+      "bin_edges_log_bayes_factor": [
+        null,
+        0.0,
+        null
+      ],
+      "calibrated_observation_count": 288,
+      "context_policy": [
+        "collecting_duct_specific"
+      ],
+      "datum": "pre-calibration log Bayes factor",
+      "enabled": true,
+      "explicit_h0_count": 0,
+      "fallback_reason": null,
+      "h0_bin_counts": [
+        0,
+        240
+      ],
+      "h0_reference_count": 240,
+      "h1_bin_counts": [
+        0,
+        48
+      ],
+      "h1_reference_count": 48,
+      "hypothesis_class": "regulatory_signaling",
+      "likelihood_ratio_bounds": [
+        0.05,
+        20.0
+      ],
+      "likelihood_ratio_by_bin": [
+        4.918367346938775,
+        0.9918537061394204
+      ],
+      "method": "class_conditional_smoothed_histogram",
+      "minimum_reference_count": 20,
+      "missing_or_out_of_scope_is_neutral": true,
+      "p_data_given_h0": [
+        0.002074688796680498,
+        0.9979253112033195
+      ],
+      "p_data_given_h1": [
+        0.01020408163265306,
+        0.9897959183673469
+      ],
+      "reference_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv",
+      "reference_source": "positive_cases_20261028",
+      "smoothing_pseudocount": 0.5,
+      "unclipped_likelihood_ratio_by_bin": [
+        4.918367346938775,
+        0.9918537061394204
+      ]
+    }
+  },
+  "training_file": "gui/calibration/positive_cases_20261028/curated_edge_likelihood_training.tsv"
+}
