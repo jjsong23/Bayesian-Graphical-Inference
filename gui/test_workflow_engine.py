@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 import unittest
 
@@ -53,6 +54,13 @@ class WorkflowEngineTests(unittest.TestCase):
         config = normalize_configuration(None, self.registry)
         self.assertTrue(config["node_integration"]["empirical_likelihood_enabled"])
         self.assertTrue(config["edge_integration"]["empirical_likelihood_enabled"])
+        self.assertEqual(
+            config["edge_integration"]["empirical_curated_reference_scope"],
+            "class_matched",
+        )
+        self.assertTrue(
+            config["edge_integration"]["empirical_optimize_h0_mixture_weight"]
+        )
         self.assertTrue(config["path"]["omnipath_directionality_enabled"])
         enabled_nodes = {
             key for key, state in config["node_streams"].items() if state["enabled"]
@@ -418,6 +426,7 @@ class WorkflowEngineTests(unittest.TestCase):
             "node-distribution-target",
             "edge-evidence-calibration-mode",
             "edge-likelihood-smoothing",
+            "edge-curated-reference-scope",
             "edge-distribution-target",
         ):
             self.assertIn(f'id="{control}"', html)
@@ -428,6 +437,24 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("P(Data | H1) and P(Data | H0)", javascript)
         self.assertIn('nodeCalibrationMode === "distribution"', javascript)
         self.assertIn('edgeCalibrationMode === "empirical"', javascript)
+        self.assertIn("empirical_curated_reference_scope", javascript)
+
+    def test_edge_reference_strategy_does_not_change_node_configuration(self) -> None:
+        supplied = default_configuration(self.registry)
+        expected_nodes = copy.deepcopy(supplied["node_integration"])
+        supplied["edge_integration"]["empirical_curated_reference_scope"] = (
+            "all_curated_edges"
+        )
+        normalized = normalize_configuration(supplied, self.registry)
+        self.assertEqual(normalized["node_integration"], expected_nodes)
+        self.assertEqual(
+            normalized["edge_integration"]["empirical_curated_reference_scope"],
+            "all_curated_edges",
+        )
+
+        supplied["edge_integration"]["empirical_curated_reference_scope"] = "invalid"
+        with self.assertRaisesRegex(ValueError, "curated-reference scope"):
+            normalize_configuration(supplied, self.registry)
 
     def test_evidence_factor_distribution_is_neutral_centered_and_compact(self) -> None:
         summary = evidence_factor_distribution_summary(
@@ -480,6 +507,27 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertAlmostEqual(sum(model["p_data_given_h0"]), 1.0)
         self.assertEqual(calibrated[0], 1.0)
         self.assertGreater(calibrated[3], calibrated[1])
+
+    def test_empirical_likelihood_calibration_honors_reference_weights(self) -> None:
+        values = np.asarray([1.0, 2.0, 1.0, 2.0])
+        h1 = np.asarray([True, True, False, False])
+        h0 = ~h1
+        _, model = empirical_likelihood_calibration(
+            values,
+            h1_reference=h1,
+            h0_reference=h0,
+            evidence_observed=np.ones(4, dtype=bool),
+            reference_weights=np.asarray([1.0, 1.0, 1.0, 0.5]),
+            enabled=True,
+            hypothesis_class="regulatory_signaling",
+            anchor_description="weighted test anchors",
+            smoothing=0.5,
+            minimum_reference_count=2,
+        )
+        self.assertEqual(model["h0_reference_count"], 2)
+        self.assertAlmostEqual(model["h0_reference_weight"], 1.5)
+        self.assertEqual(model["h0_bin_counts"], [1, 1])
+        self.assertEqual(model["h0_bin_weights"], [1.0, 0.5])
 
     def test_distribution_matching_is_optional_and_incompatible_with_calibration(self) -> None:
         supplied = default_configuration(self.registry)

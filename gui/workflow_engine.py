@@ -235,6 +235,14 @@ BF_DISTRIBUTION_NORMALIZATION_QUANTILE = 0.90
 BF_DISTRIBUTION_NORMALIZATION_EXPONENT_BOUNDS = (0.1, 10.0)
 EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS = (0.05, 20.0)
 EMPIRICAL_LIKELIHOOD_MAX_BINS = 12
+DEFAULT_H0_CONFIRMED_MIXTURE_WEIGHT = 0.5
+EDGE_CURATED_REFERENCE_SCOPES = {
+    "class_matched",
+    "all_curated_edges",
+}
+DEFAULT_EDGE_CURATED_REFERENCE_SCOPE = "class_matched"
+H0_MIXTURE_OPTIMIZATION_METRIC = "jensen_shannon_bits"
+H0_MIXTURE_OPTIMIZATION_GRID_STEP = 0.01
 CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE = Path(
     "gui/calibration/positive_cases_20261028/curated_edge_likelihood_training.tsv"
 )
@@ -515,6 +523,24 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             ),
             "empirical_likelihood_minimum_reference_count": int(
                 defaults.get("edge_empirical_likelihood_minimum_reference_count", 20)
+            ),
+            "empirical_h0_confirmed_mixture_weight": float(
+                defaults.get(
+                    "edge_empirical_h0_confirmed_mixture_weight",
+                    DEFAULT_H0_CONFIRMED_MIXTURE_WEIGHT,
+                )
+            ),
+            "empirical_curated_reference_scope": str(
+                defaults.get(
+                    "edge_empirical_curated_reference_scope",
+                    DEFAULT_EDGE_CURATED_REFERENCE_SCOPE,
+                )
+            ),
+            "empirical_optimize_h0_mixture_weight": bool(
+                defaults.get(
+                    "edge_empirical_optimize_h0_mixture_weight",
+                    True,
+                )
             ),
         },
         "graph_statistics": {
@@ -866,6 +892,32 @@ def normalize_configuration(
             2,
             10000000,
         )
+    )
+    edge_integration["empirical_h0_confirmed_mixture_weight"] = _number(
+        edge_integration.get(
+            "empirical_h0_confirmed_mixture_weight",
+            DEFAULT_H0_CONFIRMED_MIXTURE_WEIGHT,
+        ),
+        "confirmed-negative H0 mixture weight",
+        0.0,
+        1.0,
+    )
+    edge_integration["empirical_curated_reference_scope"] = str(
+        edge_integration.get(
+            "empirical_curated_reference_scope",
+            DEFAULT_EDGE_CURATED_REFERENCE_SCOPE,
+        )
+    )
+    if (
+        edge_integration["empirical_curated_reference_scope"]
+        not in EDGE_CURATED_REFERENCE_SCOPES
+    ):
+        raise ValueError(
+            "edge curated-reference scope must be 'class_matched' or "
+            "'all_curated_edges'"
+        )
+    edge_integration["empirical_optimize_h0_mixture_weight"] = bool(
+        edge_integration.get("empirical_optimize_h0_mixture_weight", True)
     )
     if node_integration["empirical_likelihood_enabled"]:
         node_integration["normalize_bayes_factor_distributions"] = False
@@ -1225,6 +1277,7 @@ def empirical_likelihood_calibration(
     h1_reference: np.ndarray | pd.Series,
     h0_reference: np.ndarray | pd.Series,
     evidence_observed: np.ndarray | pd.Series,
+    reference_weights: np.ndarray | pd.Series | None = None,
     enabled: bool,
     hypothesis_class: str,
     anchor_description: str,
@@ -1249,6 +1302,15 @@ def empirical_likelihood_calibration(
     observed = np.asarray(evidence_observed, dtype=bool)
     if not (factors.shape == h1.shape == h0.shape == observed.shape):
         raise ValueError("empirical likelihood arrays must have identical shapes")
+    weights = (
+        np.ones(factors.shape, dtype=float)
+        if reference_weights is None
+        else np.asarray(reference_weights, dtype=float)
+    )
+    if weights.shape != factors.shape:
+        raise ValueError("empirical likelihood reference weights must match values")
+    if (~np.isfinite(weights) | (weights <= 0)).any():
+        raise ValueError("empirical likelihood reference weights must be positive")
     if (~np.isfinite(factors) | (factors <= 0)).any():
         raise ValueError("empirical likelihood calibration requires positive factors")
     if not math.isfinite(smoothing) or smoothing <= 0:
@@ -1262,6 +1324,8 @@ def empirical_likelihood_calibration(
     h0 = h0 & finite & ~h1
     h1_count = int(h1.sum())
     h0_count = int(h0.sum())
+    h1_weight = float(weights[h1].sum())
+    h0_weight = float(weights[h0].sum())
     applied = bool(
         enabled
         and h1_count >= int(minimum_reference_count)
@@ -1282,6 +1346,8 @@ def empirical_likelihood_calibration(
         "datum": "pre-calibration log Bayes factor",
         "h1_reference_count": h1_count,
         "h0_reference_count": h0_count,
+        "h1_reference_weight": h1_weight,
+        "h0_reference_weight": h0_weight,
         "minimum_reference_count": int(minimum_reference_count),
         "smoothing_pseudocount": float(smoothing),
         "likelihood_ratio_bounds": [lower, upper],
@@ -1315,9 +1381,19 @@ def empirical_likelihood_calibration(
         edges = np.concatenate(([-np.inf], interior, [np.inf]))
     h1_counts, _ = np.histogram(log_values[h1], bins=edges)
     h0_counts, _ = np.histogram(log_values[h0], bins=edges)
+    h1_bin_weights, _ = np.histogram(
+        log_values[h1], bins=edges, weights=weights[h1]
+    )
+    h0_bin_weights, _ = np.histogram(
+        log_values[h0], bins=edges, weights=weights[h0]
+    )
     bin_count = len(edges) - 1
-    p_h1 = (h1_counts + smoothing) / (h1_count + smoothing * bin_count)
-    p_h0 = (h0_counts + smoothing) / (h0_count + smoothing * bin_count)
+    p_h1 = (h1_bin_weights + smoothing) / (
+        h1_weight + smoothing * bin_count
+    )
+    p_h0 = (h0_bin_weights + smoothing) / (
+        h0_weight + smoothing * bin_count
+    )
     raw_ratios = p_h1 / p_h0
     ratios = np.clip(raw_ratios, lower, upper)
     positions = np.searchsorted(edges[1:-1], log_values, side="right")
@@ -1330,6 +1406,8 @@ def empirical_likelihood_calibration(
             ],
             "h1_bin_counts": [int(value) for value in h1_counts],
             "h0_bin_counts": [int(value) for value in h0_counts],
+            "h1_bin_weights": [float(value) for value in h1_bin_weights],
+            "h0_bin_weights": [float(value) for value in h0_bin_weights],
             "p_data_given_h1": [float(value) for value in p_h1],
             "p_data_given_h0": [float(value) for value in p_h0],
             "unclipped_likelihood_ratio_by_bin": [
@@ -1411,27 +1489,376 @@ def apply_empirical_likelihood_model_array(
     return calibrated
 
 
-def curated_edge_likelihood_models(
-    project: Path,
+def _likelihood_information_indices(model: dict[str, Any]) -> dict[str, float]:
+    """Return finite information-separation measures for one fitted model."""
+    p_h1 = np.asarray(model.get("p_data_given_h1") or [], dtype=float)
+    p_h0 = np.asarray(model.get("p_data_given_h0") or [], dtype=float)
+    if not len(p_h1) or p_h1.shape != p_h0.shape:
+        return {}
+    midpoint = (p_h1 + p_h0) / 2.0
+    return {
+        "jensen_shannon_bits": float(
+            0.5 * np.sum(p_h1 * np.log2(p_h1 / midpoint))
+            + 0.5 * np.sum(p_h0 * np.log2(p_h0 / midpoint))
+        ),
+        "kl_h1_h0_bits": float(np.sum(p_h1 * np.log2(p_h1 / p_h0))),
+        "kl_h0_h1_bits": float(np.sum(p_h0 * np.log2(p_h0 / p_h1))),
+        "total_variation": float(0.5 * np.sum(np.abs(p_h1 - p_h0))),
+    }
+
+
+def _collapse_all_curated_edge_references(group: pd.DataFrame) -> pd.DataFrame:
+    """Collapse cross-profile duplicates for the all-curated-edge strategy.
+
+    A pair is H1 when any curated subclass labels it H1.  Otherwise an
+    experimentally tested H0 takes precedence over matched background.  This
+    is the same conservative conflict policy used by the aggregate audit.
+    """
+    work = group.copy()
+    labels = work["class_label"].astype(str)
+    is_h1 = labels.str.startswith("H1")
+    is_h0 = labels.str.startswith("H0")
+    is_explicit = (
+        is_h0
+        & work["negative_kind"].astype(str).eq("explicit_tested_null")
+    )
+    work["_is_h1"] = is_h1
+    work["_is_h0"] = is_h0
+    work["_priority"] = np.where(is_h1, 0, np.where(is_explicit, 1, 2))
+    # When the same explicit H0 appears in CD and outside-CD catalogs, retain
+    # the more specific collecting-duct context for the pooled audit row.
+    work["_context_priority"] = work["context_policy"].astype(str).eq(
+        "outside_collecting_duct_assay"
+    ).astype(int)
+    pair_columns = ["node_a", "node_b"]
+    flags = work.groupby(pair_columns, sort=True)[["_is_h1", "_is_h0"]].any()
+    flags["h1_h0_cross_profile_conflict"] = (
+        flags["_is_h1"] & flags["_is_h0"]
+    )
+    factor_counts = work.groupby(pair_columns, sort=False)[
+        "source_bayes_factor"
+    ].nunique(dropna=False)
+    if bool((factor_counts > 1).any()):
+        raise ValueError(
+            "one curated pair has inconsistent source factors across subclasses"
+        )
+    selected = (
+        work.sort_values(
+            pair_columns + ["_priority", "_context_priority", "profile"],
+            kind="stable",
+        )
+        .drop_duplicates(pair_columns, keep="first")
+        .merge(
+            flags[["h1_h0_cross_profile_conflict"]].reset_index(),
+            on=pair_columns,
+            how="left",
+            validate="one_to_one",
+        )
+    )
+    selected["class_label"] = np.where(
+        selected["_is_h1"],
+        "H1_POSITIVE",
+        np.where(
+            selected["_priority"].eq(1),
+            "H0_EXPLICIT_NEGATIVE",
+            "H0_BACKGROUND",
+        ),
+    )
+    selected["negative_kind"] = np.where(
+        selected["_is_h1"],
+        "not_applicable",
+        np.where(
+            selected["_priority"].eq(1),
+            "explicit_tested_null",
+            "matched_unlabeled_background",
+        ),
+    )
+    selected["calibration_weight"] = 1.0
+    selected["profile"] = "all_curated_edges"
+    return selected.drop(
+        columns=["_is_h1", "_is_h0", "_priority", "_context_priority"]
+    ).reset_index(drop=True)
+
+
+def _fit_curated_edge_model_at_weight(
+    group: pd.DataFrame,
+    *,
+    mixture_weight: float,
+    smoothing: float,
+    minimum_reference_count: int,
+    enabled: bool,
+    hypothesis_class: str,
+    anchor_description: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Fit one stream at one confirmed/background H0 mixture weight."""
+    if not math.isfinite(mixture_weight) or not 0.0 <= mixture_weight <= 1.0:
+        raise ValueError("confirmed-negative H0 mixture weight must be in [0, 1]")
+    values = pd.to_numeric(
+        group["source_bayes_factor"], errors="raise"
+    ).to_numpy(float)
+    labels = group["class_label"].astype(str)
+    h1 = labels.str.startswith("H1").to_numpy(bool)
+    h0_label = labels.str.startswith("H0")
+    weights = (
+        pd.to_numeric(group["calibration_weight"], errors="raise").to_numpy(float)
+        if "calibration_weight" in group.columns
+        else np.ones(len(group), dtype=float)
+    ).copy()
+    negative_kind = group["negative_kind"].astype(str)
+    confirmed_h0 = (
+        h0_label & negative_kind.eq("explicit_tested_null")
+    ).to_numpy(bool)
+    background_h0 = (
+        h0_label & negative_kind.eq("matched_unlabeled_background")
+    ).to_numpy(bool)
+    confirmed_count = int(confirmed_h0.sum())
+    background_count = int(background_h0.sum())
+    if confirmed_count and background_count:
+        if math.isclose(mixture_weight, 0.0, abs_tol=1e-15):
+            h0 = background_h0.copy()
+        elif math.isclose(mixture_weight, 1.0, abs_tol=1e-15):
+            h0 = confirmed_h0.copy()
+        else:
+            h0 = confirmed_h0 | background_h0
+            total_h0_count = float(confirmed_count + background_count)
+            weights[confirmed_h0] = (
+                mixture_weight * total_h0_count / confirmed_count
+            )
+            weights[background_h0] = (
+                (1.0 - mixture_weight) * total_h0_count / background_count
+            )
+    elif confirmed_count:
+        h0 = confirmed_h0.copy()
+        weights[confirmed_h0] = 1.0
+    else:
+        h0 = background_h0.copy()
+        if background_count:
+            weights[background_h0] = 1.0
+    _, model = empirical_likelihood_calibration(
+        values,
+        h1_reference=h1,
+        h0_reference=h0,
+        evidence_observed=np.ones(len(values), dtype=bool),
+        reference_weights=weights,
+        enabled=enabled,
+        hypothesis_class=hypothesis_class,
+        anchor_description=anchor_description,
+        smoothing=smoothing,
+        minimum_reference_count=minimum_reference_count,
+    )
+    diagnostics = {
+        "confirmed_h0_count": confirmed_count,
+        "background_h0_count": background_count,
+        "confirmed_h0_effective_weight": float(
+            weights[confirmed_h0 & h0].sum()
+        ),
+        "background_h0_effective_weight": float(
+            weights[background_h0 & h0].sum()
+        ),
+    }
+    return model, diagnostics
+
+
+def _optimize_curated_h0_mixture_weight(
+    group: pd.DataFrame,
+    *,
+    fallback_weight: float,
+    smoothing: float,
+    minimum_reference_count: int,
+    enabled: bool,
+    hypothesis_class: str,
+    anchor_description: str,
+) -> tuple[
+    float,
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, float],
+    int,
+    int,
+]:
+    """Optimize w on fixed bins without refitting 101 histograms.
+
+    Fixed bins make every candidate directly comparable and reduce one stream's
+    optimization to two histogram passes plus inexpensive convex mixtures.
+    """
+    labels = group["class_label"].astype(str)
+    negative_kind = group["negative_kind"].astype(str)
+    h1 = labels.str.startswith("H1").to_numpy(bool)
+    confirmed_h0 = (
+        labels.str.startswith("H0")
+        & negative_kind.eq("explicit_tested_null")
+    ).to_numpy(bool)
+    background_h0 = (
+        labels.str.startswith("H0")
+        & negative_kind.eq("matched_unlabeled_background")
+    ).to_numpy(bool)
+    confirmed_count = int(confirmed_h0.sum())
+    background_count = int(background_h0.sum())
+    if confirmed_count and not background_count:
+        candidate_weights = np.asarray([1.0])
+    elif background_count and not confirmed_count:
+        candidate_weights = np.asarray([0.0])
+    elif confirmed_count and background_count:
+        candidate_weights = np.linspace(
+            0.0,
+            1.0,
+            int(round(1.0 / H0_MIXTURE_OPTIMIZATION_GRID_STEP)) + 1,
+        )
+    else:
+        candidate_weights = np.asarray([fallback_weight])
+
+    baseline_weight = (
+        0.5 if confirmed_count and background_count else float(candidate_weights[0])
+    )
+    baseline_model, _ = _fit_curated_edge_model_at_weight(
+        group,
+        mixture_weight=baseline_weight,
+        smoothing=smoothing,
+        minimum_reference_count=minimum_reference_count,
+        enabled=enabled,
+        hypothesis_class=hypothesis_class,
+        anchor_description=anchor_description,
+    )
+    if not baseline_model.get("applied"):
+        model, diagnostics = _fit_curated_edge_model_at_weight(
+            group,
+            mixture_weight=float(candidate_weights[0]),
+            smoothing=smoothing,
+            minimum_reference_count=minimum_reference_count,
+            enabled=enabled,
+            hypothesis_class=hypothesis_class,
+            anchor_description=anchor_description,
+        )
+        return (
+            float(candidate_weights[0]),
+            model,
+            diagnostics,
+            _likelihood_information_indices(model),
+            int(len(candidate_weights)),
+            int(bool(model.get("applied"))),
+        )
+
+    raw_edges = baseline_model["bin_edges_log_bayes_factor"]
+    numeric_edges = np.asarray(
+        [
+            -np.inf
+            if value is None and index == 0
+            else np.inf
+            if value is None
+            else float(value)
+            for index, value in enumerate(raw_edges)
+        ],
+        dtype=float,
+    )
+    values = pd.to_numeric(
+        group["source_bayes_factor"], errors="raise"
+    ).to_numpy(float)
+    log_values = np.log(values)
+    reference_weights = (
+        pd.to_numeric(group["calibration_weight"], errors="raise").to_numpy(float)
+        if "calibration_weight" in group.columns
+        else np.ones(len(group), dtype=float)
+    )
+    bin_count = len(numeric_edges) - 1
+    h1_weights, _ = np.histogram(
+        log_values[h1], bins=numeric_edges, weights=reference_weights[h1]
+    )
+    confirmed_counts, _ = np.histogram(
+        log_values[confirmed_h0], bins=numeric_edges
+    )
+    background_counts, _ = np.histogram(
+        log_values[background_h0], bins=numeric_edges
+    )
+    p_h1 = (h1_weights + smoothing) / (
+        float(h1_weights.sum()) + smoothing * bin_count
+    )
+    total_h0_count = float(confirmed_count + background_count)
+    candidates: list[tuple[float, dict[str, float]]] = []
+    for candidate in candidate_weights:
+        candidate = float(candidate)
+        if (
+            math.isclose(candidate, 1.0, abs_tol=1e-15)
+            and confirmed_count < minimum_reference_count
+        ) or (
+            math.isclose(candidate, 0.0, abs_tol=1e-15)
+            and background_count < minimum_reference_count
+        ):
+            continue
+        if confirmed_count and background_count:
+            h0_bin_weights = (
+                candidate
+                * total_h0_count
+                * confirmed_counts.astype(float)
+                / confirmed_count
+                + (1.0 - candidate)
+                * total_h0_count
+                * background_counts.astype(float)
+                / background_count
+            )
+        elif confirmed_count:
+            h0_bin_weights = confirmed_counts.astype(float)
+        else:
+            h0_bin_weights = background_counts.astype(float)
+        p_h0 = (h0_bin_weights + smoothing) / (
+            float(h0_bin_weights.sum()) + smoothing * bin_count
+        )
+        midpoint = (p_h1 + p_h0) / 2.0
+        information = {
+            "jensen_shannon_bits": float(
+                0.5 * np.sum(p_h1 * np.log2(p_h1 / midpoint))
+                + 0.5 * np.sum(p_h0 * np.log2(p_h0 / midpoint))
+            ),
+            "kl_h1_h0_bits": float(np.sum(p_h1 * np.log2(p_h1 / p_h0))),
+            "kl_h0_h1_bits": float(np.sum(p_h0 * np.log2(p_h0 / p_h1))),
+            "total_variation": float(0.5 * np.sum(np.abs(p_h1 - p_h0))),
+        }
+        candidates.append((candidate, information))
+    if candidates:
+        selected_weight, _ = max(
+            candidates,
+            key=lambda item: (
+                item[1][H0_MIXTURE_OPTIMIZATION_METRIC],
+                -abs(item[0] - 0.5),
+                -item[0],
+            ),
+        )
+    else:
+        selected_weight = fallback_weight
+    model, diagnostics = _fit_curated_edge_model_at_weight(
+        group,
+        mixture_weight=float(selected_weight),
+        smoothing=smoothing,
+        minimum_reference_count=minimum_reference_count,
+        enabled=enabled,
+        hypothesis_class=hypothesis_class,
+        anchor_description=anchor_description,
+    )
+    return (
+        float(selected_weight),
+        model,
+        diagnostics,
+        _likelihood_information_indices(model),
+        int(len(candidate_weights)),
+        int(len(candidates)),
+    )
+
+
+def _curated_edge_likelihood_models_from_training(
+    training: pd.DataFrame,
     *,
     smoothing: float,
     minimum_reference_count: int,
-    enabled: bool = True,
+    h0_confirmed_mixture_weight: float,
+    reference_scope: str,
+    optimize_h0_mixture_weight: bool,
+    enabled: bool,
 ) -> dict[str, dict[str, Any]]:
-    """Fit stream models from the versioned 2026-10-28 curation catalog.
-
-    The table stores the source-scale BF for every curated H1/H0 reference.
-    Physical/localization and acute-regulatory profiles require collecting-duct
-    evidence; kinase-substrate and messenger-binding profiles may use direct
-    biochemical evidence from other model systems.
-    """
-    path = project / CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE
-    if not path.exists():
-        return {}
-    training = pd.read_csv(path, sep="\t")
+    """Fit edge-only empirical models under either curated-reference strategy."""
     required = {
         "stream_id",
         "profile",
+        "node_a",
+        "node_b",
         "class_label",
         "context_policy",
         "negative_kind",
@@ -1442,60 +1869,162 @@ def curated_edge_likelihood_models(
         raise ValueError(
             f"curated edge likelihood catalog is missing columns: {', '.join(missing)}"
         )
+    if reference_scope not in EDGE_CURATED_REFERENCE_SCOPES:
+        raise ValueError(
+            "edge curated-reference scope must be 'class_matched' or "
+            "'all_curated_edges'"
+        )
     models: dict[str, dict[str, Any]] = {}
-    for stream_id, group in training.groupby("stream_id", sort=True):
-        values = pd.to_numeric(group["source_bayes_factor"], errors="raise").to_numpy(
-            float
-        )
-        labels = group["class_label"].astype(str)
-        h1 = labels.str.startswith("H1").to_numpy(bool)
-        h0 = labels.str.startswith("H0").to_numpy(bool)
-        profiles = sorted(set(group["profile"].astype(str)))
-        if len(profiles) != 1:
-            raise ValueError(
-                f"curated stream {stream_id} spans multiple profiles: {profiles}"
+    for stream_id, all_stream_rows in training.groupby("stream_id", sort=True):
+        stream_id = str(stream_id)
+        stream_profile = EDGE_LIKELIHOOD_PROFILES.get(stream_id)
+        if stream_profile is None:
+            continue
+        if reference_scope == "class_matched":
+            group = all_stream_rows.loc[
+                all_stream_rows["profile"].astype(str).eq(stream_profile)
+            ].copy()
+            hypothesis_class = stream_profile
+            scope_description = (
+                f"Only the {stream_profile.replace('_', ' ')} curated subclass "
+                "was assigned to this stream"
             )
+            conflict_count = 0
+        else:
+            group = _collapse_all_curated_edge_references(all_stream_rows)
+            hypothesis_class = "all_curated_edges"
+            scope_description = (
+                "Every curated edge subclass was assigned to this stream; H1 "
+                "takes precedence over a cross-subclass H0 conflict"
+            )
+            conflict_count = int(
+                group.get(
+                    "h1_h0_cross_profile_conflict",
+                    pd.Series(False, index=group.index),
+                ).sum()
+            )
+        if group.empty:
+            continue
         context_policies = sorted(set(group["context_policy"].astype(str)))
-        context_description = (
-            "Collecting-duct specificity required"
-            if context_policies == ["collecting_duct_specific"]
-            else "Direct biochemical evidence accepted across model contexts"
+        if context_policies == ["collecting_duct_specific"]:
+            context_description = "Collecting-duct specificity required"
+        elif "outside_collecting_duct_assay" in context_policies:
+            context_description = (
+                "Confirmed negatives include collecting-duct and outside-CD "
+                "experimental controls"
+            )
+        else:
+            context_description = (
+                "Direct biochemical evidence accepted across model contexts"
+            )
+        anchor_description = (
+            "Primary-literature curation updated 2026-10-30. "
+            f"{scope_description}. {context_description}. H0 is a normalized "
+            "mixture of confirmed context-appropriate negatives and deterministic "
+            "endpoint-matched unlabeled background."
         )
-        _, model = empirical_likelihood_calibration(
-            values,
-            h1_reference=h1,
-            h0_reference=h0,
-            evidence_observed=np.ones(len(values), dtype=bool),
-            enabled=enabled,
-            hypothesis_class=profiles[0],
-            anchor_description=(
-                "Primary-literature curation dated 2026-10-28. "
-                f"{context_description}. Explicit tested nulls are preferred; "
-                "otherwise H0 is deterministic endpoint-matched unlabeled background."
-            ),
-            smoothing=smoothing,
-            minimum_reference_count=minimum_reference_count,
-        )
+        if optimize_h0_mixture_weight:
+            (
+                selected_weight,
+                model,
+                diagnostics,
+                information,
+                evaluated_candidate_count,
+                applicable_candidate_count,
+            ) = _optimize_curated_h0_mixture_weight(
+                group,
+                fallback_weight=h0_confirmed_mixture_weight,
+                smoothing=smoothing,
+                minimum_reference_count=minimum_reference_count,
+                enabled=enabled,
+                hypothesis_class=hypothesis_class,
+                anchor_description=anchor_description,
+            )
+        else:
+            model, diagnostics = _fit_curated_edge_model_at_weight(
+                group,
+                mixture_weight=h0_confirmed_mixture_weight,
+                smoothing=smoothing,
+                minimum_reference_count=minimum_reference_count,
+                enabled=enabled,
+                hypothesis_class=hypothesis_class,
+                anchor_description=anchor_description,
+            )
+            selected_weight = float(h0_confirmed_mixture_weight)
+            information = _likelihood_information_indices(model)
+            evaluated_candidate_count = 1
+            applicable_candidate_count = int(bool(model.get("applied")))
+        labels = group["class_label"].astype(str)
         model.update(
             {
                 "reference_source": "positive_cases_20261028",
                 "reference_file": str(
                     CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE
                 ).replace("\\", "/"),
+                "reference_scope": reference_scope,
+                "stream_hypothesis_subclass": stream_profile,
+                "curated_subclasses": sorted(set(group["profile"].astype(str))),
                 "context_policy": context_policies,
                 "explicit_h0_count": int(
                     group["negative_kind"].eq("explicit_tested_null").sum()
                 ),
-                "background_h0_count": int(
-                    group["negative_kind"]
-                    .eq("matched_unlabeled_background")
-                    .sum()
-                ),
+                "confirmed_h0_count": diagnostics["confirmed_h0_count"],
+                "background_h0_count": diagnostics["background_h0_count"],
                 "training_reference_count": int(len(group)),
+                "outside_cd_h0_count": int(
+                    (
+                        group["context_policy"].eq("outside_collecting_duct_assay")
+                        & labels.str.startswith("H0")
+                    ).sum()
+                ),
+                "h1_h0_cross_profile_conflict_count": conflict_count,
+                "h0_confirmed_mixture_weight": float(selected_weight),
+                "confirmed_h0_effective_weight": diagnostics[
+                    "confirmed_h0_effective_weight"
+                ],
+                "background_h0_effective_weight": diagnostics[
+                    "background_h0_effective_weight"
+                ],
+                "h0_mixture_weight_optimization": {
+                    "enabled": bool(optimize_h0_mixture_weight),
+                    "objective": H0_MIXTURE_OPTIMIZATION_METRIC,
+                    "grid_step": float(H0_MIXTURE_OPTIMIZATION_GRID_STEP),
+                    "evaluated_candidate_count": evaluated_candidate_count,
+                    "applicable_candidate_count": applicable_candidate_count,
+                    "selected_weight": float(selected_weight),
+                    "selected_information_indices": information,
+                    "tie_breaker": "closest_to_0.5_then_lower_weight",
+                },
             }
         )
-        models[str(stream_id)] = model
+        models[stream_id] = model
     return models
+
+
+def curated_edge_likelihood_models(
+    project: Path,
+    *,
+    smoothing: float,
+    minimum_reference_count: int,
+    h0_confirmed_mixture_weight: float = DEFAULT_H0_CONFIRMED_MIXTURE_WEIGHT,
+    reference_scope: str = DEFAULT_EDGE_CURATED_REFERENCE_SCOPE,
+    optimize_h0_mixture_weight: bool = True,
+    enabled: bool = True,
+) -> dict[str, dict[str, Any]]:
+    """Fit edge-only empirical models from the versioned curated catalog."""
+    path = project / CURATED_EDGE_LIKELIHOOD_TRAINING_RELATIVE
+    if not path.exists():
+        return {}
+    training = pd.read_csv(path, sep="\t")
+    return _curated_edge_likelihood_models_from_training(
+        training,
+        smoothing=smoothing,
+        minimum_reference_count=minimum_reference_count,
+        h0_confirmed_mixture_weight=h0_confirmed_mixture_weight,
+        reference_scope=reference_scope,
+        optimize_h0_mixture_weight=optimize_h0_mixture_weight,
+        enabled=enabled,
+    )
 
 
 def complement_minimum_likelihood(
@@ -4500,6 +5029,23 @@ def combine_edge_factors(
             "empirical_likelihood_minimum_reference_count", 20
         )
     )
+    h0_confirmed_mixture_weight = float(
+        config["edge_integration"].get(
+            "empirical_h0_confirmed_mixture_weight",
+            DEFAULT_H0_CONFIRMED_MIXTURE_WEIGHT,
+        )
+    )
+    curated_reference_scope = str(
+        config["edge_integration"].get(
+            "empirical_curated_reference_scope",
+            DEFAULT_EDGE_CURATED_REFERENCE_SCOPE,
+        )
+    )
+    optimize_h0_mixture_weight = bool(
+        config["edge_integration"].get(
+            "empirical_optimize_h0_mixture_weight", True
+        )
+    )
     base_log_odds = math.log(prior / (1.0 - prior))
     log_odds = np.full((len(graph_symbols), len(graph_symbols)), base_log_odds, dtype=float)
     unique_pair_indices = np.triu_indices(len(graph_symbols), 1)
@@ -4524,6 +5070,9 @@ def combine_edge_factors(
         project,
         smoothing=empirical_smoothing,
         minimum_reference_count=empirical_minimum,
+        h0_confirmed_mixture_weight=h0_confirmed_mixture_weight,
+        reference_scope=curated_reference_scope,
+        optimize_h0_mixture_weight=optimize_h0_mixture_weight,
         enabled=empirical_enabled,
     ) if empirical_enabled else {}
     # Retain the historical graph-derived references only as a compatibility
@@ -4919,6 +5468,12 @@ def combine_edge_factors(
         "empirical_likelihood_enabled": empirical_enabled,
         "empirical_likelihood_smoothing": empirical_smoothing,
         "empirical_likelihood_minimum_reference_count": empirical_minimum,
+        "empirical_h0_confirmed_mixture_weight": h0_confirmed_mixture_weight,
+        "empirical_curated_reference_scope": curated_reference_scope,
+        "empirical_optimize_h0_mixture_weight": optimize_h0_mixture_weight,
+        "empirical_h0_mixture_optimization_metric": (
+            H0_MIXTURE_OPTIMIZATION_METRIC
+        ),
         "empirical_likelihood_ratio_bounds": list(
             EMPIRICAL_LIKELIHOOD_RATIO_BOUNDS
         ),
@@ -4939,13 +5494,23 @@ def combine_edge_factors(
             "likelihood ratio raised to its user-specified weight. Each stream is "
             "assigned to a biological hypothesis class (physical proximity, physical "
             "binding, directed phosphorylation, acute regulatory signaling, or "
-            "messenger binding). Versioned primary-literature references dated "
-            "2026-10-28 estimate P(D|H1) and P(D|H0) with a smoothed empirical "
+            "messenger binding). Versioned primary-literature references updated "
+            "2026-10-30 estimate P(D|H1) and P(D|H0) with a weighted, smoothed empirical "
             "histogram; the saved audit records reference counts, bins, probabilities, "
-            "and bounds. Physical/localization and acute-regulatory references require "
-            "collecting-duct support, whereas direct biochemical kinase-substrate and "
-            "messenger-binding evidence may come from other model contexts. Explicit "
-            "tested nulls are preferred; labeled endpoint-matched background is used "
+            "and bounds. The selected edge-only reference strategy either assigns "
+            "curated subclasses only to biologically matched streams or applies every "
+            "curated edge to every primary edge stream. For each stream, a grid search "
+            "selects the confirmed-negative mixture weight w that maximizes symmetric "
+            "Jensen-Shannon separation; both directional KL indices are retained in "
+            "the audit. The chosen w assigns that fraction of H0 reference mass to "
+            "confirmed context-appropriate negatives and 1-w to endpoint-matched "
+            "background; each group is normalized internally. Physical/"
+            "localization references require "
+            "collecting-duct support; acute-regulatory models prioritize collecting-duct "
+            "controls and accept compatible outside-CD negatives at reduced context "
+            "weight. Direct biochemical kinase-substrate and messenger-binding evidence "
+            "may come from other model contexts. Explicit tested nulls are preferred; "
+            "labeled endpoint-matched background is used "
             "where no defensible experimental negatives were curated. "
             "Missing/out-of-scope data remain neutral. The legacy distribution matcher "
             "is bypassed whenever empirical likelihood calibration is enabled. "

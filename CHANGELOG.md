@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-11-02 — Edge-reference strategies and automatic H0 optimization
+
+- Added two empirical edge-calibration strategies to the V1 GUI: route each
+  curated subclass only to biologically matched evidence streams, or apply the
+  pooled unique curated-edge catalog to every primary edge stream.
+- Cross-scored all 1,381 versioned reference rows with all 12 primary edge
+  streams so either strategy can be selected without rebuilding source data.
+- Added a per-stream grid search over `w` from 0 to 1 in steps of 0.01. The
+  chosen value maximizes symmetric Jensen–Shannon separation; both directional
+  KL indices and total variation are saved for audit.
+- Added conservative pooled-pair conflict handling: any H1 label takes
+  precedence over a cross-subclass H0 label, and every conflict is counted.
+- Kept node evidence and both derived closure streams unchanged.
+
+## 2026-10-30 — Single H0 mixture control
+
+- Replaced the separate context and explicit-negative multipliers with one
+  interpretable mixture parameter, `w`, constrained to 0–1.
+- Confirmed, context-appropriate negatives now receive total H0 mass `w`, while
+  endpoint-matched background pairs receive total mass `1-w`; observations are
+  normalized within each group so raw group size does not determine reliance.
+- Set the default to `w = 0.5`, included both collecting-duct and outside-CD
+  experimental negatives in the confirmed group, and retained context-general
+  biochemical negatives for KinasePredictor.
+- Added the same mixture semantics to the aggregate-edge sensitivity analysis,
+  GUI evidence inspector, generated calibration metadata, and regression tests.
+
+## 2026-10-30 — Weighted outside-CD regulatory negatives
+
+- Audited all 31 outside-collecting-duct assay records by mechanism rather than
+  treating the workbook as one undifferentiated negative set.
+- Added 16 gene-resolved endpoint-nonresponse pairs to the acute-regulatory H0
+  used by OmniPath and STRING; one conflicting pair remained H1 and one record
+  could not be resolved to a target gene.
+- Assigned each outside-CD regulatory control base weight 0.5 while retaining
+  base weight 1.0 for collecting-duct controls. Added a GUI-configurable explicit-
+  negative multiplier, default 4, applied after the context weight. The raw
+  regulatory H0 remains 240 pairs:
+  11 CD explicit negatives, 16 outside-CD explicit negatives, and 213 matched
+  background pairs, for an effective default H0 weight of 289.
+- Added weighted histogram counts, effective reference totals, context-specific
+  H0 counts, GUI interpretation text, and regression coverage.
+
+## 2026-10-29 — Controlled experimental negatives in H0 references
+
+- Added the supplied collecting-duct negative-interaction workbook to the
+  versioned calibration sources and preserved its source rows for audit.
+- Added 2 controlled collecting-duct association failures to physical-binding
+  H0, 11 controlled collecting-duct endpoint nonresponses to acute-regulatory
+  H0, and 5 additional context-general direct reaction failures to
+  KinasePredictor H0 after gene resolution and conflict deduplication.
+- Replaced an equal number of endpoint-matched background rows for the physical
+  and regulatory profiles so their comparison-set sizes did not inflate.
+- Excluded dispensability, limited/disputed evidence, mutant-only controls, and
+  nonbinding evidence used as a proxy for non-colocalization.
+- Audited three site-specific kinase-reaction negatives that conflict with
+  pair-level positives instead of silently turning those pairs into H0.
+- Replaced the physical-positive source with the revised workbook and removed
+  all eight ROOT08 TMEM27/collectrin claims from the retracted paper.
+- Added 13 gene-resolved collecting-duct biological-pair nondetections to
+  physical-binding H0. Excluded eight specificity controls, the restricted-
+  negative sheet, one promoter-context pair, and one pair conflicting with a
+  collecting-duct positive.
+
 ## 2026-10-28 — Literature-curated H1/H0 edge distributions
 
 - Added a versioned, reproducible calibration catalog from the four supplied

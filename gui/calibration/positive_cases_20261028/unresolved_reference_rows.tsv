@@ -4,19 +4,9 @@ physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused as
 physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	11	F0005	AQP2	14-3-3 (pan antibody; isoforms unresolved in CCD assay)	no unambiguous gene-resolved endpoint
 physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	13	F0007	AQP2	Hsp70 (isoform unresolved)	no unambiguous gene-resolved endpoint
 physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	20	F0014	ARHGEF7	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	42	F0036	MAL	MARCKSL1	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	43	F0037	MAL	SCNN1A	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	45	F0039	NEDD4L	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
 physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	46	F0040	NEDD4L	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	61	F0055	PDE4C (PDE4C)	PRKAR family (isoform unresolved) (PKA regulatory subunit)	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	85	F0079	TMEM27 (collectrin)	ACTG1 (γ-actin)	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	86	F0080	TMEM27 (collectrin)	IFT88 (polaris)	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	87	F0081	TMEM27 (collectrin)	MYH9 (nonmuscle myosin IIA)	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	88	F0082	TMEM27 (collectrin)	PKD2	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	89	F0083	TMEM27 (collectrin)	SNAP23	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	90	F0084	TMEM27 (collectrin)	SNAPIN	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	91	F0085	TMEM27 (collectrin)	STX4	no unambiguous gene-resolved endpoint
-physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	92	F0086	TMEM27 (collectrin)	tropomyosin (isoform unresolved)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	47	F0041	NEDD4L	YWHA family (isoform unresolved)	no unambiguous gene-resolved endpoint
+physical_proximity;physical_binding	Collecting_duct_PPI_evidence.xlsx	Focused associations	62	F0056	PDE4C (PDE4C)	PRKAR family (isoform unresolved) (PKA regulatory subunit)	no unambiguous gene-resolved endpoint
 directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	9	E0003	AMPK [catalytic isoform unresolved]	ATP6V1A	kinase/substrate endpoint is unresolved or non-gene
 directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	22	E0016	CAMKK2	AMPK (alpha isoform unresolved)	kinase/substrate endpoint is unresolved or non-gene
 directed_phosphorylation	Collecting_duct_phosphorylation_evidence.xlsx	Directed evidence	34	E0028	CK2 [catalytic isoform unresolved]	SCNN1B	kinase/substrate endpoint is unresolved or non-gene
@@ -160,3 +150,14 @@ messenger_binding	messenger_binding_review.xlsx	Pair Classifications	84		satavap
 messenger_binding	messenger_binding_review.xlsx	Pair Classifications	85		Sp-cAMPS	PRKAR1A (PKA RIα)	noncanonical messenger analog or unresolved protein
 messenger_binding	messenger_binding_review.xlsx	Pair Classifications	87		tolvaptan (OPC-41061)	AVPR1A	noncanonical messenger analog or unresolved protein
 messenger_binding	messenger_binding_review.xlsx	Pair Classifications	89		tolvaptan (OPC-41061)	AVPR2	noncanonical messenger analog or unresolved protein
+regulatory_signaling	collecting_duct_negative_examples.xlsx	CD assay negatives	12	CN006	EGF (apically supplied)	ENaC transport (SCNN1 complex)	negative assay endpoint is not gene-resolved
+regulatory_signaling	collecting_duct_negative_examples.xlsx	CD assay negatives	15	CN009	PKA / EPAC cAMP pathways	SLC14A2 (UT-A1)	negative assay endpoint is not gene-resolved
+regulatory_signaling	collecting_duct_negative_examples.xlsx	CD assay negatives	17	CN011	Prorenin (REN precursor)	V-ATPase activity	negative assay endpoint is not gene-resolved
+regulatory_signaling	collecting_duct_negative_examples.xlsx	Outside CD assays	17	OC011	USP10	ENaC ubiquitination	negative assay endpoint is not gene-resolved
+directed_phosphorylation	collecting_duct_negative_examples.xlsx	Outside CD assays	10	OC004	PKA catalytic subunit	AQP2 S261/S264/S269	negative assay endpoint is not gene-resolved
+directed_phosphorylation	collecting_duct_negative_examples.xlsx	Outside CD assays	21	OC015	AMPK	KCNQ1	negative assay endpoint is not gene-resolved
+physical_binding	Collecting_duct_negative_PPI_examples_expanded.xlsx	Negative pair tests	21	N015	Kcnn3	Trpv4	site/context-specific negative conflicts with a curated positive for the same pair; excluded from pair-level H0
+directed_phosphorylation	collecting_duct_negative_examples.xlsx	Outside CD assays	29	OC023	Camk2d	Slc14a2	site/context-specific negative conflicts with a curated positive for the same pair; excluded from pair-level H0
+directed_phosphorylation	collecting_duct_negative_examples.xlsx	Outside CD assays	30	OC024	Cdc42bpb	Slc14a2	site/context-specific negative conflicts with a curated positive for the same pair; excluded from pair-level H0
+directed_phosphorylation	collecting_duct_negative_examples.xlsx	Outside CD assays	32	OC026	Phkg2	Slc14a2	site/context-specific negative conflicts with a curated positive for the same pair; excluded from pair-level H0
+regulatory_signaling	collecting_duct_negative_examples.xlsx	Outside CD assays	33	OC027	Slc14a2	Snapin	site/context-specific negative conflicts with a curated positive for the same pair; excluded from pair-level H0

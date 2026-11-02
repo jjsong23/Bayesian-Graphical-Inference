@@ -741,10 +741,31 @@ function renderEvidenceInspection(payload) {
         const model = stream.empirical_likelihood;
         if (model.reference_source === "positive_cases_20261028") {
           const context = (model.context_policy || []).join(", ").replaceAll("_", " ");
+          const outsideCount = Number(model.outside_cd_h0_count || 0);
+          const outsideNote = outsideCount
+            ? ` This confirmed group includes ${formatInt(outsideCount)} outside-CD experimental negatives.`
+            : "";
+          const mixtureWeight = Number(model.h0_confirmed_mixture_weight ?? 0.5);
+          const referenceScope = model.reference_scope === "all_curated_edges"
+            ? "all curated edge subclasses"
+            : `class-matched ${String(model.stream_hypothesis_subclass || model.hypothesis_class || "edge").replaceAll("_", " ")} references`;
+          const optimization = model.h0_mixture_weight_optimization || {};
+          const information = optimization.selected_information_indices || {};
+          const hasInformation = Number.isFinite(Number(information.jensen_shannon_bits));
+          const optimizationNote = optimization.enabled && hasInformation
+            ? ` The selected w=${formatEvidenceNumber(mixtureWeight)} maximized Jensen–Shannon separation` +
+              ` (${formatEvidenceNumber(information.jensen_shannon_bits)} bits); ` +
+              `KL(H1||H0)=${formatEvidenceNumber(information.kl_h1_h0_bits)}, KL(H0||H1)=${formatEvidenceNumber(information.kl_h0_h1_bits)}.`
+            : optimization.enabled
+              ? " Mixture optimization was unavailable because the curated H1/H0 references did not meet the configured minimum."
+              : "";
           parts.push(
-            `Curated reference: Positive Cases (2026-10-28); context ${context || "profile-specific"}; ` +
-            `${formatInt(model.explicit_h0_count || 0)} explicit tested H0 and ` +
-            `${formatInt(model.background_h0_count || 0)} endpoint-matched background H0.`
+            `Curated reference: Positive Cases (updated 2026-10-30); assignment ${referenceScope}; context ${context || "profile-specific"}; ` +
+            `${formatInt(model.confirmed_h0_count || 0)} confirmed context-appropriate H0 and ` +
+            `${formatInt(model.background_h0_count || 0)} endpoint-matched background H0.` +
+            outsideNote +
+            ` Confirmed negatives receive ${formatEvidenceNumber(100 * mixtureWeight)}% of H0 probability mass; matched background receives ${formatEvidenceNumber(100 * (1 - mixtureWeight))}%.` +
+            optimizationNote
           );
         }
         if (model.applied) {
@@ -752,6 +773,7 @@ function renderEvidenceInspection(payload) {
             `Empirical ${stream.likelihood_hypothesis_class || model.hypothesis_class || "hypothesis"} model: ` +
             `P(Data | H1) and P(Data | H0) were estimated from ${formatInt(model.h1_reference_count)} H1 ` +
             `and ${formatInt(model.h0_reference_count)} H0 references using smoothing ${formatEvidenceNumber(model.smoothing_pseudocount)}. ` +
+            `The effective weighted H0 total is ${formatEvidenceNumber(model.h0_reference_weight ?? model.h0_reference_count)}. ` +
             `Their likelihood ratio is the displayed BF. ${model.anchor_description || ""}`
           );
         } else {
@@ -1610,6 +1632,7 @@ function populateControls() {
     : edge.normalize_bayes_factor_distributions ? "distribution" : "source";
   $("edge-likelihood-smoothing").value = edge.empirical_likelihood_smoothing;
   $("edge-likelihood-minimum").value = edge.empirical_likelihood_minimum_reference_count;
+  $("edge-curated-reference-scope").value = edge.empirical_curated_reference_scope || "class_matched";
   $("edge-distribution-target").value = edge.distribution_normalization_target_bayes_factor;
   $("edge-prior").value = edge.prior_probability;
   $("edge-cutoff").value = edge.output_probability_cutoff;
@@ -1707,6 +1730,8 @@ function collectConfiguration() {
       empirical_likelihood_enabled: edgeCalibrationMode === "empirical",
       empirical_likelihood_smoothing: Number($("edge-likelihood-smoothing").value),
       empirical_likelihood_minimum_reference_count: Number($("edge-likelihood-minimum").value),
+      empirical_curated_reference_scope: $("edge-curated-reference-scope").value,
+      empirical_optimize_h0_mixture_weight: true,
       prior_probability: Number($("edge-prior").value),
       output_probability_cutoff: Number($("edge-cutoff").value),
     },
@@ -1765,6 +1790,12 @@ function setEvidenceCalibrationControls(group) {
     const field = $(`${group}-${suffix}-field`);
     input.disabled = !empirical;
     field.classList.toggle("calibration-setting-inactive", !empirical);
+  }
+  if (group === "edge") {
+    const referenceScope = $("edge-curated-reference-scope");
+    const referenceScopeField = $("edge-curated-reference-scope-field");
+    referenceScope.disabled = !empirical;
+    referenceScopeField.classList.toggle("calibration-setting-inactive", !empirical);
   }
   const target = $(`${group}-distribution-target`);
   const targetField = $(`${group}-distribution-target-field`);
