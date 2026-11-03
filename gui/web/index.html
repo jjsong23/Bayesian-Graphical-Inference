@@ -647,8 +647,26 @@
                 <div><span>Prior</span><strong id="evidence-summary-prior">—</strong></div>
                 <div><span>Posterior</span><strong id="evidence-summary-posterior">—</strong></div>
                 <div><span>Decision</span><strong id="evidence-summary-decision">—</strong></div>
+                <div id="evidence-summary-curated-wrap" class="hidden"><span>Curated edge set</span><strong id="evidence-summary-curated">—</strong></div>
               </div>
               <div id="evidence-reconciliation" class="evidence-reconciliation"></div>
+              <section id="curated-edge-reference" class="curated-edge-reference hidden" aria-labelledby="curated-edge-reference-title">
+                <div class="curated-edge-reference-heading">
+                  <div>
+                    <span class="eyebrow">Calibration provenance</span>
+                    <h4 id="curated-edge-reference-title">Curated edge-set membership</h4>
+                  </div>
+                  <span id="curated-edge-reference-status" class="trace-status">—</span>
+                </div>
+                <p id="curated-edge-reference-summary"></p>
+                <div class="curated-edge-reference-table-wrap">
+                  <table class="curated-edge-reference-table">
+                    <thead><tr><th>Subclass</th><th>Reference label</th><th>Context</th><th>Source location</th><th>PMID</th><th>Curator reasoning</th></tr></thead>
+                    <tbody id="curated-edge-reference-body"></tbody>
+                  </table>
+                </div>
+                <p class="scientific-note">Curated membership marks an H1/H0 calibration example. It does not by itself insert the edge into the graph, add evidence to that edge, or guarantee its inclusion in a returned path.</p>
+              </section>
               <section id="evidence-literature-interpretation" class="selected-literature-panel hidden" aria-labelledby="selected-literature-title">
                 <div class="selected-literature-heading">
                   <div>
@@ -746,6 +764,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20261102-edge-reference-strategies" defer></script>
+    <script src="/app.js?v=20261102-curated-edge-membership" defer></script>
   </body>
 </html>

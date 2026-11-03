@@ -115,6 +115,37 @@ class EvidenceInspectorTests(unittest.TestCase):
         self.assertAlmostEqual(payload["stored_posterior_probability"], 0.5)
         self.assertAlmostEqual(payload["reconstructed_posterior_probability"], 0.5)
         self.assertTrue(all(item["status"] == "disabled" for item in payload["streams"]))
+        self.assertIn("curated_edge_reference", payload)
+
+    def test_curated_edge_membership_retains_source_location_and_reasoning(self) -> None:
+        available, catalog = evidence_inspector._curated_edge_reference_catalog(
+            PROJECT_ROOT
+        )
+        membership = evidence_inspector._curated_edge_reference_membership(
+            ("Aqp2", "Akt1"),
+            catalog_available=available,
+            catalog=catalog,
+        )
+        self.assertTrue(membership["catalog_available"])
+        self.assertTrue(membership["is_curated_reference"])
+        self.assertTrue(membership["is_positive_reference"])
+        directed = [
+            row
+            for row in membership["records"]
+            if row["profile"] == "directed_phosphorylation"
+        ]
+        self.assertTrue(directed)
+        self.assertEqual(directed[0]["source_sheet"], "Directed evidence")
+        self.assertTrue(directed[0]["pmids"])
+        self.assertTrue(directed[0]["reasoning"])
+
+        absent = evidence_inspector._curated_edge_reference_membership(
+            ("DefinitelyNotAProtein", "AlsoNotAProtein"),
+            catalog_available=available,
+            catalog=catalog,
+        )
+        self.assertFalse(absent["is_curated_reference"])
+        self.assertEqual(absent["classification"], "not_in_curated_set")
 
     def test_frontend_exposes_node_and_edge_inspector(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -126,6 +157,9 @@ class EvidenceInspectorTests(unittest.TestCase):
             "evidence-ledger-body",
             "evidence-stream-distribution-chart",
             "evidence-stream-distribution-summary",
+            "evidence-summary-curated",
+            "curated-edge-reference",
+            "curated-edge-reference-body",
             "database-trace",
             "network-literature-interpreter",
             "literature-api-key",
@@ -140,6 +174,7 @@ class EvidenceInspectorTests(unittest.TestCase):
         self.assertIn("factor_distribution", javascript)
         self.assertIn("distribution_position", javascript)
         self.assertIn("renderDatabaseTrace", javascript)
+        self.assertIn("renderCuratedEdgeReference", javascript)
         self.assertIn("researchPathwayNetwork", javascript)
         self.assertIn("pollNetworkLiterature", javascript)
 

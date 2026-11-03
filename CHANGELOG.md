@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-02 — Curated edge-set membership in the evidence inspector
+
+- Added an explicit curated-reference indicator whenever a selected graph edge
+  occurs in the versioned H1/H0 calibration catalog.
+- The edge inspector now distinguishes H1 positives, H0 negatives, and
+  profile-specific H1/H0 memberships and shows the biological subclass,
+  context policy, original workbook/sheet/row, evidence ID, PMID, and curator
+  reasoning for every matching record.
+- Preserved the same membership and provenance in standalone saved-session
+  HTML reports. Membership remains audit-only and does not inject an edge or
+  add a Bayes factor to that edge.
+
 ## 2026-11-02 — Edge-reference strategies and automatic H0 optimization
 
 - Added two empirical edge-calibration strategies to the V1 GUI: route each

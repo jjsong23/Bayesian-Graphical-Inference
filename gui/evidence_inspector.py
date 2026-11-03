@@ -35,6 +35,10 @@ from incremental_edge_cache import incremental_pair_factor_table
 
 LOG_2 = math.log(2.0)
 STATUS_TOLERANCE = 1e-12
+CURATED_EDGE_REFERENCE_RELATIVE = Path(
+    "gui/calibration/positive_cases_20261028/curated_edge_likelihood_references.tsv"
+)
+CURATED_EDGE_REFERENCE_UPDATED_THROUGH = "2026-10-30"
 
 
 def _read_configuration(run_directory: Path) -> dict[str, Any]:
@@ -63,6 +67,95 @@ def _bool(value: object) -> bool:
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
     return str(value).strip().casefold() in {"true", "1", "yes"}
+
+
+def _casefolded_pair(left: object, right: object) -> tuple[str, str]:
+    """Return a case-insensitive undirected pair key for catalog lookup."""
+    return tuple(sorted((str(left).casefold(), str(right).casefold())))
+
+
+def _curated_edge_reference_catalog(
+    project_root: Path,
+) -> tuple[bool, dict[tuple[str, str], list[dict[str, Any]]]]:
+    """Load the versioned H1/H0 edge references with their source provenance."""
+    path = project_root / CURATED_EDGE_REFERENCE_RELATIVE
+    if not path.is_file():
+        return False, {}
+    try:
+        frame = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+    except (OSError, pd.errors.ParserError):
+        return False, {}
+    required = {"node_a", "node_b", "class_label", "profile"}
+    if frame.empty or not required.issubset(frame.columns):
+        return False, {}
+    retained_fields = (
+        "profile",
+        "node_a",
+        "node_b",
+        "class_label",
+        "context_policy",
+        "negative_kind",
+        "source_workbook",
+        "source_sheet",
+        "source_row",
+        "source_record_id",
+        "evidence_status",
+        "pmids",
+        "reasoning",
+        "calibration_weight",
+    )
+    catalog: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in frame.to_dict(orient="records"):
+        key = _casefolded_pair(row["node_a"], row["node_b"])
+        record = {
+            field: _clean(row.get(field))
+            for field in retained_fields
+        }
+        catalog.setdefault(key, []).append(record)
+    return True, catalog
+
+
+def _curated_edge_reference_membership(
+    pair: tuple[str, str],
+    *,
+    catalog_available: bool,
+    catalog: dict[tuple[str, str], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Describe whether one graph edge was used as a curated H1/H0 reference."""
+    records = catalog.get(_casefolded_pair(*pair), [])
+    labels = {str(record.get("class_label") or "") for record in records}
+    positive = any(label.startswith("H1") for label in labels)
+    negative = any(label.startswith("H0") for label in labels)
+    if positive and negative:
+        classification = "h1_and_h0_profile_specific"
+    elif positive:
+        classification = "h1_positive"
+    elif negative:
+        classification = "h0_negative"
+    else:
+        classification = "not_in_curated_set"
+    return {
+        "catalog_available": catalog_available,
+        "is_curated_reference": bool(records),
+        "is_positive_reference": positive,
+        "is_negative_reference": negative,
+        "classification": classification,
+        "reference_row_count": len(records),
+        "profiles": sorted(
+            {
+                str(record["profile"])
+                for record in records
+                if record.get("profile")
+            }
+        ),
+        "catalog_file": str(CURATED_EDGE_REFERENCE_RELATIVE).replace("\\", "/"),
+        "catalog_updated_through": CURATED_EDGE_REFERENCE_UPDATED_THROUGH,
+        "records": records,
+        "interpretation": (
+            "Curated-set membership identifies an H1/H0 calibration reference. "
+            "It does not itself insert the edge into the graph or add a Bayes factor."
+        ),
+    }
 
 
 def _status(enabled: bool, bayes_factor: float | None) -> str:
@@ -561,6 +654,14 @@ def inspect_edge_evidence(
         matrix_path, node_a_query, node_b_query
     )
     pair = _canonical_undirected_pair(left, right)
+    curated_catalog_available, curated_catalog = _curated_edge_reference_catalog(
+        project
+    )
+    curated_membership = _curated_edge_reference_membership(
+        pair,
+        catalog_available=curated_catalog_available,
+        catalog=curated_catalog,
+    )
     config = _read_configuration(run)
     registry = load_registry(project)
     definitions = {item["id"]: item for item in registry["edge_streams"]}
@@ -779,6 +880,7 @@ def inspect_edge_evidence(
         "reconciliation_absolute_difference": abs(stored_probability - reconstructed),
         "supported_above_output_cutoff": stored_probability > cutoff,
         "output_probability_cutoff_exclusive": cutoff,
+        "curated_edge_reference": curated_membership,
         "equation": (
             "posterior log-odds = prior log-odds + "
             "sum(weight x ln(applied P(Data|H1)/P(Data|H0)))"
@@ -857,6 +959,9 @@ def inspect_edge_evidence_batch(
         run, "edge_characterization"
     )
     stream_analysis = _stream_analysis_catalog(run, "edge_characterization")
+    curated_catalog_available, curated_catalog = _curated_edge_reference_catalog(
+        project
+    )
 
     prepared: dict[str, dict[str, Any]] = {}
     for stream_id, definition in definitions.items():
@@ -1099,6 +1204,11 @@ def inspect_edge_evidence_batch(
                 ),
                 "supported_above_output_cutoff": stored_probability > cutoff,
                 "output_probability_cutoff_exclusive": cutoff,
+                "curated_edge_reference": _curated_edge_reference_membership(
+                    pair,
+                    catalog_available=curated_catalog_available,
+                    catalog=curated_catalog,
+                ),
                 "equation": (
                     "posterior log-odds = prior log-odds + "
                     "sum(weight x ln(applied P(Data|H1)/P(Data|H0)))"

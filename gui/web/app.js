@@ -660,6 +660,81 @@ async function cancelNetworkLiterature() {
   }
 }
 
+function curatedReferenceLabel(membership) {
+  if (!membership?.catalog_available) return "Catalog unavailable";
+  if (membership.classification === "h1_and_h0_profile_specific") return "H1 + H0 (profile-specific)";
+  if (membership.is_positive_reference) return "H1 positive";
+  if (membership.is_negative_reference) return "H0 negative";
+  return "Not in curated set";
+}
+
+function renderCuratedEdgeReference(payload) {
+  const summaryWrap = $("evidence-summary-curated-wrap");
+  const panel = $("curated-edge-reference");
+  if (payload.kind !== "edge") {
+    summaryWrap.classList.add("hidden");
+    panel.classList.add("hidden");
+    return;
+  }
+  summaryWrap.classList.remove("hidden");
+  const membership = payload.curated_edge_reference || {};
+  const label = curatedReferenceLabel(membership);
+  $("evidence-summary-curated").textContent = label;
+  if (!membership.is_curated_reference) {
+    panel.classList.add("hidden");
+    return;
+  }
+
+  panel.classList.remove("hidden");
+  $("curated-edge-reference-status").textContent = label;
+  const profiles = (membership.profiles || []).map((value) => String(value).replaceAll("_", " "));
+  $("curated-edge-reference-summary").textContent =
+    `${payload.node_a} — ${payload.node_b} occurs in ${formatInt(membership.reference_row_count)} ` +
+    `curated calibration record${Number(membership.reference_row_count) === 1 ? "" : "s"}` +
+    `${profiles.length ? ` across ${profiles.join(", ")}` : ""}. ` +
+    `${membership.interpretation || ""} Catalog updated through ${membership.catalog_updated_through || "the recorded revision"}.`;
+
+  const body = $("curated-edge-reference-body");
+  body.innerHTML = "";
+  (membership.records || []).forEach((record) => {
+    const row = document.createElement("tr");
+    const profile = String(record.profile || "—").replaceAll("_", " ");
+    const classLabel = String(record.class_label || "—");
+    const contextParts = [record.context_policy, record.negative_kind]
+      .filter(Boolean)
+      .map((value) => String(value).replaceAll("_", " "));
+    const sourceParts = [record.source_workbook, record.source_sheet]
+      .filter(Boolean)
+      .map(String);
+    if (record.source_row) sourceParts.push(`row ${record.source_row}`);
+    if (record.source_record_id) sourceParts.push(`record ${record.source_record_id}`);
+    const values = [profile, classLabel, contextParts.join(" · ") || "—", sourceParts.join(" · ") || "—"];
+    values.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index === 1) cell.className = classLabel.startsWith("H1") ? "curated-label-h1" : "curated-label-h0";
+      row.appendChild(cell);
+    });
+    const pmidCell = document.createElement("td");
+    const pmids = String(record.pmids || "").split(/[;,|]/).map((value) => value.trim()).filter(Boolean);
+    if (!pmids.length) pmidCell.textContent = "—";
+    pmids.forEach((pmid, index) => {
+      if (index) pmidCell.append(" · ");
+      const link = document.createElement("a");
+      link.href = `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = pmid;
+      pmidCell.appendChild(link);
+    });
+    row.appendChild(pmidCell);
+    const reasoning = document.createElement("td");
+    reasoning.textContent = record.reasoning || "—";
+    row.appendChild(reasoning);
+    body.appendChild(row);
+  });
+}
+
 function renderEvidenceInspection(payload) {
   const result = $("evidence-inspector-result");
   const body = $("evidence-ledger-body");
@@ -684,6 +759,7 @@ function renderEvidenceInspection(payload) {
   $("evidence-reconciliation").textContent = reconciled
     ? `Arithmetic check passed: stored ${formatEvidenceNumber(payload.stored_posterior_probability)}; reconstructed ${formatEvidenceNumber(payload.reconstructed_posterior_probability)} from the displayed contributions.`
     : `Arithmetic warning: stored ${formatEvidenceNumber(payload.stored_posterior_probability)}; reconstructed ${formatEvidenceNumber(payload.reconstructed_posterior_probability)} (absolute difference ${formatEvidenceNumber(difference)}).`;
+  renderCuratedEdgeReference(payload);
 
   let initialDetail = null;
   payload.streams.forEach((stream) => {
