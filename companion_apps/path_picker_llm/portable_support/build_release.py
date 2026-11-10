@@ -121,7 +121,7 @@ def inventory(root: Path, tier: str) -> tuple[list[Path], list[dict]]:
                 reason = None
                 if name in SECRET_NAMES or path.suffix.lower() in SECRET_SUFFIXES:
                     reason = "credential-like file; never packaged"
-                elif name in SKIP_NAMES or name.endswith((".log", ".pyc", ".pyo", "-wal", "-shm", ".inspect.ndjson")) or name.startswith(".workbench"):
+                elif name in SKIP_NAMES or name.endswith((".log", ".pyc", ".pyo", "-wal", "-shm", ".inspect.ndjson")) or name.startswith((".workbench", "~$")):
                     reason = "ephemeral process state, log, or duplicate inspection output"
                 elif path.is_symlink():
                     reason = "external file link"
