@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from build_release import digest_and_scan, file_access, safe_copy, sqlite_backup
+from build_release import digest_and_scan, file_access, redact_signed_url_auth, safe_copy, sqlite_backup
 import finalize_release
 
 TEST_ROOT = Path(__file__).resolve().parents[2] / "outputs/portable_release/tests"
@@ -59,6 +59,17 @@ class PortableSupportTests(unittest.TestCase):
             with contextlib.closing(sqlite3.connect(target)) as snapshot:
                 self.assertEqual([(1, "accepted")], snapshot.execute("SELECT * FROM evidence").fetchall())
             self.assertEqual(1, writer.execute("SELECT COUNT(*) FROM evidence").fetchone()[0])
+
+    def test_presigned_source_url_redaction_preserves_json(self):
+        source = self.root / "source_audit.json"
+        url = "https://example.test/paper.pdf?X-Amz-Credential=" + "ASIA" + "A" * 16 + "&X-Amz-Signature=" + "b" * 64 + "&page=3"
+        source.write_text(json.dumps({"url": url, "claim": "Scientific statement"}), encoding="utf-8")
+        cleaned, count = redact_signed_url_auth(source)
+        self.assertEqual(2, count)
+        parsed = json.loads(cleaned)
+        self.assertEqual("Scientific statement", parsed["claim"])
+        self.assertTrue(parsed["url"].startswith("https://example.test/paper.pdf?"))
+        self.assertTrue(parsed["url"].endswith("&page=3"))
 
     def test_history_finalization_keeps_payload_and_avoids_collision(self):
         output = self.root / "outputs/portable_release"

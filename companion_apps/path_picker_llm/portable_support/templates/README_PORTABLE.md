@@ -11,6 +11,10 @@ dependency installation normally needs internet access.
 1. Extract the main ZIP to a local writable folder with enough free disk space.
    On Windows use a short path such as `C:\ResearchWorkbench` to avoid legacy
    path-length limits. Do not run inside a ZIP viewer or a synchronizing folder.
+   If Explorer reports long-path errors, use Python with an extended destination
+   path instead: `python -m zipfile -e MAIN.zip "\\?\C:\ResearchWorkbench"`.
+   Substitute the actual main ZIP filename for `MAIN.zip`; extract the optional
+   history ZIP using the same command and destination.
 2. Open a terminal in that folder and run `python setup.py`.
 3. Run `python launch.py --relocate --check` once after extraction or moving the
    folder. This explicitly updates copied Path Picker checkpoint paths and
@@ -54,6 +58,8 @@ their exact original inputs at their relative `function_prediction_runs/`
 paths. Only those two referenced inputs are included, not entire duplicated
 snapshot projects. All four saved inventories therefore have local inputs
 after relocation. Resuming paid work still requires your API credentials.
+The 43-observation multiregime causal workbook is also included under its
+original workspace-relative `outputs/019f860e-7e5f-75f3-876a-7f443d20be08/` path.
 
 The optional history ZIP contains BGI `results/gui_runs/`,
 `results/prkaca_multitarget/`, and `outputs/`. Extract it into the **same folder**
@@ -72,6 +78,10 @@ copying live database/WAL files. Separate files are not a global atomic snapshot
 
 Source documents/claims retain their original provenance strings; these may
 mention the original machine even after runnable paths have been relocated.
+Archived ground-truth/static-causal run manifests may also contain original
+absolute paths: their reports remain available, but old manifest-driven reruns
+are not automatically relocated. Start a fresh GUI analysis or use the bundled
+relative-path source configurations on the new device.
 Dependency specifications have minimum versions and are not a fully pinned
 reproducible environment. Numerical results can vary with package versions.
 Legacy notebooks or optional HPC workflows may need external services and
@@ -81,6 +91,9 @@ This package is intended for private transfer to your own device. It is not a
 license to redistribute the third-party source datasets or retrieved papers.
 See BGI `docs/dataset_acquisition.md` for source-specific limitations. A heuristic
 secret scan was performed; it is not a comprehensive security review.
+Temporary presigned-URL authentication query values found in copied source
+audit text are redacted; scientific claims and source URL paths are retained.
+The manifest records each redaction and both original/packaged hashes.
 
 ## Verify files
 

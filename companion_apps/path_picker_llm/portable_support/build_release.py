@@ -46,6 +46,7 @@ HISTORY_PREFIXES = (
 EXTRA_INPUTS = (
     "function_prediction_runs/20261105_pka_functions_kirby_agent/PKA_source_native_predictions_20261109.zip",
     "function_prediction_runs/20261104_pka_functions_4modes/snapshot_project/results/gui_runs/20261104_pka_functions_tuned_known_edges_retry2",
+    "outputs/019f860e-7e5f-75f3-876a-7f443d20be08/ccd_multiregime_43_observation_causal_input.xlsx",
 )
 MAIN_RUNTIME_FILES = tuple(
     "graphical_bayesian_inference/results/gui_runs/20261103_163859_8fe27c63/" + name
@@ -146,6 +147,21 @@ def is_sqlite(path: Path) -> bool:
         return stream.read(16) == b"SQLite format 3\0"
 
 
+def redact_signed_url_auth(source: Path) -> tuple[bytes, int]:
+    """Remove only bearer-like query credentials from copied source audit text."""
+    if source.suffix.lower() not in {".json", ".jsonl", ".html", ".txt", ".md", ".ndjson"}:
+        raise ValueError("Automatic URL credential redaction is limited to text audit artifacts")
+    with open(file_access(source), "rb") as stream:
+        raw = stream.read()
+    pattern = re.compile(rb"(?i)([?&](?:X-Amz-(?:Credential|Signature|Security-Token)|AWSAccessKeyId)=)[^&\s\"<>]+")
+    cleaned, count = pattern.subn(lambda match: match.group(1) + b"REDACTED_FOR_PRIVATE_TRANSFER", raw)
+    if not count:
+        raise ValueError("Credential match was not a recognized presigned URL")
+    if source.suffix.lower() == ".json":
+        json.loads(cleaned)
+    return cleaned, count
+
+
 def sqlite_backup(source: Path, target: Path) -> None:
     # mode=ro still observes a live WAL, unlike immutable=1 or copying the DB.
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=30)) as reader:
@@ -163,6 +179,7 @@ def main() -> int:
     parser.add_argument("--tier", choices=("main", "history"), default="main")
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--name")
+    parser.add_argument("--resume-staging", action="store_true", help="Revalidate and reuse an interrupted unpublished staging folder")
     args = parser.parse_args()
     root = args.workspace.resolve()
     output = (args.output or root / "outputs" / "portable_release").resolve()
@@ -177,9 +194,9 @@ def main() -> int:
         raise ValueError("Archive name must be a simple filename")
     staging = output / name
     archive = output / f"{name}.zip"
-    if staging.exists() or archive.exists():
+    if archive.exists() or (staging.exists() and not args.resume_staging):
         raise FileExistsError("Choose a new release name; existing releases are never overwritten")
-    staging.mkdir()
+    staging.mkdir(exist_ok=args.resume_staging)
     staging_io = Path(file_access(staging))
     manifest = {"schema_version": 1, "created_utc": datetime.now(timezone.utc).isoformat(), "tier": args.tier,
                 "source_workspace": str(root), "snapshot_policy": "Per-SQLite online backup; files are point-in-time copies, not a global transactional snapshot",
@@ -195,16 +212,32 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         db = is_sqlite(source)
         source_stat = source.stat()
+        redaction = None
         if db:
             sqlite_backup(source, target)
             sha, hits = digest_and_scan(target)
             source_sha = None
         else:
             source_sha, hits = digest_and_scan(source)
-            if hits:
+            if hits == ["aws-access-key"]:
+                try:
+                    cleaned, count = redact_signed_url_auth(source)
+                except (ValueError, UnicodeError):
+                    target = None
+                else:
+                    with open(file_access(target), "wb") as stream:
+                        stream.write(cleaned)
+                    sha, hits = digest_and_scan(target)
+                    redaction = {"kind": "presigned_url_auth_query_values", "parameter_values_redacted": count, "reason": "temporary source URL credentials must not be transferred"}
+            elif hits:
                 target = None
             else:
-                safe_copy(source, target)
+                reusable = False
+                if args.resume_staging and target.is_file():
+                    sha, copied_hits = digest_and_scan(target)
+                    reusable = sha == source_sha and not copied_hits
+                if not reusable:
+                    safe_copy(source, target)
                 sha, copied_hits = digest_and_scan(target)
                 hits += copied_hits
                 if sha != source_sha:
@@ -213,9 +246,12 @@ def main() -> int:
             issue = {"path": relative.as_posix(), "categories": sorted(set(hits))}
             (output / f"{name}.blocked.json").write_text(json.dumps(issue, indent=2), encoding="utf-8")
             raise RuntimeError(f"Secret-pattern scan blocked publication: {relative}; categories={','.join(hits)} (values suppressed)")
-        manifest["files"].append({"path": relative.as_posix(), "bytes": target.stat().st_size, "sha256": sha,
+        row = {"path": relative.as_posix(), "bytes": target.stat().st_size, "sha256": sha,
                                   "source_sha256": source_sha, "source_bytes_observed": source_stat.st_size,
-                                  "copy_method": "sqlite-online-backup" if db else "byte-copy"})
+                                  "copy_method": "sqlite-online-backup" if db else ("redacted-text-copy" if redaction else "byte-copy")}
+        if redaction:
+            row["redaction"] = redaction
+        manifest["files"].append(row)
         if index % 100 == 0 or source_stat.st_size > 512 * 1024 * 1024:
             print(f"Staged {index}/{len(files)} ({time.monotonic()-started:.0f}s): {relative}", flush=True)
     if args.tier == "main":
