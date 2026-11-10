@@ -2,6 +2,7 @@
 """Launch one bundled application, validate evidence, or relocate run checkpoints."""
 from __future__ import annotations
 import argparse
+from contextlib import closing
 import importlib.util
 import json
 import os
@@ -33,9 +34,13 @@ def main() -> int:
         missing = [name for name in ("numpy", "pandas", "scipy", "openpyxl", "PIL", "networkx", "obonet", "pyarrow") if importlib.util.find_spec(name) is None]
         reports = {"python": sys.version.split()[0], "root": str(ROOT), "missing_dependencies": missing, "apps": {name: (ROOT / directory / "launch.py").is_file() for name, directory in APPS.items()}}
         library = ROOT / "path_picker_llm/runtime/shared_knowledge/evidence.sqlite3"
+        reports["shared_library"] = {"quick_check": "missing"}
         if library.is_file():
-            with sqlite3.connect(library.as_uri() + "?mode=ro", uri=True) as db:
-                reports["shared_library"] = {"quick_check": db.execute("PRAGMA quick_check").fetchone()[0], "claims": db.execute("SELECT COUNT(*) FROM knowledge_claims WHERE quarantined=0").fetchone()[0], "rejected_audit_rows": db.execute("SELECT COUNT(*) FROM knowledge_rejections").fetchone()[0]}
+            try:
+                with closing(sqlite3.connect(library.as_uri() + "?mode=ro", uri=True)) as db:
+                    reports["shared_library"] = {"quick_check": db.execute("PRAGMA quick_check").fetchone()[0], "claims": db.execute("SELECT COUNT(*) FROM knowledge_claims WHERE quarantined=0").fetchone()[0], "rejected_audit_rows": db.execute("SELECT COUNT(*) FROM knowledge_rejections").fetchone()[0]}
+            except sqlite3.Error as error:
+                reports["shared_library"] = {"quick_check": "error", "error": str(error)}
         bgi_root = ROOT / "graphical_bayesian_inference"
         registry_path = bgi_root / "gui/evidence_registry.json"
         if registry_path.is_file():
@@ -50,7 +55,7 @@ def main() -> int:
             reports["bgi_missing_inputs"] = ["gui/evidence_registry.json"]
         inputs = []
         for database in sorted((ROOT / "path_picker_llm/runs").glob("*/path_picker.sqlite3")):
-            with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+            with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
                 meta = dict(db.execute("SELECT key,value FROM metadata"))
                 source = meta.get("input_path", "")
                 inputs.append({"run": database.parent.name, "status": meta.get("status"), "input_available": bool(source) and Path(source).exists()})
@@ -61,7 +66,7 @@ def main() -> int:
         print(json.dumps(reports, indent=2))
         if missing or not all(reports["apps"].values()):
             return 2
-        return 2 if reports["bgi_missing_inputs"] or not reports["static_causal_seed_graph"] or not all(item["input_available"] for item in inputs) else 0
+        return 2 if reports["bgi_missing_inputs"] or reports["shared_library"]["quick_check"] != "ok" or not reports["static_causal_seed_graph"] or len(inputs) < 4 or not all(item["input_available"] for item in inputs) else 0
     command = [sys.executable, str(ROOT / APPS[args.app] / "launch.py"), "--foreground"]
     if args.no_browser:
         command.append("--no-browser")
