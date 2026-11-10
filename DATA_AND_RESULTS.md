@@ -24,7 +24,7 @@ The archive is a point-in-time research record. Do not overwrite an older archiv
 - `data/colocalization/`: localization profiles and scientist-reviewable compartment compatibility matrices.
 - `data/experimental_ppi/`: STRING/BioGRID/IntAct-derived prior-support resources and evidence tiers.
 - `data/edge_characterization/biogrid/<build>/`: generated BioGRID direct-binding/co-complex pair catalog, mouse/human/rat-to-graph mapping, normalized incident-partner anchors, validation checks, and provenance. `mapped_graph_physical_pairs.tsv.gz` drives the reported-pair stream and `graph_incident_physical_anchors.tsv.gz` reconstructs shared-partner closure. The large generated files are excluded from Git with the rest of `data/`.
-- `data/phospho_data_original.xlsx`: raw 1/2/5/15-minute dDAVP/vehicle replicate phosphoproteomics used only by the optional temporal path-validation stage.
+- `data/phospho_data_original.xlsx`: raw 1/2/5/15-minute dDAVP/vehicle replicate phosphoproteomics used by the Kirby response and kinase-activity node streams, site-concordant kinase edge evidence, and optional temporal path validation. Preserve this workbook and `data/node_selection/kirby_ddavp/` when deploying the current default profile.
 - `results/`: versioned node, edge, colocalization, AlphaFold-candidate, path, and GUI-run outputs.
 - `outputs/`: auxiliary generated output files.
 

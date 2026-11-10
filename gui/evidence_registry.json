@@ -149,6 +149,63 @@
       }
     },
     {
+      "id": "kirby_ddavp_phosphoprotein_response",
+      "label": "Kirby dDAVP phosphoprotein response",
+      "description": "Strongest exact phosphosite response across the 1, 2, 5, and 15 minute dDAVP time course; one responsive site supports node presence in vasopressin signaling.",
+      "factor_file": "data/node_selection/kirby_ddavp/processed/kirby_ddavp_node_factors.tsv.gz",
+      "column": "kirby_ddavp_phosphoprotein_factor",
+      "raw_value_column": "kirby_ddavp_max_absolute_lfc",
+      "observed_column": "kirby_ddavp_observed",
+      "tq_column": "kirby_ddavp_site_tq",
+      "neutral_value": 1.0,
+      "default_enabled": true,
+      "default_weight": 0.5,
+      "dependence_group": "kirby_ddavp_phosphoproteomics",
+      "negative_evidence": {
+        "observed_column": "kirby_ddavp_observed",
+        "eligibility": "all_candidates",
+        "absence_definition": "No phosphosite with usable paired control/dDAVP reporter intensities mapped to the candidate in the Kirby time course."
+      },
+      "normalization": {
+        "handler": "site_level_phosphoprotein_response",
+        "control_label": "Tq ×",
+        "default_multiplier": 0.1,
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
+        "reference": "single all-Kirby-site q75 of maximum absolute mean log2(dDAVP/control); strongest site per protein",
+        "help": "Multiplies the Kirby site-response q75. Each protein inherits its strongest responsive phosphosite; additional sites do not accumulate evidence."
+      }
+    },
+    {
+      "id": "kirby_ddavp_kinase_activity",
+      "label": "Kirby dDAVP inferred kinase activity",
+      "description": "Kinase activity inferred when a dDAVP-responsive Kirby phosphosite is also an exact-site top-ten KinasePredictor match for that kinase or kinase-family model.",
+      "factor_file": "data/node_selection/kirby_ddavp/processed/kirby_ddavp_node_factors.tsv.gz",
+      "column": "kirby_kinase_activity_factor",
+      "raw_value_column": "kirby_kinase_activity_score",
+      "observed_column": "kirby_kinase_activity_observed",
+      "tq_column": "kirby_kinase_activity_tq",
+      "neutral_value": 1.0,
+      "default_enabled": true,
+      "default_weight": 0.5,
+      "dependence_group": "kirby_ddavp_phosphoproteomics",
+      "negative_evidence": {
+        "observed_column": "kirby_kinase_activity_observed",
+        "eligibility": "ontology_class",
+        "ontology_class": "kinase",
+        "absence_definition": "No dDAVP-responsive Kirby site had an exact-site top-ten KinasePredictor match for this ontology-annotated kinase."
+      },
+      "normalization": {
+        "handler": "site_level_phosphoprotein_response",
+        "control_label": "Tq ×",
+        "default_multiplier": 0.1,
+        "calibration_preferred_multiplier": 0.1,
+        "calibration_bounds": [0.05, 1.0],
+        "reference": "q75 of strongest exact-site response × motif conjunction across inferred kinases",
+        "help": "Scores each kinase by its strongest dDAVP-responsive substrate site that also matches its KinasePredictor motif; multiple sites are audited but not multiplied."
+      }
+    },
+    {
       "id": "collecting_duct_proteome_ccd",
       "label": "Collecting duct proteome - CCD",
       "description": "Rat CCD protein abundance mapped to mouse genes with audited Ensembl orthology.",
@@ -300,7 +357,7 @@
     {
       "id": "kinase_predictor",
       "label": "KinasePredictor",
-      "description": "Observed/curated phosphosite kinase-to-protein predictions.",
+      "description": "Exact-site kinase/substrate motif predictions gated by response of that same phosphosite in the Kirby dDAVP time course or PKA-Cα/PKA-Cβ knockout data.",
       "factor_file": "results/backend_bayes_factor_catalogs/edge_factors_891/kinase_predictor_bf_gt1.tsv.gz",
       "factor_column": "bayes_factor",
       "target_factor_column": "kinasepredictor_bayes_factor",
@@ -317,7 +374,7 @@
         "calibration_preferred_multiplier": 0.1,
         "calibration_bounds": [0.05, 1.0],
         "reference": "per-phosphosite q75 motif-score thresholds",
-        "help": "Multiplies each observed phosphosite's motif-score threshold before top-ten kinase hits are combined."
+        "help": "Multiplies each observed phosphosite's motif-score threshold. A motif hit is then shrunk toward neutral unless the identical substrate site responds in Kirby dDAVP or PKA-subunit-KO phosphoproteomics; the strongest concordant site supplies the pair factor."
       }
     },
     {
@@ -715,7 +772,7 @@
       "label": "Kinase/phosphatase binding",
       "roots": ["GO:0019900", "GO:0019902", "GO:0051018"],
       "description": "Kinase, phosphatase, and protein kinase A binding activities.",
-      "default_enabled": true
+      "default_enabled": false
     },
     {
       "id": "second_messenger_binding",

@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from agent_graph_export import write_agent_graph_package
+
 
 REPORT_PREFIX = "complete_session_"
 REPORT_SCHEMA_VERSION = 4
@@ -310,7 +312,11 @@ def _network_svg(
         color = _probability_color(
             node.get("posterior_probability"), available, node_range, "node"
         )
-        radius = 8 if node.get("is_start") or node.get("is_target") else 6
+        radius = 8 if (
+            node.get("is_start")
+            or node.get("is_target")
+            or node.get("is_known_intermediate")
+        ) else 6
         tooltip = (
             f"{node.get('label', node_id)}; posterior {_number(node.get('posterior_probability'))}; "
             f"roles {node.get('classes', 'unclassified')}"
@@ -322,8 +328,22 @@ def _network_svg(
             if evidence_key
             else ""
         )
+        ring = ""
+        if node.get("is_start") or node.get("is_target") or node.get("is_known_intermediate"):
+            ring_color = (
+                "#755596"
+                if node.get("is_known_intermediate")
+                else "#b45f3d"
+                if node.get("is_target")
+                else "#1e5f43"
+            )
+            dash = ' stroke-dasharray="3 2"' if node.get("is_known_intermediate") else ""
+            ring = (
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius + 3}" '
+                f'fill="none" stroke="{ring_color}" stroke-width="1.8"{dash}/>'
+            )
         node_marks.append(
-            f'<g{interaction}><circle cx="{x:.2f}" cy="{y:.2f}" r="{radius}" fill="{color}" stroke="#fff" stroke-width="1.4">'
+            f'<g{interaction}>{ring}<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius}" fill="{color}" stroke="#fff" stroke-width="1.4">'
             f'<title>{_escape(tooltip)}</title></circle><text x="{x:.2f}" y="{label_y:.2f}" '
             f'text-anchor="middle" class="node-label">{_escape(node.get("label", node_id))}</text></g>'
         )
@@ -346,7 +366,7 @@ def _network_svg(
           <text x="{width-56}" y="{top+4}" class="axis-label">{_number(edge_range[1]) if edge_range else '—'}</text>
           <text x="{width-56}" y="{height-bottom}" class="axis-label">{_number(edge_range[0]) if edge_range else '—'}</text>
         </svg>
-        <p class="caption">Scored nodes and edges use separate monotone color scales so their different posterior ranges remain visible. The node scale spans {_number(node_range[0]) if node_range else 'unavailable'}–{_number(node_range[1]) if node_range else 'unavailable'}; the edge scale spans {_number(edge_range[0]) if edge_range else 'unavailable'}–{_number(edge_range[1]) if edge_range else 'unavailable'}. Within each scale, the minimum is lightest and the maximum is darkest. Orange nodes lack a Bayesian node posterior. Arrows show uniquely constrained traversal; unresolved relationships remain traversable in either direction. Select a protein node or any edge to open its frozen evidence interpretation below.</p>
+        <p class="caption">Scored nodes and edges use separate monotone color scales so their different posterior ranges remain visible. The node scale spans {_number(node_range[0]) if node_range else 'unavailable'}–{_number(node_range[1]) if node_range else 'unavailable'}; the edge scale spans {_number(edge_range[0]) if edge_range else 'unavailable'}–{_number(edge_range[1]) if edge_range else 'unavailable'}. Within each scale, the minimum is lightest and the maximum is darkest. Orange nodes lack a Bayesian node posterior; a dashed purple ring marks a supplied known intermediate. Arrows show uniquely constrained traversal; unresolved relationships remain traversable in either direction. Select a protein node or any edge to open its frozen evidence interpretation below.</p>
       </figure>
     """
 
@@ -778,6 +798,11 @@ def build_session_report(
         raise ValueError("report_name must be a plain .html file name")
     destination = output / name
 
+    # Sidecars are intentionally written before the embedded-file vault is
+    # assembled, so every standalone HTML contains the exact same agent graph
+    # package that is visible beside it on disk.
+    agent_manifest = write_agent_graph_package(session, output)
+
     source_files = [
         path
         for path in sorted(output.rglob("*"))
@@ -941,6 +966,7 @@ document.querySelectorAll('[data-interpretation-key]').forEach(mark=>{{const ope
         "embedded_stored_bytes": stored_bytes,
         "interpretation_hypothesis_count": len(interpretation_catalog),
         "literature_interpretation_count": len(literature_interpretations),
+        "agent_graph": agent_manifest,
         "report_bytes": report_size,
         "report_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
         "generated_at": snapshot["generated_at"],

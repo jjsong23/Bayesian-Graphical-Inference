@@ -145,7 +145,6 @@ DEFAULT_SIGNAL_RELAY_CLASSES = (
     "nos",
     "gtpase",
     "gtpase_regulator",
-    "kinase_phosphatase_binding",
     "second_messenger",
 )
 
@@ -312,6 +311,7 @@ def build_intermediate_eligibility(
     signaling_intermediates_only: bool,
     relay_classes: Iterable[str],
     exclude_any_scaffold: bool,
+    forced_intermediate_symbols: Iterable[str] = (),
 ) -> pd.DataFrame:
     """Audit which nodes may occur between the selected endpoints."""
 
@@ -319,6 +319,9 @@ def build_intermediate_eligibility(
     metadata_by_symbol = metadata.set_index("symbol", drop=False).to_dict("index")
     rows: list[dict[str, Any]] = []
     endpoints = {start_symbol, target_symbol}
+    forced_intermediates = {
+        str(value) for value in forced_intermediate_symbols if str(value)
+    }
     for matrix_index, symbol in enumerate(matrix_symbols):
         record = metadata_by_symbol.get(symbol, {})
         classes = split_classes(record.get("classes", ""))
@@ -337,11 +340,16 @@ def build_intermediate_eligibility(
             eligible = False
             reason = "no_mechanistic_relay_class"
         endpoint = symbol in endpoints
-        permitted = eligible or endpoint
+        known_intermediate = symbol in forced_intermediates
+        permitted = eligible or endpoint or known_intermediate
         if endpoint and not eligible:
             search_reason = "endpoint_exemption;" + reason
         elif endpoint:
             search_reason = "endpoint_and_" + reason
+        elif known_intermediate and not eligible:
+            search_reason = "known_intermediate_exemption;" + reason
+        elif known_intermediate:
+            search_reason = "known_intermediate_and_" + reason
         else:
             search_reason = reason
         rows.append(
@@ -356,6 +364,7 @@ def build_intermediate_eligibility(
                 "adaptor_scaffold_tagged": scaffold_tagged,
                 "allowed_as_intermediate": eligible,
                 "is_selected_endpoint": endpoint,
+                "is_known_intermediate": known_intermediate,
                 "permitted_in_search": permitted,
                 "eligibility_reason": search_reason,
             }
@@ -661,6 +670,8 @@ def shortest_exact_hop_simple_path(
     banned_transitions: frozenset[tuple[int, int]] = frozenset(),
     permitted_nodes: frozenset[int] | None = None,
     node_probabilities: np.ndarray | None = None,
+    required_nodes: frozenset[int] = frozenset(),
+    required_mode: str = "optional",
 ) -> SearchPath | None:
     """Find the least negative-log-cost simple path with exactly N edges."""
 
@@ -692,7 +703,12 @@ def shortest_exact_hop_simple_path(
         if cost > best_state_cost.get(state, math.inf) + 1e-15:
             continue
         if hops == exact_hops:
-            if node == target:
+            requirement_satisfied = (
+                required_mode == "optional"
+                or (required_mode == "any" and bool(required_nodes.intersection(path)))
+                or (required_mode == "all" and required_nodes.issubset(path))
+            )
+            if node == target and requirement_satisfied:
                 return SearchPath(cost, path)
             continue
         if node == target:
@@ -747,8 +763,42 @@ def k_shortest_exact_hop_simple_paths(
     exact_hops: int,
     permitted_nodes: frozenset[int] | None = None,
     node_probabilities: np.ndarray | None = None,
+    required_nodes: frozenset[int] = frozenset(),
+    required_mode: str = "optional",
 ) -> list[SearchPath]:
     """Return the K strongest simple paths having exactly ``exact_hops`` edges."""
+
+    return list(
+        itertools.islice(
+            iter_k_shortest_exact_hop_simple_paths(
+                adjacency,
+                probabilities,
+                start,
+                target,
+                exact_hops=exact_hops,
+                permitted_nodes=permitted_nodes,
+                node_probabilities=node_probabilities,
+                required_nodes=required_nodes,
+                required_mode=required_mode,
+            ),
+            max(int(top_k), 0),
+        )
+    )
+
+
+def iter_k_shortest_exact_hop_simple_paths(
+    adjacency: list[list[tuple[int, float, float]]],
+    probabilities: np.ndarray,
+    start: int,
+    target: int,
+    *,
+    exact_hops: int,
+    permitted_nodes: frozenset[int] | None = None,
+    node_probabilities: np.ndarray | None = None,
+    required_nodes: frozenset[int] = frozenset(),
+    required_mode: str = "optional",
+) -> Iterable[SearchPath]:
+    """Yield exact-hop paths in descending product-probability order."""
 
     lower_bounds = _exact_hop_lower_bounds(
         adjacency,
@@ -765,15 +815,18 @@ def k_shortest_exact_hop_simple_paths(
         lower_bounds,
         permitted_nodes=permitted_nodes,
         node_probabilities=node_probabilities,
+        required_nodes=required_nodes,
+        required_mode=required_mode,
     )
     if first is None:
-        return []
+        return
 
     accepted = [first]
     accepted_nodes = {first.nodes}
     candidate_heap: list[tuple[float, tuple[int, ...]]] = []
     candidate_nodes: set[tuple[int, ...]] = set()
-    while len(accepted) < top_k:
+    yield first
+    while True:
         previous = accepted[-1].nodes
         for spur_index in range(len(previous) - 1):
             root = previous[: spur_index + 1]
@@ -793,6 +846,21 @@ def k_shortest_exact_hop_simple_paths(
                 banned_transitions=frozenset(banned_transitions),
                 permitted_nodes=permitted_nodes,
                 node_probabilities=node_probabilities,
+                required_nodes=(
+                    frozenset(required_nodes.difference(root))
+                    if required_mode == "all"
+                    else required_nodes
+                ),
+                required_mode=(
+                    "optional"
+                    if required_mode == "any" and bool(required_nodes.intersection(root))
+                    else (
+                        "optional"
+                        if required_mode == "all"
+                        and required_nodes.issubset(root)
+                        else required_mode
+                    )
+                ),
             )
             if spur is None:
                 continue
@@ -816,12 +884,13 @@ def k_shortest_exact_hop_simple_paths(
             cost, nodes = heapq.heappop(candidate_heap)
             candidate_nodes.discard(nodes)
             if nodes not in accepted_nodes:
-                accepted.append(SearchPath(cost, nodes))
+                found = SearchPath(cost, nodes)
+                accepted.append(found)
                 accepted_nodes.add(nodes)
+                yield found
                 break
         else:
             break
-    return accepted
 
 
 def k_shortest_simple_paths(
@@ -834,6 +903,8 @@ def k_shortest_simple_paths(
     max_hops: int,
     permitted_nodes: frozenset[int] | None = None,
     node_probabilities: np.ndarray | None = None,
+    required_nodes: frozenset[int] = frozenset(),
+    required_mode: str = "optional",
 ) -> list[SearchPath]:
     """Return exact top-K paths by descending geometric-mean primary score.
 
@@ -843,32 +914,76 @@ def k_shortest_simple_paths(
     rather than using a beam-search approximation.
     """
 
-    candidates: list[SearchPath] = []
+    if top_k < 1:
+        return []
+    counter = itertools.count()
+    queue: list[
+        tuple[
+            float,
+            float,
+            tuple[int, ...],
+            int,
+            SearchPath,
+            Iterable[SearchPath],
+        ]
+    ] = []
     for exact_hops in range(1, max_hops + 1):
-        candidates.extend(
-            k_shortest_exact_hop_simple_paths(
+        generator = iter(
+            iter_k_shortest_exact_hop_simple_paths(
                 adjacency,
                 probabilities,
                 start,
                 target,
-                top_k=top_k,
                 exact_hops=exact_hops,
                 permitted_nodes=permitted_nodes,
                 node_probabilities=node_probabilities,
+                required_nodes=required_nodes,
+                required_mode=required_mode,
             )
         )
-    candidates.sort(
-        key=lambda path: (
-            path.cost
-            / (
-                (len(path.nodes) - 1)
-                + ((len(path.nodes) - 2) if node_probabilities is not None else 0)
-            ),
-            path.cost,
-            path.nodes,
+        try:
+            first = next(generator)
+        except StopIteration:
+            continue
+        component_count = exact_hops + (
+            exact_hops - 1 if node_probabilities is not None else 0
         )
-    )
-    return candidates[:top_k]
+        heapq.heappush(
+            queue,
+            (
+                first.cost / component_count,
+                first.cost,
+                first.nodes,
+                next(counter),
+                first,
+                generator,
+            ),
+        )
+
+    candidates: list[SearchPath] = []
+    while queue and len(candidates) < top_k:
+        _, _, _, _, found, generator = heapq.heappop(queue)
+        candidates.append(found)
+        try:
+            following = next(generator)
+        except StopIteration:
+            continue
+        exact_hops = len(following.nodes) - 1
+        component_count = exact_hops + (
+            exact_hops - 1 if node_probabilities is not None else 0
+        )
+        heapq.heappush(
+            queue,
+            (
+                following.cost / component_count,
+                following.cost,
+                following.nodes,
+                next(counter),
+                following,
+                generator,
+            ),
+        )
+    return candidates
 
 
 def connected_component_size(

@@ -48,7 +48,7 @@ from session_report import build_session_report
 
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
-MAX_AUTOMATIC_EXPORT_INTERPRETATIONS = 1000
+MAX_AUTOMATIC_EXPORT_INTERPRETATIONS = 25000
 
 
 def utc_timestamp() -> str:
@@ -73,13 +73,13 @@ def _materialize_export_interpretations(
     history: list[dict[str, Any]],
     client_state: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
-    """Freeze evidence ledgers for every node/edge visible in the saved graph.
+    """Freeze evidence ledgers for the complete union of all returned paths.
 
     A live GUI can ask Python to interpret any hypothesis.  A standalone HTML
     cannot.  The export therefore snapshots all ledgers in the currently
-    visible top-path network, in addition to hypotheses the scientist already
-    opened.  This gives every clickable mark in the archived network the same
-    evidence-transparency behavior it had in the live application.
+    returned-path union, in addition to hypotheses the scientist already
+    opened.  The HTML may display a smaller target-balanced prefix, but the
+    sidecar agent package must not lose evidence from lower-ranked paths.
     """
 
     catalog: dict[str, dict[str, Any]] = {}
@@ -112,6 +112,34 @@ def _materialize_export_interpretations(
                 )
             )
 
+    path_edges_path = output_directory / "ranked_path_edges.tsv"
+    if path_edges_path.is_file():
+        path_edges = pd.read_csv(path_edges_path, sep="\t")
+        required = {"source_symbol", "target_symbol"}
+        if required.issubset(path_edges.columns):
+            for row in path_edges.itertuples(index=False):
+                source = str(row.source_symbol)
+                target = str(row.target_symbol)
+                candidates.append(("node", (source,)))
+                candidates.append(("node", (target,)))
+                candidates.append(("edge", (source, target)))
+
+    # Preserve order for deterministic exports while removing duplicate
+    # hypotheses contributed by many overlapping paths.
+    unique_candidates: list[tuple[str, tuple[str, ...]]] = []
+    seen_candidate_keys: set[str] = set()
+    for kind, symbols in candidates:
+        stub = (
+            {"kind": "node", "symbol": symbols[0]}
+            if kind == "node"
+            else {"kind": "edge", "node_a": symbols[0], "node_b": symbols[1]}
+        )
+        key = _evidence_payload_key(stub)
+        if key not in seen_candidate_keys:
+            unique_candidates.append((kind, symbols))
+            seen_candidate_keys.add(key)
+    candidates = unique_candidates
+
     errors: list[str] = []
     automatic_count = 0
     pending_edges: list[tuple[str, str]] = []
@@ -140,7 +168,7 @@ def _materialize_export_interpretations(
                 symbols[0],
                 project_root=PROJECT_ROOT,
             )
-            result["export_catalog_source"] = "visible_top_path_network"
+            result["export_catalog_source"] = "complete_returned_path_union"
             catalog[key] = result
             automatic_count += 1
         except Exception as exc:  # noqa: BLE001 - one ledger must not abort the archive
@@ -172,11 +200,11 @@ def _materialize_export_interpretations(
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"edge {left} — {right}: {exc}")
         for result in edge_results:
-            result["export_catalog_source"] = "visible_top_path_network"
+            result["export_catalog_source"] = "complete_returned_path_union"
             catalog[_evidence_payload_key(result)] = result
 
     automatic_count = sum(
-        item.get("export_catalog_source") == "visible_top_path_network"
+        item.get("export_catalog_source") == "complete_returned_path_union"
         for item in catalog.values()
     )
 
@@ -186,8 +214,8 @@ def _materialize_export_interpretations(
         "automatic_network_ledger_count": automatic_count,
         "catalog_hypothesis_count": len(catalog),
         "coverage": (
-            "Every inspectable node and edge in the network view saved at export "
-            "time, plus every hypothesis manually inspected in this browser session."
+            "Every inspectable node and edge in the complete union of all returned "
+            "paths, plus every hypothesis manually inspected in this browser session."
         ),
     }
     return list(catalog.values()), scope, errors

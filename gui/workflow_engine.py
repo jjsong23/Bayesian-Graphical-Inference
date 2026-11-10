@@ -85,6 +85,10 @@ from full_graph_statistics import (  # noqa: E402
     compute_path_union_node_statistics,
     top_node_statistics,
 )
+from kinase_site_concordance import (  # noqa: E402
+    apply_site_response_gate,
+    kirby_node_factor_catalog,
+)
 
 
 ProgressCallback = Callable[[str, float], None]
@@ -278,6 +282,8 @@ NODE_LIKELIHOOD_PROFILES = {
     "phosphoprotein_response": "transient_phosphoregulation",
     "pka_ca_ko_phosphoprotein_response": "transient_phosphoregulation",
     "pka_cb_ko_phosphoprotein_response": "transient_phosphoregulation",
+    "kirby_ddavp_phosphoprotein_response": "transient_phosphoregulation",
+    "kirby_ddavp_kinase_activity": "kinase_activity",
 }
 IMCD_COMPARTMENT_HANDLERS = {
     "imcd_basal_compartment_presence": "basal",
@@ -291,6 +297,8 @@ PHOSPHOPROTEOMIC_CALIBRATION_STREAMS = {
     "phosphoprotein_response",
     "pka_ca_ko_phosphoprotein_response",
     "pka_cb_ko_phosphoprotein_response",
+    "kirby_ddavp_phosphoprotein_response",
+    "kirby_ddavp_kinase_activity",
     "kinase_predictor",
 }
 CALIBRATION_WEIGHT_BOUNDS = (0.0, 3.0)
@@ -347,6 +355,29 @@ def load_registry(project_root: Path | str = PROJECT_ROOT) -> dict[str, Any]:
     project = Path(project_root).resolve()
     registry_path = project / "gui/evidence_registry.json"
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    kirby_factor_path = project / (
+        "data/node_selection/kirby_ddavp/processed/"
+        "kirby_ddavp_node_factors.tsv.gz"
+    )
+    if not kirby_factor_path.is_file() and (
+        project / "data/phospho_data_original.xlsx"
+    ).is_file():
+        factors, audit = kirby_node_factor_catalog(project)
+        kirby_factor_path.parent.mkdir(parents=True, exist_ok=True)
+        factors.to_csv(
+            kirby_factor_path,
+            sep="\t",
+            index=False,
+            compression="gzip",
+        )
+        audit.to_csv(
+            kirby_factor_path.with_name(
+                "kirby_ddavp_kinase_activity_audit.tsv.gz"
+            ),
+            sep="\t",
+            index=False,
+            compression="gzip",
+        )
     validate_registry(registry, project)
     return registry
 
@@ -561,6 +592,10 @@ def default_configuration(registry: dict[str, Any]) -> dict[str, Any]:
             "enabled": True,
             "start": defaults["start_node"],
             "target": defaults["target_node"],
+            "starts": [defaults["start_node"]],
+            "targets": [defaults["target_node"]],
+            "known_intermediates": [],
+            "known_intermediate_mode": "any",
             "top_k": int(defaults["top_k_paths"]),
             "max_hops": int(defaults["maximum_hops"]),
             "minimum_edge_probability": float(
@@ -702,7 +737,10 @@ def normalize_configuration(
     config["node_integration"].update(supplied.get("node_integration", {}))
     config["edge_integration"].update(supplied.get("edge_integration", {}))
     config["graph_statistics"].update(supplied.get("graph_statistics", {}))
-    config["path"].update(supplied.get("path", {}))
+    supplied_path = supplied.get("path", {})
+    if not isinstance(supplied_path, dict):
+        raise ValueError("path configuration must be an object")
+    config["path"].update(supplied_path)
     config["temporal_validation"].update(supplied.get("temporal_validation", {}))
 
     calibration = config["calibration"]
@@ -972,8 +1010,43 @@ def normalize_configuration(
     path["omnipath_directionality_enabled"] = bool(
         path["omnipath_directionality_enabled"]
     )
-    path["start"] = str(path["start"]).strip()
-    path["target"] = str(path["target"]).strip()
+    def normalized_path_identifiers(
+        plural_key: str,
+        singular_key: str,
+    ) -> list[str]:
+        if plural_key in supplied_path:
+            raw_values = supplied_path[plural_key]
+        elif singular_key in supplied_path:
+            raw_values = supplied_path[singular_key]
+        else:
+            raw_values = path.get(plural_key, path.get(singular_key, []))
+        if isinstance(raw_values, str):
+            raw_values = re.split(r"[\r\n,;]+", raw_values)
+        if not isinstance(raw_values, (list, tuple)):
+            raise ValueError(f"{plural_key.replace('_', ' ')} must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in raw_values:
+            identifier = str(value).strip()
+            if identifier and identifier.casefold() not in seen:
+                normalized.append(identifier)
+                seen.add(identifier.casefold())
+        return normalized
+
+    path["starts"] = normalized_path_identifiers("starts", "start")
+    path["targets"] = normalized_path_identifiers("targets", "target")
+    path["known_intermediates"] = normalized_path_identifiers(
+        "known_intermediates", "known_intermediate"
+    )
+    path["start"] = path["starts"][0] if path["starts"] else ""
+    path["target"] = path["targets"][0] if path["targets"] else ""
+    path["known_intermediate_mode"] = str(
+        path.get("known_intermediate_mode", "any")
+    ).strip().casefold()
+    if path["known_intermediate_mode"] not in {"optional", "any", "all"}:
+        raise ValueError(
+            "known-intermediate rule must be 'optional', 'any', or 'all'"
+        )
     path["top_k"] = int(_number(path["top_k"], "top paths", 1, 2000))
     path["max_hops"] = int(_number(path["max_hops"], "maximum hops", 1, 12))
     path["minimum_edge_probability"] = _number(
@@ -1004,8 +1077,33 @@ def normalize_configuration(
         for item in registry["path_ontology_classes"]
         if item["id"] in selected_class_ids
     ]
-    if path["enabled"] and (not path["start"] or not path["target"]):
-        raise ValueError("both a starting node and target are required for path finding")
+    if path["enabled"] and (not path["starts"] or not path["targets"]):
+        raise ValueError(
+            "at least one input and at least one target are required for path finding"
+        )
+    endpoint_keys = {
+        value.casefold() for value in [*path["starts"], *path["targets"]]
+    }
+    overlap = [
+        value
+        for value in path["known_intermediates"]
+        if value.casefold() in endpoint_keys
+    ]
+    if overlap:
+        raise ValueError(
+            "known intermediates must be distinct from query inputs and targets: "
+            + ", ".join(overlap)
+        )
+    if path["known_intermediates"] and path["known_intermediate_mode"] != "optional":
+        required_internal_count = (
+            len(path["known_intermediates"])
+            if path["known_intermediate_mode"] == "all"
+            else 1
+        )
+        if path["max_hops"] < required_internal_count + 1:
+            raise ValueError(
+                "maximum hops is too small for the selected known-intermediate rule"
+            )
 
     temporal = config["temporal_validation"]
     temporal["enabled"] = bool(temporal["enabled"])
@@ -2311,6 +2409,7 @@ def _boolean_mask(values: pd.Series) -> np.ndarray:
         .str.casefold()
         .isin({"true", "1", "yes"})
         .to_numpy(bool)
+        .copy()
     )
 
 
@@ -3175,6 +3274,31 @@ def _kinase_predictor_edge_factors(
     continuous_negative: bool = False,
     minimum_bayes_factor: float = 1e-6,
 ) -> pd.DataFrame:
+    factors, _ = _kinase_predictor_site_concordance(
+        project,
+        symbols,
+        multiplier,
+        continuous_negative=continuous_negative,
+        minimum_bayes_factor=minimum_bayes_factor,
+    )
+    return factors
+
+
+def _kinase_predictor_site_concordance(
+    project: Path,
+    symbols: list[str],
+    multiplier: float,
+    *,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return response-gated pair factors and a complete site-level audit.
+
+    KinasePredictor supplies motif specificity.  The Kirby time course and the
+    two PKA catalytic-subunit knockout comparisons supply exact-site response
+    reliability.  A motif hit is neutral unless the same substrate site was
+    measured as responsive in at least one of those datasets.
+    """
     predictions = pd.read_csv(project / KINASE_PREDICTIONS_RELATIVE, sep="\t")
     used = predictions["used_for_undirected_edge"]
     if used.dtype != bool:
@@ -3197,23 +3321,35 @@ def _kinase_predictor_edge_factors(
         site_bf = complement_minimum_likelihood(
             np.maximum(raw_score, 0.0), tq * multiplier
         ) / NEUTRAL_LIKELIHOOD
-    predictions["gui_log_bayes_factor"] = np.log(site_bf)
-    grouped = predictions.groupby(
-        ["undirected_node_a", "undirected_node_b"], sort=False
-    )["gui_log_bayes_factor"].sum().reset_index()
-    grouped["bayes_factor"] = np.exp(
-        np.clip(grouped["gui_log_bayes_factor"].to_numpy(float), -700.0, 700.0)
+    audit = apply_site_response_gate(predictions, project, site_bf)
+    audit["node_a"] = audit["undirected_node_a"].astype(str)
+    audit["node_b"] = audit["undirected_node_b"].astype(str)
+    audit["bayes_factor"] = pd.to_numeric(
+        audit["response_gated_bayes_factor"], errors="raise"
     )
+
+    # Multiple sites on one substrate are correlated measurements.  Use the
+    # strongest exact-site conjunction as the relationship factor and retain
+    # every candidate site in the audit instead of multiplying them.
+    strongest = audit.groupby(["node_a", "node_b"], sort=False)[
+        "bayes_factor"
+    ].idxmax()
+    audit["selected_for_pair_factor"] = False
+    audit.loc[strongest, "selected_for_pair_factor"] = True
+    grouped = audit.loc[strongest, ["node_a", "node_b", "bayes_factor"]].copy()
     if continuous_negative:
         grouped["bayes_factor"] = np.maximum(
             grouped["bayes_factor"].to_numpy(float), minimum_bayes_factor
         )
     grouped = grouped.loc[
         np.abs(grouped["bayes_factor"] - 1.0) > FACTOR_EPSILON
-    ].rename(
-        columns={"undirected_node_a": "node_a", "undirected_node_b": "node_b"}
-    )
-    return grouped[["node_a", "node_b", "bayes_factor"]]
+    ]
+    audit = audit.sort_values(
+        ["node_a", "node_b", "selected_for_pair_factor", "bayes_factor"],
+        ascending=[True, True, False, False],
+        kind="stable",
+    ).reset_index(drop=True)
+    return grouped[["node_a", "node_b", "bayes_factor"]], audit
 
 
 def _incremental_kinase_hit_table(
@@ -3273,6 +3409,79 @@ def _incremental_kinase_hit_table(
     return pd.DataFrame.from_records(records, columns=columns)
 
 
+def _incremental_kinase_site_concordance(
+    project: Path,
+    graph_symbols: list[str],
+    multiplier: float,
+    *,
+    pairs: list[tuple[str, str]] | None = None,
+    continuous_negative: bool = False,
+    minimum_bayes_factor: float = 1e-6,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Apply the exact-site response gate to dynamically cached kinase hits."""
+    records = _incremental_kinase_hit_table(project, graph_symbols)
+    empty_factors = pd.DataFrame(columns=["node_a", "node_b", "bayes_factor"])
+    if records.empty:
+        return empty_factors, pd.DataFrame()
+    records = records.rename(columns={"site": "target_site"})
+    records["position"] = (
+        records["target_site"].astype(str).str.extract(r"(\d+)", expand=False)
+    )
+    records = records.loc[records["position"].notna()].copy()
+    records["position"] = records["position"].astype(int)
+    records["predictor_family"] = ""
+    records["undirected_node_a"] = records.apply(
+        lambda row: _canonical_undirected_pair(
+            row["kinase_node"], row["target_protein"]
+        )[0],
+        axis=1,
+    )
+    records["undirected_node_b"] = records.apply(
+        lambda row: _canonical_undirected_pair(
+            row["kinase_node"], row["target_protein"]
+        )[1],
+        axis=1,
+    )
+    if pairs is not None:
+        wanted = {_canonical_undirected_pair(*pair) for pair in pairs}
+        records = records.loc[
+            [
+                _canonical_undirected_pair(left, right) in wanted
+                for left, right in records[
+                    ["undirected_node_a", "undirected_node_b"]
+                ].itertuples(index=False, name=None)
+            ]
+        ].copy()
+    if records.empty:
+        return empty_factors, pd.DataFrame()
+    raw = pd.to_numeric(records["raw_score"], errors="raise").to_numpy(float)
+    tq = pd.to_numeric(records["site_Tq_q75"], errors="raise").to_numpy(float)
+    if continuous_negative:
+        motif_bf = continuous_complement_bayes_factor(
+            np.maximum(raw, 0.0),
+            tq * multiplier,
+            minimum_bayes_factor=minimum_bayes_factor,
+        )
+    else:
+        motif_bf = complement_minimum_likelihood(
+            np.maximum(raw, 0.0), tq * multiplier
+        ) / NEUTRAL_LIKELIHOOD
+    audit = apply_site_response_gate(records, project, motif_bf)
+    audit["node_a"] = audit["undirected_node_a"]
+    audit["node_b"] = audit["undirected_node_b"]
+    audit["bayes_factor"] = audit["response_gated_bayes_factor"]
+    strongest = audit.groupby(["node_a", "node_b"], sort=False)[
+        "bayes_factor"
+    ].idxmax()
+    audit["selected_for_pair_factor"] = False
+    audit.loc[strongest, "selected_for_pair_factor"] = True
+    factors = audit.loc[strongest, ["node_a", "node_b", "bayes_factor"]].copy()
+    factors = factors.loc[
+        np.abs(factors["bayes_factor"] - 1.0) > FACTOR_EPSILON
+    ]
+    return factors.reset_index(drop=True), audit.reset_index(drop=True)
+
+
 def kinase_predictor_direction_evidence(
     project: Path,
     graph_symbols: list[str],
@@ -3287,62 +3496,30 @@ def kinase_predictor_direction_evidence(
     companion table keeps the ordered kinase and substrate roles long enough
     for path finding to remove the biologically reversed traversal.
     """
-    predictions = pd.read_csv(project / KINASE_PREDICTIONS_RELATIVE, sep="\t")
-    used = predictions["used_for_undirected_edge"]
-    if used.dtype != bool:
-        used = used.astype(str).str.casefold().eq("true")
-    predictions = predictions.loc[used].copy().rename(
-        columns={"target_site": "site"}
+    multiplier = _stream_multiplier(state)
+    _, records = _kinase_predictor_site_concordance(
+        project,
+        graph_symbols,
+        multiplier,
+        continuous_negative=continuous_negative,
+        minimum_bayes_factor=minimum_bayes_factor,
     )
-    selected = set(map(str, graph_symbols))
-    predictions = predictions.loc[
-        predictions["kinase_node"].astype(str).isin(selected)
-        & predictions["target_protein"].astype(str).isin(selected)
-    ]
-    incremental = _incremental_kinase_hit_table(project, graph_symbols)
-    columns = [
-        "kinase_node",
-        "target_protein",
-        "site",
-        "predictor_label",
-        "raw_score",
-        "site_Tq_q75",
-    ]
-    records = pd.concat(
-        [predictions.reindex(columns=columns), incremental.reindex(columns=columns)],
-        ignore_index=True,
+    _, incremental_records = _incremental_kinase_site_concordance(
+        project,
+        graph_symbols,
+        multiplier,
+        continuous_negative=continuous_negative,
+        minimum_bayes_factor=minimum_bayes_factor,
     )
+    if not incremental_records.empty:
+        records = pd.concat([records, incremental_records], ignore_index=True)
     if records.empty:
         return build_kinase_predictor_direction_evidence(records, graph_symbols)
-
-    raw_score = pd.to_numeric(records["raw_score"], errors="raise").to_numpy(float)
-    tq = pd.to_numeric(records["site_Tq_q75"], errors="raise").to_numpy(float)
-    multiplier = _stream_multiplier(state)
-    if continuous_negative:
-        site_bf = continuous_complement_bayes_factor(
-            np.maximum(raw_score, 0.0),
-            tq * multiplier,
-            minimum_bayes_factor=minimum_bayes_factor,
-        )
-    else:
-        site_bf = complement_minimum_likelihood(
-            np.maximum(raw_score, 0.0), tq * multiplier
-        ) / NEUTRAL_LIKELIHOOD
-    records["directional_log_bf"] = np.log(site_bf)
-    position = {symbol: index for index, symbol in enumerate(graph_symbols)}
-    kinase_position = records["kinase_node"].map(position).to_numpy(int)
-    target_position = records["target_protein"].map(position).to_numpy(int)
-    records["pair_left_index"] = np.minimum(kinase_position, target_position)
-    records["pair_right_index"] = np.maximum(kinase_position, target_position)
-    records["undirected_total_log_bf"] = records.groupby(
-        ["pair_left_index", "pair_right_index"], sort=False
-    )["directional_log_bf"].transform("sum")
-    records["directional_total_log_bf"] = records.groupby(
-        ["kinase_node", "target_protein"], sort=False
-    )["directional_log_bf"].transform("sum")
+    records = records.rename(columns={"target_site": "site"})
     supported = records.loc[
-        (records["undirected_total_log_bf"] > math.log1p(FACTOR_EPSILON))
-        & (records["directional_total_log_bf"] > math.log1p(FACTOR_EPSILON))
+        records["selected_for_pair_factor"]
+        & records["response_gated_bayes_factor"].gt(1.0 + FACTOR_EPSILON)
+        & records["site_response_reliability"].gt(0)
     ].copy()
     return build_kinase_predictor_direction_evidence(supported, graph_symbols)
 
@@ -3877,7 +4054,7 @@ def edge_stream_factor_table(
         math.isclose(multiplier, 1.0, rel_tol=0.0, abs_tol=1e-15)
         and not use_raw_negative_string
         and not continuous_negative
-        and handler != BIOGRID_PHYSICAL_HANDLER
+        and handler not in {BIOGRID_PHYSICAL_HANDLER, "kinase_predictor"}
         and (
             handler not in IMCD_COMPARTMENT_HANDLERS
             or math.isclose(
@@ -4380,23 +4557,34 @@ def calibrate_edge_parameters(
             and handler != BIOGRID_PHYSICAL_HANDLER
             and handler not in FIXED_CATALOG_EDGE_HANDLERS
         ):
-            tables.append(
-                incremental_pair_factor_table(
+            if handler == "kinase_predictor":
+                incremental_table, _ = _incremental_kinase_site_concordance(
                     project,
-                    definition["normalization"]["handler"],
-                    (
-                        _imcd_support_likelihood(
-                            definition, config["edge_streams"][stream_id]
-                        )
-                        if definition["normalization"]["handler"]
-                        in IMCD_COMPARTMENT_HANDLERS
-                        else multiplier
-                    ),
-                    incremental_targets,
+                    target_symbols,
+                    multiplier,
+                    pairs=incremental_targets,
                     continuous_negative=stream_continuous_negative,
                     minimum_bayes_factor=continuous_floor,
                 )
-            )
+                tables.append(incremental_table)
+            else:
+                tables.append(
+                    incremental_pair_factor_table(
+                        project,
+                        definition["normalization"]["handler"],
+                        (
+                            _imcd_support_likelihood(
+                                definition, config["edge_streams"][stream_id]
+                            )
+                            if definition["normalization"]["handler"]
+                            in IMCD_COMPARTMENT_HANDLERS
+                            else multiplier
+                        ),
+                        incremental_targets,
+                        continuous_negative=stream_continuous_negative,
+                        minimum_bayes_factor=continuous_floor,
+                    )
+                )
         lookup: dict[tuple[str, str], float] = {}
         for table in tables:
             for row in table.itertuples(index=False):
@@ -5125,25 +5313,49 @@ def combine_edge_factors(
             and handler != BIOGRID_PHYSICAL_HANDLER
             and handler not in FIXED_CATALOG_EDGE_HANDLERS
         ):
-            incremental_loader = (
-                incremental_pair_factor_table
-                if len(incremental_pairs) <= 50_000
-                else incremental_factor_table
-            )
-            tables.append(
-                incremental_loader(
-                    project,
-                    definition["normalization"]["handler"],
-                    _edge_incremental_scale(definition, state),
-                    (
-                        incremental_pairs
-                        if incremental_loader is incremental_pair_factor_table
-                        else graph_symbols
-                    ),
-                    continuous_negative=stream_continuous_negative,
-                    minimum_bayes_factor=continuous_floor,
+            if handler == "kinase_predictor":
+                incremental_table, incremental_audit = (
+                    _incremental_kinase_site_concordance(
+                        project,
+                        graph_symbols,
+                        _stream_multiplier(state),
+                        pairs=incremental_pairs,
+                        continuous_negative=stream_continuous_negative,
+                        minimum_bayes_factor=continuous_floor,
+                    )
                 )
-            )
+                tables.append(incremental_table)
+                if audit_collector is not None and not incremental_audit.empty:
+                    existing = audit_collector.get(
+                        "kinase_predictor_site_concordance"
+                    )
+                    audit_collector["kinase_predictor_site_concordance"] = (
+                        incremental_audit
+                        if existing is None or existing.empty
+                        else pd.concat(
+                            [existing, incremental_audit], ignore_index=True
+                        )
+                    )
+            else:
+                incremental_loader = (
+                    incremental_pair_factor_table
+                    if len(incremental_pairs) <= 50_000
+                    else incremental_factor_table
+                )
+                tables.append(
+                    incremental_loader(
+                        project,
+                        definition["normalization"]["handler"],
+                        _edge_incremental_scale(definition, state),
+                        (
+                            incremental_pairs
+                            if incremental_loader is incremental_pair_factor_table
+                            else graph_symbols
+                        ),
+                        continuous_negative=stream_continuous_negative,
+                        minimum_bayes_factor=continuous_floor,
+                    )
+                )
         table = pd.concat(tables, ignore_index=True)
         left = table["node_a"].map(index)
         right = table["node_b"].map(index)
@@ -5770,11 +5982,23 @@ def external_target_stream_values(
             site_bf = complement_minimum_likelihood(
                 np.maximum(raw_score, 0.0), tq * multiplier
             ) / NEUTRAL_LIKELIHOOD
-        predictions["gui_log_bf"] = np.log(site_bf)
-        grouped = predictions.groupby("kinase_node")["gui_log_bf"].sum()
+        concordance_input = predictions.rename(
+            columns={"target_symbol": "target_protein"}
+        )
+        concordance = apply_site_response_gate(
+            concordance_input,
+            project,
+            site_bf,
+        )
+        selected = concordance.groupby("kinase_node", sort=False)[
+            "response_gated_bayes_factor"
+        ].idxmax()
+        grouped = concordance.loc[selected].set_index("kinase_node")[
+            "response_gated_bayes_factor"
+        ]
         mapped = aligned.index.to_series().map(grouped)
         found = mapped.notna().to_numpy()
-        result[found] = np.exp(np.clip(mapped[found].to_numpy(float), -700.0, 700.0))
+        result[found] = mapped[found].to_numpy(float)
         if continuous_negative:
             result[found] = np.maximum(result[found], minimum_bayes_factor)
         return result
@@ -6152,6 +6376,8 @@ def run_paths(
     target_symbol: str,
     *,
     directed_graph: bool = False,
+    known_intermediate_symbols: Iterable[str] = (),
+    known_intermediate_mode: str = "optional",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     symbols = matrix.index.astype(str).tolist()
     resolved = resolve_existing_node(
@@ -6170,6 +6396,14 @@ def run_paths(
     if start_symbol == target_symbol:
         raise ValueError("start and target resolve to the same node")
     path_config = config["path"]
+    known_symbols = list(dict.fromkeys(map(str, known_intermediate_symbols)))
+    effective_known_mode = known_intermediate_mode if known_symbols else "optional"
+    missing_known = sorted(set(known_symbols).difference(symbols))
+    if missing_known:
+        raise ValueError(
+            "known intermediates are absent from the constructed graph: "
+            + ", ".join(missing_known)
+        )
     eligibility = build_intermediate_eligibility(
         metadata,
         symbols,
@@ -6178,6 +6412,7 @@ def run_paths(
         signaling_intermediates_only=path_config["signaling_intermediates_only"],
         relay_classes=path_config["allowed_intermediate_classes"],
         exclude_any_scaffold=path_config["exclude_multirole_scaffolds"],
+        forced_intermediate_symbols=known_symbols,
     )
     permitted = frozenset(
         eligibility.loc[eligibility["permitted_in_search"], "matrix_index"].astype(int)
@@ -6193,6 +6428,7 @@ def run_paths(
     symbol_index = {symbol: index for index, symbol in enumerate(symbols)}
     start_index = symbol_index[start_symbol]
     target_index = symbol_index[target_symbol]
+    required_indices = frozenset(symbol_index[symbol] for symbol in known_symbols)
     node_probability_values: np.ndarray | None = None
     node_probability_audit: dict[str, Any] | None = None
     if path_config.get("include_node_probabilities", False):
@@ -6209,6 +6445,8 @@ def run_paths(
         max_hops=path_config["max_hops"],
         permitted_nodes=permitted,
         node_probabilities=node_probability_values,
+        required_nodes=required_indices,
+        required_mode=effective_known_mode,
     )
     paths, edges = serialize_paths(
         ranked,
@@ -6216,13 +6454,38 @@ def run_paths(
         metadata,
         node_probability_values,
     )
+    if not paths.empty:
+        known_set = set(known_symbols)
+        path_known = [
+            [symbol for symbol in str(value).split(" -> ") if symbol in known_set]
+            for value in paths["path_symbols"]
+        ]
+        paths["known_intermediate_symbols"] = [";".join(values) for values in path_known]
+        paths["known_intermediate_count"] = [len(values) for values in path_known]
+        paths["known_intermediate_rule"] = effective_known_mode
     validation = {
         "all_paths_simple": all(len(item.nodes) == len(set(item.nodes)) for item in ranked),
         "all_paths_within_hop_limit": all(
             len(item.nodes) - 1 <= path_config["max_hops"] for item in ranked
         ),
         "all_internal_nodes_eligible": all(
-            all(node in eligible for node in item.nodes[1:-1]) for item in ranked
+            all(
+                node in eligible or node in required_indices
+                for node in item.nodes[1:-1]
+            )
+            for item in ranked
+        ),
+        "known_intermediate_rule_satisfied": all(
+            effective_known_mode == "optional"
+            or (
+                effective_known_mode == "any"
+                and bool(required_indices.intersection(item.nodes))
+            )
+            or (
+                effective_known_mode == "all"
+                and required_indices.issubset(item.nodes)
+            )
+            for item in ranked
         ),
         "all_edges_above_path_cutoff": bool(
             edges.empty
@@ -6246,6 +6509,8 @@ def run_paths(
         "start_symbol": start_symbol,
         "start_resolution_method": resolution_method,
         "target_symbol": target_symbol,
+        "known_intermediate_symbols": known_symbols,
+        "known_intermediate_mode": effective_known_mode,
         "paths_found": int(len(paths)),
         "top_k_requested": int(path_config["top_k"]),
         "maximum_hops": int(path_config["max_hops"]),
@@ -6286,6 +6551,169 @@ def run_paths(
     return paths, edges, eligibility, summary
 
 
+def run_multi_paths(
+    matrix: pd.DataFrame,
+    metadata: pd.DataFrame,
+    config: dict[str, Any],
+    start_symbols: Iterable[str],
+    target_symbols: Iterable[str],
+    known_intermediate_symbols: Iterable[str],
+    *,
+    directed_graph: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Search every input-target combination and retain a target-balanced top-K.
+
+    Every reachable target first receives an equal quota from the configured
+    global path budget.  Any unused slots are then filled by the strongest
+    remaining paths regardless of target.  This prevents a highly connected
+    endpoint from erasing every other configured target from the saved result.
+    """
+
+    starts = list(dict.fromkeys(map(str, start_symbols)))
+    targets = list(dict.fromkeys(map(str, target_symbols)))
+    known = list(dict.fromkeys(map(str, known_intermediate_symbols)))
+    path_frames: list[pd.DataFrame] = []
+    edge_frames: list[pd.DataFrame] = []
+    eligibility_frames: list[pd.DataFrame] = []
+    pair_summaries: list[dict[str, Any]] = []
+    skipped_pairs: list[dict[str, str]] = []
+
+    for start_symbol in starts:
+        for target_symbol in targets:
+            query_id = f"{start_symbol}->{target_symbol}"
+            if start_symbol == target_symbol:
+                skipped_pairs.append(
+                    {
+                        "input": start_symbol,
+                        "target": target_symbol,
+                        "reason": "same_resolved_node",
+                    }
+                )
+                continue
+            paths, edges, eligibility, summary = run_paths(
+                matrix,
+                metadata,
+                config,
+                start_symbol,
+                target_symbol,
+                directed_graph=directed_graph,
+                known_intermediate_symbols=known,
+                known_intermediate_mode=config["path"]["known_intermediate_mode"],
+            )
+            summary["query_id"] = query_id
+            pair_summaries.append(summary)
+            eligibility = eligibility.copy()
+            eligibility.insert(0, "query_id", query_id)
+            eligibility.insert(1, "query_input", start_symbol)
+            eligibility.insert(2, "query_target", target_symbol)
+            eligibility_frames.append(eligibility)
+            if paths.empty:
+                continue
+            paths = paths.copy()
+            paths.rename(columns={"rank": "pair_rank"}, inplace=True)
+            paths.insert(0, "query_id", query_id)
+            edges = edges.copy()
+            edges.rename(columns={"path_rank": "pair_rank"}, inplace=True)
+            edges.insert(0, "query_id", query_id)
+            path_frames.append(paths)
+            edge_frames.append(edges)
+
+    if not pair_summaries:
+        raise ValueError("every input-target combination resolved to the same node")
+
+    common_summary = {
+        "input_symbols": starts,
+        "target_symbols": targets,
+        "known_intermediate_symbols": known,
+        "known_intermediate_mode": config["path"]["known_intermediate_mode"],
+        "query_pair_count": len(pair_summaries),
+        "skipped_query_pairs": skipped_pairs,
+        "top_k_requested": int(config["path"]["top_k"]),
+        "maximum_hops": int(config["path"]["max_hops"]),
+        "minimum_edge_probability_exclusive": float(
+            config["path"]["minimum_edge_probability"]
+        ),
+        "node_probabilities_included_in_primary_score": bool(
+            config["path"].get("include_node_probabilities", False)
+        ),
+        "primary_score_definition": (
+            "Geometric mean of every edge posterior and every internal-node "
+            "posterior. Query endpoints are excluded."
+            if config["path"].get("include_node_probabilities", False)
+            else "Geometric mean of edge posteriors only."
+        ),
+    }
+    if len(pair_summaries) == 1:
+        # Preserve the established single-query summary fields for old report
+        # readers while adding the explicit multi-query catalog alongside them.
+        common_summary = {**pair_summaries[0], **common_summary}
+
+    eligibility = (
+        pd.concat(eligibility_frames, ignore_index=True, sort=False)
+        if eligibility_frames
+        else pd.DataFrame()
+    )
+    if not path_frames:
+        empty_paths = pd.DataFrame()
+        empty_edges = pd.DataFrame()
+        summary = {
+            **common_summary,
+            "paths_found": 0,
+            "per_query_pair": pair_summaries,
+        }
+        return empty_paths, empty_edges, eligibility, summary
+
+    combined_paths = pd.concat(path_frames, ignore_index=True, sort=False)
+    combined_paths = combined_paths.sort_values(
+        ["primary_path_score", "combined_node_edge_probability_product", "path_symbols"],
+        ascending=[False, False, True],
+        kind="mergesort",
+    )
+    combined_paths = _target_balanced_path_prefix(
+        combined_paths,
+        int(config["path"]["top_k"]),
+    )
+    combined_paths.insert(0, "rank", range(1, len(combined_paths) + 1))
+
+    rank_map = combined_paths[["query_id", "pair_rank", "rank"]]
+    combined_edges = pd.concat(edge_frames, ignore_index=True, sort=False)
+    combined_edges = combined_edges.merge(
+        rank_map,
+        on=["query_id", "pair_rank"],
+        how="inner",
+        validate="many_to_one",
+    )
+    combined_edges.rename(columns={"rank": "path_rank"}, inplace=True)
+    combined_edges.sort_values(["path_rank", "step"], inplace=True)
+    combined_paths.reset_index(drop=True, inplace=True)
+    combined_edges.reset_index(drop=True, inplace=True)
+
+    summary = {
+        **common_summary,
+        "paths_found_before_global_top_k": int(sum(item["paths_found"] for item in pair_summaries)),
+        "paths_found": int(len(combined_paths)),
+        "global_ranking_rule": (
+            "All input-target combinations are searched independently. Every "
+            "reachable target first receives an equal share of the configured "
+            "path budget; unused slots are filled by the strongest remaining paths."
+        ),
+        "target_balanced_top_k": True,
+        "target_path_quota": max(
+            1,
+            int(config["path"]["top_k"])
+            // max(combined_paths["target_symbol"].astype(str).nunique(), 1),
+        ),
+        "represented_target_count": int(
+            combined_paths["target_symbol"].astype(str).nunique()
+        ),
+        "unrepresented_targets": sorted(
+            set(targets).difference(combined_paths["target_symbol"].astype(str))
+        ),
+        "per_query_pair": pair_summaries,
+    }
+    return combined_paths, combined_edges, eligibility, summary
+
+
 def _records(frame: pd.DataFrame, columns: list[str], limit: int) -> list[dict[str, Any]]:
     if frame.empty:
         return []
@@ -6296,6 +6724,65 @@ def _records(frame: pd.DataFrame, columns: list[str], limit: int) -> list[dict[s
 PATH_NETWORK_VISUALIZATION_LIMIT = 50
 
 
+def _target_balanced_path_prefix(
+    path_rows: pd.DataFrame,
+    path_limit: int,
+) -> pd.DataFrame:
+    """Select a score-ordered prefix while reserving space for every target."""
+
+    if path_rows.empty or path_limit < 1:
+        return path_rows.iloc[0:0].copy()
+    score_columns = [
+        column
+        for column in (
+            "primary_path_score",
+            "combined_node_edge_probability_product",
+            "path_symbols",
+        )
+        if column in path_rows.columns
+    ]
+    if score_columns:
+        ascending = [column == "path_symbols" for column in score_columns]
+        ordered = path_rows.sort_values(
+            score_columns,
+            ascending=ascending,
+            kind="mergesort",
+        )
+    elif "rank" in path_rows.columns:
+        ordered = path_rows.sort_values("rank", kind="mergesort")
+    else:
+        ordered = path_rows.copy()
+    if "target_symbol" not in ordered.columns:
+        return ordered.head(path_limit).copy()
+    target_values = ordered["target_symbol"].astype(str)
+    targets = list(dict.fromkeys(target_values.tolist()))
+    if not targets:
+        return ordered.head(path_limit).copy()
+    effective_limit = max(int(path_limit), len(targets))
+    quota = max(1, effective_limit // len(targets))
+    selected_indices: list[Any] = []
+    for target in targets:
+        selected_indices.extend(
+            ordered.loc[target_values.eq(target)].head(quota).index.tolist()
+        )
+    selected_set = set(selected_indices)
+    remaining = effective_limit - len(selected_indices)
+    if remaining > 0:
+        selected_indices.extend(
+            ordered.loc[~ordered.index.isin(selected_set)].head(remaining).index.tolist()
+        )
+    selected = ordered.loc[selected_indices]
+    if score_columns:
+        selected = selected.sort_values(
+            score_columns,
+            ascending=[column == "path_symbols" for column in score_columns],
+            kind="mergesort",
+        )
+    elif "rank" in selected.columns:
+        selected = selected.sort_values("rank", kind="mergesort")
+    return selected.head(effective_limit).copy()
+
+
 def build_path_network_payload(
     path_rows: pd.DataFrame,
     path_edges: pd.DataFrame,
@@ -6304,6 +6791,7 @@ def build_path_network_payload(
     *,
     directed_graph: bool,
     path_limit: int = PATH_NETWORK_VISUALIZATION_LIMIT,
+    known_intermediate_symbols: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Build a compact, auditable union graph from the highest-ranked paths.
 
@@ -6320,19 +6808,24 @@ def build_path_network_payload(
         "directed_graph": bool(directed_graph),
         "start_symbol": None,
         "target_symbol": None,
+        "start_symbols": [],
+        "target_symbols": [],
+        "known_intermediate_symbols": list(
+            dict.fromkeys(map(str, known_intermediate_symbols))
+        ),
         "nodes": [],
         "edges": [],
     }
     if path_rows.empty or path_edges.empty or path_limit < 1:
         return empty
 
+    displayed_paths = _target_balanced_path_prefix(path_rows, path_limit)
     ranks = (
-        pd.to_numeric(path_rows["rank"], errors="coerce")
+        pd.to_numeric(displayed_paths["rank"], errors="coerce")
         .dropna()
         .astype(int)
         .sort_values()
         .drop_duplicates()
-        .head(path_limit)
         .tolist()
     )
     if not ranks:
@@ -6356,14 +6849,14 @@ def build_path_network_payload(
     symbol_position = {symbol: index for index, symbol in enumerate(symbols)}
 
     path_nodes: dict[str, dict[str, Any]] = {}
-    start_symbol: str | None = None
-    target_symbol: str | None = None
+    start_symbols: set[str] = set()
+    target_symbols: set[str] = set()
+    known_intermediate_set = set(map(str, known_intermediate_symbols))
     for rank, group in edges.groupby("path_rank", sort=True):
         ordered = group.sort_values("step")
         sequence = [str(ordered.iloc[0]["source_symbol"]), *ordered["target_symbol"].astype(str)]
-        if start_symbol is None:
-            start_symbol = sequence[0]
-            target_symbol = sequence[-1]
+        start_symbols.add(sequence[0])
+        target_symbols.add(sequence[-1])
         denominator = max(len(sequence) - 1, 1)
         for index, symbol in enumerate(sequence):
             record = path_nodes.setdefault(
@@ -6398,8 +6891,9 @@ def build_path_network_payload(
                     if posterior is not None
                     else "curated_or_external_node"
                 ),
-                "is_start": symbol == start_symbol,
-                "is_target": symbol == target_symbol,
+                "is_start": symbol in start_symbols,
+                "is_target": symbol in target_symbols,
+                "is_known_intermediate": symbol in known_intermediate_set,
                 "best_path_rank": min(path_ranks),
                 "path_count": len(path_ranks),
                 "path_ranks": path_ranks,
@@ -6468,8 +6962,16 @@ def build_path_network_payload(
     return {
         **empty,
         "visualized_path_count": len(ranks),
-        "start_symbol": start_symbol,
-        "target_symbol": target_symbol,
+        "target_balanced_display": "target_symbol" in path_rows.columns,
+        "display_selection_rule": (
+            "Equal target quota first; strongest remaining paths fill unused slots."
+            if "target_symbol" in path_rows.columns
+            else "Highest-ranked paths."
+        ),
+        "start_symbol": next(iter(start_symbols)) if len(start_symbols) == 1 else None,
+        "target_symbol": next(iter(target_symbols)) if len(target_symbols) == 1 else None,
+        "start_symbols": sorted(start_symbols),
+        "target_symbols": sorted(target_symbols),
         "nodes": node_rows,
         "edges": edge_rows,
     }
@@ -6542,22 +7044,57 @@ def run_workflow(
         universe = pd.read_csv(project / UNIVERSE_RELATIVE, sep="\t", dtype=str).fillna("")
         selected_symbols = selected_nodes["symbol"].astype(str).tolist()
 
-        target_symbol = ""
-        target_external = False
-        target_resolution: dict[str, Any] | None = None
+        resolved_start_symbols: list[str] = []
+        resolved_target_symbols: list[str] = []
+        resolved_known_intermediate_symbols: list[str] = []
+        path_endpoint_resolutions: list[dict[str, Any]] = []
         graph_symbols = selected_symbols.copy()
         graph_metadata = selected_nodes.copy()
         if config["path"]["enabled"]:
-            target_symbol, graph_metadata, target_resolution = append_requested_graph_endpoint(
-                config["path"]["target"],
-                graph_symbols,
-                graph_metadata,
-                universe,
-                node_factors,
-                project,
-                reason="path_endpoint_incremental",
-            )
-            target_external = target_symbol not in set(universe["symbol"].astype(str))
+            for role, requests, destination in (
+                ("input", config["path"]["starts"], resolved_start_symbols),
+                ("target", config["path"]["targets"], resolved_target_symbols),
+                (
+                    "known_intermediate",
+                    config["path"]["known_intermediates"],
+                    resolved_known_intermediate_symbols,
+                ),
+            ):
+                for requested in requests:
+                    symbol, graph_metadata, resolution = append_requested_graph_endpoint(
+                        requested,
+                        graph_symbols,
+                        graph_metadata,
+                        universe,
+                        node_factors,
+                        project,
+                        reason=f"path_{role}_incremental",
+                    )
+                    if symbol not in destination:
+                        destination.append(symbol)
+                    path_endpoint_resolutions.append(
+                        {
+                            "role": role,
+                            "requested": requested,
+                            "resolved_symbol": symbol,
+                            "resolution": resolution,
+                            "added_beyond_node_selection": symbol not in selected_symbols,
+                        }
+                    )
+            resolved_endpoint_keys = {
+                symbol.casefold()
+                for symbol in [*resolved_start_symbols, *resolved_target_symbols]
+            }
+            resolved_overlap = [
+                symbol
+                for symbol in resolved_known_intermediate_symbols
+                if symbol.casefold() in resolved_endpoint_keys
+            ]
+            if resolved_overlap:
+                raise ValueError(
+                    "known intermediates resolve to a query endpoint: "
+                    + ", ".join(resolved_overlap)
+                )
 
         resolved_known_edges: list[tuple[str, str]] = []
         calibration_endpoint_resolutions: list[dict[str, Any]] = []
@@ -6724,6 +7261,45 @@ def run_workflow(
         directionality_catalog: dict[str, Any] | None = None
         omnipath_direction_evidence = pd.DataFrame()
         kinase_direction_evidence = pd.DataFrame()
+        kinase_site_concordance_audit = pd.DataFrame()
+        kinase_state = config["edge_streams"].get("kinase_predictor", {})
+        if kinase_state.get("enabled") and float(kinase_state.get("weight", 0)) > 0:
+            kinase_continuous = bool(
+                config["edge_integration"].get(
+                    "continuous_negative_evidence", False
+                )
+                or kinase_state.get("continuous_negative_evidence", False)
+            )
+            _, kinase_site_concordance_audit = _kinase_predictor_site_concordance(
+                project,
+                graph_symbols,
+                _stream_multiplier(kinase_state),
+                continuous_negative=kinase_continuous,
+                minimum_bayes_factor=float(
+                    config["edge_integration"].get(
+                        "continuous_bayes_factor_floor", 1e-6
+                    )
+                ),
+            )
+            incremental_site_audit = derived_audits.get(
+                "kinase_predictor_site_concordance"
+            )
+            if (
+                incremental_site_audit is not None
+                and not incremental_site_audit.empty
+            ):
+                kinase_site_concordance_audit = pd.concat(
+                    [kinase_site_concordance_audit, incremental_site_audit],
+                    ignore_index=True,
+                ).drop_duplicates(
+                    [
+                        "kinase_node",
+                        "target_protein",
+                        "target_site",
+                        "predictor_label",
+                    ],
+                    keep="last",
+                )
         if (
             config["path"]["enabled"]
             and config["path"]["ontology_directionality_enabled"]
@@ -6739,7 +7315,6 @@ def run_workflow(
                 directionality_catalog,
                 [item["id"] for item in registry["path_ontology_classes"]],
             )
-            kinase_state = config["edge_streams"].get("kinase_predictor", {})
             if kinase_state.get("enabled") and float(kinase_state.get("weight", 0)) > 0:
                 kinase_continuous = bool(
                     config["edge_integration"].get(
@@ -6821,13 +7396,19 @@ def run_workflow(
         temporal_trend_rows = pd.DataFrame()
         temporal_summary: dict[str, Any] | None = None
         if config["path"]["enabled"]:
-            update("Ranking paths", 0.74)
-            path_rows, path_edges, eligibility, path_summary = run_paths(
+            pair_count = len(resolved_start_symbols) * len(resolved_target_symbols)
+            update(
+                f"Ranking paths across {pair_count} input-target combination"
+                + ("s" if pair_count != 1 else ""),
+                0.74,
+            )
+            path_rows, path_edges, eligibility, path_summary = run_multi_paths(
                 propagation_matrix,
                 graph_metadata,
                 config,
-                config["path"]["start"],
-                target_symbol,
+                resolved_start_symbols,
+                resolved_target_symbols,
+                resolved_known_intermediate_symbols,
                 directed_graph=directionality_summary is not None,
             )
             if path_summary is not None:
@@ -6870,6 +7451,7 @@ def run_workflow(
             graph_metadata,
             propagation_matrix,
             directed_graph=directionality_summary is not None,
+            known_intermediate_symbols=resolved_known_intermediate_symbols,
         )
         if path_summary is not None:
             path_summary["merged_path_visualization"] = {
@@ -6983,6 +7565,9 @@ def run_workflow(
         kinase_direction_evidence_path = (
             output / "kinase_predictor_direction_evidence.tsv.gz"
         )
+        kinase_site_concordance_audit_path = (
+            output / "kinase_predictor_site_concordance_audit.tsv.gz"
+        )
         temporal_paths_path = output / "ranked_paths_temporal.tsv"
         temporal_genes_path = output / "temporal_gene_responses.tsv.gz"
         temporal_trend_path = output / "temporal_variance_trend.tsv"
@@ -7015,6 +7600,14 @@ def run_workflow(
             matrix_path,
             supported_path,
         ]
+        if not kinase_site_concordance_audit.empty:
+            kinase_site_concordance_audit.to_csv(
+                kinase_site_concordance_audit_path,
+                sep="\t",
+                index=False,
+                compression="gzip",
+            )
+            files.append(kinase_site_concordance_audit_path)
         if graph_statistics_summary is not None:
             graph_node_statistics.to_csv(
                 graph_node_statistics_path,
@@ -7224,19 +7817,65 @@ def run_workflow(
                 "incremental_pair_cache": cache_summary,
                 "matrix_node_count_after_target_extension": int(len(matrix)),
                 "reported_supported_edge_count": int(len(supported)),
+                "kinase_site_concordance": {
+                    "enabled": not kinase_site_concordance_audit.empty,
+                    "candidate_site_prediction_count": int(
+                        len(kinase_site_concordance_audit)
+                    ),
+                    "responsive_exact_site_prediction_count": int(
+                        kinase_site_concordance_audit.get(
+                            "site_response_reliability",
+                            pd.Series(dtype=float),
+                        ).gt(0).sum()
+                    ),
+                    "supported_pair_count": int(
+                        kinase_site_concordance_audit.loc[
+                            kinase_site_concordance_audit.get(
+                                "selected_for_pair_factor",
+                                pd.Series(False, index=kinase_site_concordance_audit.index),
+                            ).astype(bool)
+                            & kinase_site_concordance_audit.get(
+                                "response_gated_bayes_factor",
+                                pd.Series(1.0, index=kinase_site_concordance_audit.index),
+                            ).gt(1.0 + FACTOR_EPSILON),
+                            ["node_a", "node_b"],
+                        ].drop_duplicates().shape[0]
+                    ),
+                    "audit_file": kinase_site_concordance_audit_path.name,
+                    "formula": "1 + r_response * (BF_motif - 1)",
+                    "pair_rule": "strongest exact-site conjunction; no cross-site multiplication",
+                },
             },
             "full_graph_statistics": graph_statistics_summary,
             "found_path_union_statistics": path_union_statistics_summary,
             "path_finding": path_summary,
             "temporal_validation": temporal_summary,
             "ontology_directionality": directionality_summary,
+            "path_endpoint_resolution": path_endpoint_resolutions,
+            "external_endpoints": [
+                {**item, "source_summary": cache_summary}
+                for item in path_endpoint_resolutions
+                if item["resolution"] is not None
+            ],
             "external_target": (
                 {
-                    "symbol": target_symbol,
-                    "resolution": target_resolution,
+                    "symbol": resolved_target_symbols[0],
+                    "resolution": next(
+                        (
+                            item["resolution"]
+                            for item in path_endpoint_resolutions
+                            if item["role"] == "target"
+                            and item["resolved_symbol"] == resolved_target_symbols[0]
+                        ),
+                        None,
+                    ),
                     "source_summary": cache_summary,
                 }
-                if target_external
+                if len(resolved_target_symbols) == 1
+                and any(
+                    item["role"] == "target" and item["resolution"] is not None
+                    for item in path_endpoint_resolutions
+                )
                 else None
             ),
             "warnings": warnings,
@@ -7262,12 +7901,16 @@ def run_workflow(
                 ),
                 [
                     "rank",
+                    "start_symbol",
+                    "target_symbol",
                     "hop_count",
                     "primary_path_score",
                     "geometric_mean_edge_probability",
                     "geometric_mean_node_edge_probability",
                     "path_probability_product",
                     "path_symbols",
+                    "known_intermediate_symbols",
+                    "known_intermediate_count",
                     *(
                         [
                             "temporal_n_scored",

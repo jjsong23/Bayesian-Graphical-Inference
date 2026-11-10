@@ -94,9 +94,15 @@ server**.
    The Version 1 default enables integrated COMPARTMENTS and every compatible
    edge stream; standalone HPA primary/high-confidence remain off to avoid
    recounting the HPA channel already present in COMPARTMENTS.
-3. **Find paths.** Choose a selected start node and any mouse protein target.
-   Targets outside the node universe are characterized from the same evidence
-   streams and appended as an undirected row/column. Paths are ranked by the
+3. **Find paths.** Supply one or more input nodes and one or more mouse protein
+   targets. Every input–target combination is searched independently and the
+   candidates are merged into one globally ranked top-K list. Endpoints outside
+   the selected node universe are characterized from the same evidence streams
+   and appended to the graph. An optional list of known intermediates is also
+   retained even when node selection omitted it. The GUI can leave those nodes
+   optional, require at least one listed intermediate per returned path, or
+   require all listed intermediates. This is a search constraint and never
+   manufactures positive evidence. Paths are ranked by the
    geometric mean of their edge probabilities by default. The optional
    node-aware score includes each internal-node posterior in the same geometric
    mean; fixed endpoints are excluded. Raw edge products and edge-only scores
@@ -159,7 +165,7 @@ server**.
    graph is filled in. The live results and saved session HTML expose sortable
    rankings for returned-path participation, internal traversal count, degree,
    weighted degree, and betweenness. Internal traversal counts only paths in
-   which the node is between the start and target. The full tables are saved as
+   which the node is between that path's input and target. The full tables are saved as
    `found_path_union_node_statistics.tsv.gz` and
    `found_path_union_statistics_summary.json`. The result remains conditioned
    on the configured Top paths limit and all path-search constraints.
@@ -174,7 +180,8 @@ server**.
    stage is off by default and never changes the Bayesian path probability or
    primary rank.
 
-The path count can be set from 1 to 2,000. All requested paths are shown in the
+The path count can be set from 1 to 2,000 across the complete multi-query
+search. All returned paths are shown in the
 scrollable result table and written to `ranked_paths.tsv`; the separate
 `ranked_path_edges.tsv` retains every constituent edge. The liberal intermediate
 policy retains a substantially denser search graph than the earlier conservative
@@ -455,6 +462,10 @@ the standard factor table.
 - Edge probabilities are independent Bernoulli updates from the selected prior.
 - Kinase activity and phosphoprotein response share a source and are visibly
   marked as dependent.
+- Kirby dDAVP phosphoprotein response and Kirby-inferred kinase activity are
+  enabled as half-weight, dependence-linked node streams. KinasePredictor edge
+  evidence is retained only to the extent that the exact substrate site also
+  responds in Kirby or PKA-Cα/PKA-Cβ knockout data.
 - The selective PKA-Cα- and PKA-Cβ-KO response streams are separately
   selectable but share a dependence-group warning because they come from the
   same TMT experiment.
@@ -472,3 +483,6 @@ the standard factor table.
   proof of a direct binary PPI. Both closure streams are enabled by default.
 - Every active stream records its normalization or fixed-rule parameters in
   the run summary.
+- `kinase_phosphatase_binding` and `adaptor_scaffold` are conservative,
+  opt-in intermediate classes; binding or structural-scaffold annotation alone
+  does not qualify a protein as a default signal relay.

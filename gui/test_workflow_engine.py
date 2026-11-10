@@ -28,6 +28,7 @@ from workflow_engine import (
     k_shortest_simple_paths,
     node_stream_values,
     normalize_configuration,
+    run_multi_paths,
     scaffold_triadic_closure_factors,
     select_nodes,
 )
@@ -77,6 +78,8 @@ class WorkflowEngineTests(unittest.TestCase):
                 "phosphoprotein_response",
                 "pka_ca_ko_phosphoprotein_response",
                 "pka_cb_ko_phosphoprotein_response",
+                "kirby_ddavp_phosphoprotein_response",
+                "kirby_ddavp_kinase_activity",
                 "collecting_duct_proteome_ccd",
                 "collecting_duct_proteome_omcd",
                 "collecting_duct_proteome_imcd",
@@ -97,6 +100,8 @@ class WorkflowEngineTests(unittest.TestCase):
                 "phosphoprotein_response": 0.1,
                 "pka_ca_ko_phosphoprotein_response": 0.1,
                 "pka_cb_ko_phosphoprotein_response": 0.05,
+                "kirby_ddavp_phosphoprotein_response": 0.1,
+                "kirby_ddavp_kinase_activity": 0.1,
                 "collecting_duct_proteome_ccd": 0.1,
                 "collecting_duct_proteome_omcd": 0.1,
                 "collecting_duct_proteome_imcd": 0.1,
@@ -132,6 +137,20 @@ class WorkflowEngineTests(unittest.TestCase):
             },
         )
         self.assertEqual(config["edge_streams"]["string_v12"]["weight"], 0.25)
+        self.assertEqual(
+            config["node_streams"]["kirby_ddavp_phosphoprotein_response"][
+                "weight"
+            ],
+            0.5,
+        )
+        self.assertEqual(
+            config["node_streams"]["kirby_ddavp_kinase_activity"]["weight"],
+            0.5,
+        )
+        self.assertNotIn(
+            "kinase_phosphatase_binding",
+            config["path"]["allowed_intermediate_classes"],
+        )
         self.assertEqual(
             tuple(config["path"]["allowed_intermediate_classes"]),
             DEFAULT_SIGNAL_RELAY_CLASSES,
@@ -188,6 +207,10 @@ class WorkflowEngineTests(unittest.TestCase):
         )
         self.assertEqual(config["path"]["start"], "Prkaca")
         self.assertEqual(config["path"]["target"], "Aqp2")
+        self.assertEqual(config["path"]["starts"], ["Prkaca"])
+        self.assertEqual(config["path"]["targets"], ["Aqp2"])
+        self.assertEqual(config["path"]["known_intermediates"], [])
+        self.assertEqual(config["path"]["known_intermediate_mode"], "any")
         self.assertEqual(config["path"]["top_k"], 100)
         self.assertEqual(config["path"]["max_hops"], 6)
         self.assertFalse(config["path"]["include_node_probabilities"])
@@ -197,6 +220,121 @@ class WorkflowEngineTests(unittest.TestCase):
             config["graph_statistics"]["metrics"],
             ["degree_strength", "clustering", "betweenness"],
         )
+
+    def test_path_configuration_accepts_multiple_query_nodes(self) -> None:
+        config = normalize_configuration(
+            {
+                "path": {
+                    "starts": ["Prkaca", "Prkacb", "prkaca"],
+                    "targets": "Aqp2\nDyrk1a",
+                    "known_intermediates": "Akap11;Calm1",
+                    "known_intermediate_mode": "all",
+                }
+            },
+            self.registry,
+        )
+        self.assertEqual(config["path"]["starts"], ["Prkaca", "Prkacb"])
+        self.assertEqual(config["path"]["targets"], ["Aqp2", "Dyrk1a"])
+        self.assertEqual(config["path"]["known_intermediates"], ["Akap11", "Calm1"])
+        self.assertEqual(config["path"]["known_intermediate_mode"], "all")
+        self.assertEqual(config["path"]["start"], "Prkaca")
+        self.assertEqual(config["path"]["target"], "Aqp2")
+
+    def test_known_intermediate_constraint_is_applied_during_exact_search(self) -> None:
+        symbols = ["A", "B", "C", "D"]
+        matrix = pd.DataFrame(
+            [
+                [0.0, 0.95, 0.8, 0.0],
+                [0.95, 0.0, 0.0, 0.95],
+                [0.8, 0.0, 0.0, 0.8],
+                [0.0, 0.95, 0.8, 0.0],
+            ],
+            index=symbols,
+            columns=symbols,
+        )
+        adjacency, _ = build_adjacency(matrix, 0.5, directed=False)
+        unconstrained = k_shortest_simple_paths(
+            adjacency, matrix.to_numpy(float), 0, 3, top_k=1, max_hops=2
+        )
+        constrained = k_shortest_simple_paths(
+            adjacency,
+            matrix.to_numpy(float),
+            0,
+            3,
+            top_k=1,
+            max_hops=2,
+            required_nodes=frozenset({2}),
+            required_mode="any",
+        )
+        self.assertEqual(unconstrained[0].nodes, (0, 1, 3))
+        self.assertEqual(constrained[0].nodes, (0, 2, 3))
+
+        matrix.loc["B", "C"] = matrix.loc["C", "B"] = 0.75
+        adjacency, _ = build_adjacency(matrix, 0.5, directed=False)
+        require_all = k_shortest_simple_paths(
+            adjacency,
+            matrix.to_numpy(float),
+            0,
+            3,
+            top_k=1,
+            max_hops=3,
+            required_nodes=frozenset({1, 2}),
+            required_mode="all",
+        )
+        self.assertEqual(set(require_all[0].nodes[1:-1]), {1, 2})
+
+    def test_multiple_inputs_and_targets_are_globally_ranked(self) -> None:
+        symbols = ["A", "B", "C", "D", "E", "F"]
+        matrix = pd.DataFrame(0.0, index=symbols, columns=symbols)
+        for left, right, probability in (
+            ("A", "B", 0.95),
+            ("B", "D", 0.95),
+            ("A", "C", 0.85),
+            ("C", "F", 0.85),
+            ("E", "B", 0.8),
+            ("E", "C", 0.9),
+        ):
+            matrix.loc[left, right] = probability
+            matrix.loc[right, left] = probability
+        metadata = pd.DataFrame(
+            {
+                "symbol": symbols,
+                "display_symbol": symbols,
+                "name": symbols,
+                "classes": ["kinase"] * len(symbols),
+                "node_type": ["protein"] * len(symbols),
+                "gui_posterior": [0.9] * len(symbols),
+            }
+        )
+        config = normalize_configuration(
+            {
+                "path": {
+                    "starts": ["A", "E"],
+                    "targets": ["D", "F"],
+                    "top_k": 3,
+                    "max_hops": 2,
+                    "minimum_edge_probability": 0.5,
+                    "signaling_intermediates_only": False,
+                    "known_intermediates": [],
+                }
+            },
+            self.registry,
+        )
+        paths, edges, eligibility, summary = run_multi_paths(
+            matrix,
+            metadata,
+            config,
+            ["A", "E"],
+            ["D", "F"],
+            [],
+        )
+        self.assertEqual(summary["query_pair_count"], 4)
+        self.assertEqual(len(paths), 3)
+        self.assertEqual(paths.iloc[0]["path_symbols"], "A -> B -> D")
+        self.assertEqual(set(paths["start_symbol"]), {"A", "E"})
+        self.assertEqual(set(paths["target_symbol"]), {"D", "F"})
+        self.assertEqual(set(edges["path_rank"]), {1, 2, 3})
+        self.assertEqual(eligibility["query_id"].nunique(), 4)
 
     def test_exact_half_priors_are_valid_html_values(self) -> None:
         html = (PROJECT_ROOT / "gui/web/index.html").read_text(encoding="utf-8")
@@ -988,6 +1126,7 @@ class WorkflowEngineTests(unittest.TestCase):
             metadata,
             propagation,
             directed_graph=True,
+            known_intermediate_symbols=["B"],
         )
         self.assertEqual(payload["visualized_path_count"], 2)
         self.assertEqual(len(payload["nodes"]), 4)
@@ -1000,10 +1139,72 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(bd["path_ranks"], [1, 2])
         node_b = next(node for node in payload["nodes"] if node["id"] == "B")
         self.assertEqual(node_b["path_count"], 2)
+        self.assertTrue(node_b["is_known_intermediate"])
         self.assertAlmostEqual(node_b["mean_path_position"], (0.5 + 2 / 3) / 2)
         node_d = next(node for node in payload["nodes"] if node["id"] == "D")
         self.assertIsNone(node_d["posterior_probability"])
         self.assertTrue(node_d["is_target"])
+
+    def test_path_network_reserves_visible_paths_for_every_target(self) -> None:
+        path_rows = pd.DataFrame(
+            [
+                {
+                    "rank": rank,
+                    "target_symbol": "TargetA" if rank <= 10 else "TargetB",
+                    "primary_path_score": 1.0 - rank / 1000,
+                    "combined_node_edge_probability_product": 1.0 - rank / 1000,
+                    "path_symbols": (
+                        "Start -> TargetA" if rank <= 10 else "Start -> TargetB"
+                    ),
+                }
+                for rank in range(1, 13)
+            ]
+        )
+        path_edges = pd.DataFrame(
+            [
+                {
+                    "path_rank": rank,
+                    "step": 1,
+                    "source_symbol": "Start",
+                    "target_symbol": "TargetA" if rank <= 10 else "TargetB",
+                    "edge_probability": 0.99,
+                }
+                for rank in range(1, 13)
+            ]
+        )
+        metadata = pd.DataFrame(
+            {
+                "symbol": ["Start", "TargetA", "TargetB"],
+                "display_symbol": ["Start", "TargetA", "TargetB"],
+                "name": ["Start", "TargetA", "TargetB"],
+                "classes": ["kinase", "external_target", "external_target"],
+                "node_type": ["protein", "protein", "protein"],
+                "gui_posterior": [0.9, np.nan, np.nan],
+            }
+        )
+        propagation = pd.DataFrame(
+            np.zeros((3, 3)),
+            index=["Start", "TargetA", "TargetB"],
+            columns=["Start", "TargetA", "TargetB"],
+        )
+        for target in ("TargetA", "TargetB"):
+            propagation.loc["Start", target] = 0.99
+            propagation.loc[target, "Start"] = 0.99
+        payload = build_path_network_payload(
+            path_rows,
+            path_edges,
+            metadata,
+            propagation,
+            directed_graph=False,
+            path_limit=4,
+        )
+        self.assertEqual(payload["visualized_path_count"], 4)
+        self.assertEqual(payload["target_symbols"], ["TargetA", "TargetB"])
+        self.assertTrue(payload["target_balanced_display"])
+        displayed_ranks = {
+            rank for edge in payload["edges"] for rank in edge["path_ranks"]
+        }
+        self.assertEqual(displayed_ranks, {1, 2, 11, 12})
 
     def test_incremental_pairs_stream_without_materializing_full_graph(self) -> None:
         symbols = ["SeedA", "AddedA", "SeedB", "AddedB"]
@@ -1027,10 +1228,10 @@ class WorkflowEngineTests(unittest.TestCase):
         supplied["edge_streams"]["scaffold_triadic_closure"]["enabled"] = True
         config = normalize_configuration(supplied, self.registry)
         _, selected, _ = select_nodes(PROJECT_ROOT, self.registry, config)
-        # Empirical p(Data | H1) / p(Data | H0) calibration retains more
-        # measured proteins than the former cross-stream percentile rescaling.
-        self.assertEqual(len(selected), 2889)
-        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 4_171_716)
+        # Current defaults additionally include the Kirby dDAVP response and
+        # inferred kinase-activity streams; this fixture previously had 2,889.
+        self.assertEqual(len(selected), 3009)
+        self.assertEqual(len(selected) * (len(selected) - 1) // 2, 4_525_536)
 
     def test_path_ontology_class_selection_is_normalized_and_validated(self) -> None:
         supplied = default_configuration(self.registry)

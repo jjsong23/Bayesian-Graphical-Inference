@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Configure and run the graphical Bayesian signaling workflow." />
     <title>Graphical Bayesian Inference</title>
-    <link rel="stylesheet" href="/styles.css?v=20261102-edge-reference-strategies" />
+    <link rel="stylesheet" href="/styles.css?v=20261103-multi-query-paths" />
   </head>
   <body>
     <header class="topbar">
@@ -216,14 +216,30 @@
             </label>
           </div>
           <div id="path-controls">
-            <div class="parameter-grid">
+            <div class="parameter-grid path-query-grid">
               <label>
-                <span>Starting node</span>
-                <input id="path-start" type="text" autocomplete="off" placeholder="Prkaca" />
+                <span>Input nodes</span>
+                <textarea id="path-starts" rows="4" autocomplete="off" placeholder="Prkaca&#10;Prkacb"></textarea>
+                <small>One input per line. Every input is paired with every target.</small>
               </label>
               <label>
-                <span>Target</span>
-                <input id="path-target" type="text" autocomplete="off" placeholder="Aqp2" />
+                <span>Target nodes</span>
+                <textarea id="path-targets" rows="4" autocomplete="off" placeholder="Aqp2&#10;Dyrk1a"></textarea>
+                <small>One target per line. Requested endpoints are retained even when node selection did not select them.</small>
+              </label>
+              <label>
+                <span>Known intermediates</span>
+                <textarea id="path-known-intermediates" rows="4" autocomplete="off" placeholder="Akap11&#10;Calm1"></textarea>
+                <small>Optional known relays. They are retained in the graph and exempt from ontology-role culling.</small>
+              </label>
+              <label>
+                <span>Known-intermediate rule</span>
+                <select id="path-known-intermediate-mode">
+                  <option value="any">Require at least one listed intermediate</option>
+                  <option value="all">Require every listed intermediate</option>
+                  <option value="optional">Keep listed intermediates optional</option>
+                </select>
+                <small>The rule is ignored when the known-intermediate list is empty.</small>
               </label>
               <label>
                 <span>Top paths</span>
@@ -269,7 +285,7 @@
               <p>Select which node annotations qualify a protein or molecule to relay a path.</p>
               <div id="path-ontology-classes" class="ontology-grid"></div>
             </fieldset>
-            <p class="scientific-note">The default primary score is the geometric mean of edge posteriors. The optional node-aware score uses the geometric mean of every edge posterior and every internal-node posterior; fixed query endpoints are excluded, and curated/unscored molecules contribute a neutral multiplicative value of 1 rather than being treated as negative evidence. The directionality layer applies established ontology-role restrictions first. For edges positively supported by the selected KinasePredictor stream, the predicted kinase→substrate relationship is applied next. OmniPath source→target records can add a unique direction only where both earlier layers left a pair unresolved. Later sources cannot reopen or reverse an earlier disallowed traversal; disagreements and bidirectional records are audited. A disallowed reverse traversal is set to zero for path search, so a proposed linear route cannot pass through a fork or collider by walking against an established arrow. This changes path traversal, not the Bayesian edge probability or activation/inhibition sign. Endpoints are always exempt. Up to 2,000 exact ranked paths can be requested.</p>
+            <p class="scientific-note">Every input–target combination is searched independently. Every reachable target first receives an equal share of the requested path budget, and unused slots are filled by the strongest remaining paths. The merged graph likewise reserves visible paths for every represented target instead of allowing one highly connected endpoint to occupy the entire display. Known intermediates can be optional, required as alternatives, or all required; they are never assigned artificial positive evidence. The default primary score is the geometric mean of edge posteriors. The optional node-aware score uses the geometric mean of every edge posterior and every internal-node posterior; fixed query endpoints are excluded, and curated/unscored molecules contribute a neutral multiplicative value of 1 rather than being treated as negative evidence. The directionality layer applies established ontology-role restrictions first. For edges positively supported by the selected KinasePredictor stream, the predicted kinase→substrate relationship is applied next. OmniPath source→target records can add a unique direction only where both earlier layers left a pair unresolved. Later sources cannot reopen or reverse an earlier disallowed traversal; disagreements and bidirectional records are audited. A disallowed reverse traversal is set to zero for path search, so a proposed linear route cannot pass through a fork or collider by walking against an established arrow. This changes path traversal, not the Bayesian edge probability or activation/inhibition sign. Endpoints are always exempt. Up to 2,000 exact ranked paths can be requested across the complete multi-query search.</p>
           </div>
         </section>
 
@@ -545,6 +561,7 @@
             </div>
             <div class="path-network-legend" aria-label="Network legend">
               <span><i class="legend-node legend-node-unscored"></i>No node posterior</span>
+              <span><i class="legend-node legend-node-known"></i>Known intermediate</span>
               <span><i class="legend-arrow">→</i>Constrained direction</span>
             </div>
             <p id="path-network-detail" class="path-network-detail" aria-live="polite"></p>
@@ -764,6 +781,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20261102-curated-edge-membership" defer></script>
+    <script src="/app.js?v=20261103-multi-query-paths" defer></script>
   </body>
 </html>

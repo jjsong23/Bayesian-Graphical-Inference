@@ -34,6 +34,7 @@ node_modules/
 .venv/
 venv/
 .local_python_packages/
+.test_python_deps/
 .pip_tmp/
 .vscode/
 .idea/

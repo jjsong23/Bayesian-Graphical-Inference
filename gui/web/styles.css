@@ -114,6 +114,8 @@ input:disabled, select:disabled, textarea:disabled { opacity: .45; background: #
 
 .parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 15px; }
 .parameter-grid label:not(.check-field) { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.parameter-grid label small { color: var(--muted); font-size: 9px; font-weight: 500; line-height: 1.4; }
+.path-query-grid { align-items: start; }
 .compact-grid { grid-template-columns: 1fr 165px; align-items: end; }
 .span-two { grid-column: span 1; }
 .span-full { grid-column: 1 / -1; }
@@ -483,6 +485,7 @@ input:disabled, select:disabled, textarea:disabled { opacity: .45; background: #
 .network-node.unscored { fill: var(--orange); fill-opacity: .55; }
 .network-node-ring { fill: none; stroke: var(--green); stroke-width: 2; }
 .network-node-group.target .network-node-ring { stroke: var(--orange); }
+.network-node-group.known-intermediate .network-node-ring { stroke: #755596; stroke-dasharray: 3 2; }
 .network-node-label { fill: var(--ink); stroke: #fff; stroke-width: 3px; paint-order: stroke fill; font-size: 9px; font-weight: 750; pointer-events: none; }
 .network-node-group:hover .network-node-label, .network-node-group:focus .network-node-label { fill: var(--orange); }
 .network-dimmed { opacity: .08 !important; }
@@ -494,6 +497,7 @@ input:disabled, select:disabled, textarea:disabled { opacity: .45; background: #
 .legend-node-refuting { background: var(--red); }
 .legend-node-neutral { background: var(--network-neutral); }
 .legend-node-unscored { background: var(--orange); opacity: .55; }
+.legend-node-known { background: transparent; border: 2px dashed #755596; }
 .legend-arrow { color: var(--green); font-size: 13px; line-height: 8px; }
 .path-network-detail { min-height: 34px; margin: 8px 1px 0; padding: 8px 9px; border-radius: 7px; background: #f2f6f3; color: var(--green); font-size: 8px; line-height: 1.5; }
 .path-network-popout { width: min(94vw, 1800px); height: min(92vh, 1200px); min-width: min(760px, calc(100vw - 24px)); min-height: min(600px, calc(100vh - 24px)); max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); padding: 0; overflow: hidden; resize: both; border: 1px solid #9dafaa; border-radius: 14px; background: var(--surface); box-shadow: 0 24px 80px rgba(20, 38, 29, .32); }

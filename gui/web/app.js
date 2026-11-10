@@ -1145,24 +1145,29 @@ function layoutPathNetwork(nodes, edges, width, height, seed) {
   const usableWidth = Math.max(width - 2 * marginX, 120);
   const usableHeight = Math.max(height - 2 * marginY, 180);
   nodes.forEach((node) => {
-    node.radius = node.is_start || node.is_target ? 11 : 10;
+    node.radius = node.is_start || node.is_target || node.is_known_intermediate ? 11 : 10;
     const hash = networkHash(`${node.id}:${seed}`);
     node.targetY = marginY + (((hash >>> 10) % 1000) / 999) * usableHeight;
     node.fixed = Boolean(node.is_start || node.is_target);
   });
   assignPathTierJitter(nodes, marginX, usableWidth, marginY, usableHeight, seed);
+  const startNodes = nodes.filter((node) => node.is_start)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const targetNodes = nodes.filter((node) => node.is_target)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const endpointY = (index, count) => marginY + ((index + 1) / (count + 1)) * usableHeight;
   nodes.forEach((node) => {
     node.x = node.targetX;
     node.y = node.targetY;
     if (node.is_start) {
       node.x = marginX;
       node.targetX = node.x;
-      node.y = height / 2;
+      node.y = endpointY(startNodes.indexOf(node), startNodes.length);
       node.targetY = node.y;
     } else if (node.is_target) {
       node.x = width - marginX;
       node.targetX = node.x;
-      node.y = height / 2;
+      node.y = endpointY(targetNodes.indexOf(node), targetNodes.length);
       node.targetY = node.y;
     }
   });
@@ -1479,7 +1484,7 @@ function drawPathNetwork() {
 
   visible.nodes.forEach((node) => {
     const group = svgElement("g", {
-      class: `network-node-group${node.is_start ? " start" : ""}${node.is_target ? " target" : ""}`,
+      class: `network-node-group${node.is_start ? " start" : ""}${node.is_target ? " target" : ""}${node.is_known_intermediate ? " known-intermediate" : ""}`,
       transform: `translate(${node.x.toFixed(2)} ${node.y.toFixed(2)})`,
       "data-network-node": node.id,
       tabindex: 0,
@@ -1496,7 +1501,7 @@ function drawPathNetwork() {
       "fill-opacity": node.posterior_available ? "0.96" : "0.6",
     });
     group.appendChild(circle);
-    if (node.is_start || node.is_target) {
+    if (node.is_start || node.is_target || node.is_known_intermediate) {
       group.appendChild(svgElement("circle", { r: (node.radius + 4).toFixed(2), class: "network-node-ring" }));
     }
     const labelAttributes = node.is_start
@@ -1509,7 +1514,12 @@ function drawPathNetwork() {
       ? `node posterior ${formatEvidenceNumber(node.posterior_probability)}`
       : "no Bayesian node posterior (curated messenger or external endpoint)";
     const roles = String(node.classes || "unclassified").replaceAll(";", ", ");
-    const detail = `${node.label}${node.name ? ` — ${node.name}` : ""} · ${posteriorText} · roles: ${roles} · shown in path ranks ${pathRankText(node.visiblePathRanks)}.`;
+    const queryRole = [
+      node.is_start ? "query input" : "",
+      node.is_target ? "query target" : "",
+      node.is_known_intermediate ? "known intermediate" : "",
+    ].filter(Boolean).join(", ");
+    const detail = `${node.label}${node.name ? ` — ${node.name}` : ""} · ${posteriorText}${queryRole ? ` · ${queryRole}` : ""} · roles: ${roles} · shown in path ranks ${pathRankText(node.visiblePathRanks)}.`;
     group.appendChild(svgElement("title", {}, detail));
     const selectNode = (event) => {
       event.stopPropagation();
@@ -1721,8 +1731,10 @@ function populateControls() {
   });
   const path = state.defaults.path;
   $("path-enabled").checked = path.enabled;
-  $("path-start").value = path.start;
-  $("path-target").value = path.target;
+  $("path-starts").value = (path.starts || [path.start]).filter(Boolean).join("\n");
+  $("path-targets").value = (path.targets || [path.target]).filter(Boolean).join("\n");
+  $("path-known-intermediates").value = (path.known_intermediates || []).join("\n");
+  $("path-known-intermediate-mode").value = path.known_intermediate_mode || "any";
   $("path-top-k").value = path.top_k;
   $("path-max-hops").value = path.max_hops;
   $("path-cutoff").value = path.minimum_edge_probability;
@@ -1820,8 +1832,10 @@ function collectConfiguration() {
     },
     path: {
       enabled: $("path-enabled").checked,
-      start: $("path-start").value.trim(),
-      target: $("path-target").value.trim(),
+      starts: $("path-starts").value.split(/[\r\n,;]+/).map((value) => value.trim()).filter(Boolean),
+      targets: $("path-targets").value.split(/[\r\n,;]+/).map((value) => value.trim()).filter(Boolean),
+      known_intermediates: $("path-known-intermediates").value.split(/[\r\n,;]+/).map((value) => value.trim()).filter(Boolean),
+      known_intermediate_mode: $("path-known-intermediate-mode").value,
       top_k: Number($("path-top-k").value),
       max_hops: Number($("path-max-hops").value),
       minimum_edge_probability: Number($("path-cutoff").value),
@@ -1887,7 +1901,7 @@ function setGraphStatisticsControls(enabled) {
 }
 
 function setPathControls(enabled) {
-  $("path-controls").querySelectorAll("input, button").forEach((control) => { control.disabled = !enabled; });
+  $("path-controls").querySelectorAll("input, button, textarea, select").forEach((control) => { control.disabled = !enabled; });
   $("path-controls").style.opacity = enabled ? "1" : ".45";
   setDirectionalityControls(enabled);
   setOntologyControls(enabled);

@@ -263,8 +263,16 @@ class SessionReportTests(unittest.TestCase):
         self.assertIn('id="network-node-posterior-scale"', document)
         self.assertIn('id="network-edge-posterior-scale"', document)
         self.assertIn("session_snapshot.json", document)
-        self.assertEqual(result["embedded_file_count"], 3)
+        self.assertEqual(result["embedded_file_count"], 8)
         self.assertEqual(result["literature_interpretation_count"], 1)
+        self.assertTrue((self.directory / "agent_graph.json").is_file())
+        self.assertTrue((self.directory / "agent_graph.jsonl").is_file())
+        self.assertTrue((self.directory / "agent_prompt.md").is_file())
+        agent_payload = json.loads(
+            (self.directory / "agent_graph.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(agent_payload["schema"], "gbi-agent-evidence-graph")
+        self.assertEqual(agent_payload["nodes"][0]["id"], "Aqp2")
 
         encoded_vault = document.split("const vault=", 1)[1].split(";\nfunction decode64", 1)[0]
         vault = json.loads(encoded_vault)
@@ -349,7 +357,7 @@ class SessionReportTests(unittest.TestCase):
         self.assertEqual(catalog, [])
         self.assertEqual(errors, [])
         self.assertEqual(scope["visible_path_rank_limit"], 50)
-        self.assertEqual(server.MAX_AUTOMATIC_EXPORT_INTERPRETATIONS, 1000)
+        self.assertEqual(server.MAX_AUTOMATIC_EXPORT_INTERPRETATIONS, 25000)
 
     def test_literature_export_recovers_cached_reports_after_browser_reload(self) -> None:
         cache = self.directory / "literature_interpretations"

@@ -20,6 +20,7 @@ from workflow_engine import (
     UNIVERSE_RELATIVE,
     _canonical_undirected_pair,
     _edge_incremental_scale,
+    _incremental_kinase_site_concordance,
     _raw_seed_edge_factor_table,
     _stream_multiplier,
     apply_empirical_likelihood_model,
@@ -41,6 +42,32 @@ CURATED_EDGE_REFERENCE_RELATIVE = Path(
 CURATED_EDGE_REFERENCE_UPDATED_THROUGH = "2026-10-30"
 
 
+def _kinase_site_concordance_catalog(
+    run: Path,
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Load exact-site response/motif conjunctions recorded by this run."""
+    path = run / "kinase_predictor_site_concordance_audit.tsv.gz"
+    if not path.is_file():
+        return {}
+    frame = pd.read_csv(path, sep="\t", compression="gzip")
+    if frame.empty or not {"node_a", "node_b"}.issubset(frame.columns):
+        return {}
+    catalog: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in frame.to_dict(orient="records"):
+        pair = _canonical_undirected_pair(row.get("node_a"), row.get("node_b"))
+        response_json = row.get("site_response_evidence_json")
+        if isinstance(response_json, str):
+            try:
+                row["site_response_evidence"] = json.loads(response_json)
+            except json.JSONDecodeError:
+                row["site_response_evidence"] = []
+        row.pop("site_response_evidence_json", None)
+        catalog.setdefault(pair, []).append(
+            {key: _clean(value) for key, value in row.items()}
+        )
+    return catalog
+
+
 def _read_configuration(run_directory: Path) -> dict[str, Any]:
     path = run_directory / "configuration.json"
     if not path.is_file():
@@ -51,13 +78,20 @@ def _read_configuration(run_directory: Path) -> dict[str, Any]:
 def _clean(value: object) -> Any:
     if value is None:
         return None
+    if isinstance(value, np.ndarray):
+        return [_clean(item) for item in value.tolist()]
+    if isinstance(value, (list, tuple, set)):
+        return [_clean(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _clean(item) for key, item in value.items()}
     if isinstance(value, (np.bool_, bool)):
         return bool(value)
     if isinstance(value, (np.integer, int)):
         return int(value)
     if isinstance(value, (np.floating, float)):
         return float(value) if math.isfinite(float(value)) else None
-    if pd.isna(value):
+    missing = pd.isna(value)
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
         return None
     text = str(value)
     return text if text.strip() else None
@@ -514,6 +548,197 @@ def inspect_node_evidence(
     }
 
 
+def inspect_node_evidence_batch(
+    run_directory: Path | str,
+    symbol_queries: list[str],
+    *,
+    project_root: Path | str = PROJECT_ROOT,
+) -> list[dict[str, Any]]:
+    """Return node ledgers while loading the posterior table only once."""
+    if not symbol_queries:
+        return []
+    run = Path(run_directory).resolve()
+    project = Path(project_root).resolve()
+    factors_path = run / "node_posteriors.tsv.gz"
+    if not factors_path.is_file():
+        raise FileNotFoundError("The completed run has no node_posteriors.tsv.gz file")
+    factors = pd.read_csv(factors_path, sep="\t", low_memory=False)
+    available = factors["gene_symbol"].astype(str).tolist()
+    symbols = [_resolve_symbol(query, available, "Node") for query in symbol_queries]
+    rows = factors.set_index(factors["gene_symbol"].astype(str), drop=False)
+    config = _read_configuration(run)
+    registry = load_registry(project)
+    definitions = {item["id"]: item for item in registry["node_streams"]}
+    prior = float(config["node_integration"]["prior_probability"])
+    prior_log_odds = math.log(prior / (1.0 - prior))
+    stream_analysis = _stream_analysis_catalog(run, "node_selection")
+    prepared: list[dict[str, Any]] = []
+    for stream_id, definition in definitions.items():
+        state = _run_stream_state(config, "node_streams", definition)
+        enabled = bool(state["enabled"] and float(state["weight"]) > 0)
+        prefix = f"gui_{stream_id}_"
+        factor_values: np.ndarray | None = None
+        distribution = None
+        column = prefix + "bayes_factor"
+        if enabled and column in factors.columns:
+            factor_values = pd.to_numeric(factors[column], errors="coerce").to_numpy(float)
+            distribution = evidence_factor_distribution_summary(
+                factor_values,
+                distribution_scope="all modeled protein candidates",
+            )
+        prepared.append(
+            {
+                "stream_id": stream_id,
+                "definition": definition,
+                "state": state,
+                "enabled": enabled,
+                "prefix": prefix,
+                "factor_values": factor_values,
+                "distribution": distribution,
+                "distribution_normalization": _distribution_normalization_metadata(
+                    stream_analysis.get(stream_id)
+                ),
+                "empirical_likelihood": _empirical_likelihood_metadata(
+                    stream_analysis.get(stream_id)
+                ),
+            }
+        )
+
+    results: list[dict[str, Any]] = []
+    for symbol in symbols:
+        row = rows.loc[symbol]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[0]
+        reconstructed_log_odds = prior_log_odds
+        streams: list[dict[str, Any]] = []
+        for item in prepared:
+            stream_id = item["stream_id"]
+            definition = item["definition"]
+            state = item["state"]
+            enabled = bool(item["enabled"])
+            prefix = item["prefix"]
+            bayes_factor = _clean(row.get(prefix + "bayes_factor")) if enabled else None
+            source_factor = _clean(row.get(prefix + "factor")) if enabled else None
+            source_bayes_factor = (
+                _clean(row.get(prefix + "source_bayes_factor")) if enabled else None
+            )
+            pre_distribution_bayes_factor = (
+                _clean(
+                    row.get(
+                        prefix + "pre_distribution_normalization_bayes_factor",
+                        bayes_factor,
+                    )
+                )
+                if enabled
+                else None
+            )
+            weighted_log = (
+                _clean(row.get(prefix + "weighted_log_bayes_factor")) if enabled else None
+            )
+            weighted_log = float(weighted_log or 0.0)
+            if enabled:
+                reconstructed_log_odds += weighted_log
+            eligible = (
+                _bool(row.get(prefix + "negative_evidence_eligible", False))
+                if enabled
+                else None
+            )
+            observed = (
+                _bool(row.get(prefix + "observed", False)) if enabled else None
+            )
+            penalty = (
+                _bool(row.get(prefix + "unobserved_penalty_applied", False))
+                if enabled
+                else False
+            )
+            continuous = (
+                _bool(row.get(prefix + "continuous_negative_evidence_applied", False))
+                if enabled
+                else False
+            )
+            raw_value, raw_label = _node_raw_value(row, definition)
+            factor_values = item["factor_values"]
+            distribution_position = (
+                _exact_factor_position(factor_values, float(bayes_factor))
+                if enabled and factor_values is not None and bayes_factor is not None
+                else None
+            )
+            if not enabled:
+                note = "Disabled in this run; contribution to posterior odds was zero."
+            elif eligible is False:
+                note = "Outside this stream's negative-evidence scope; neutral if no positive record."
+            elif penalty:
+                note = "Eligible nondetection received the configured fixed negative Bayes factor."
+            elif continuous:
+                note = "Weak/zero evidence was evaluated continuously and produced BF below 1."
+            elif observed:
+                note = "A source measurement mapped to this node."
+            else:
+                note = "No retained source measurement; this stream remained neutral."
+            streams.append(
+                {
+                    "stream_id": stream_id,
+                    "label": definition["label"],
+                    "description": definition.get("description"),
+                    "enabled": enabled,
+                    "status": _status(
+                        enabled,
+                        float(bayes_factor) if bayes_factor is not None else None,
+                    ),
+                    "weight": float(state["weight"]),
+                    "tq_multiplier": _clean(state.get("tq_multiplier")),
+                    "normalization_control": definition.get("normalization", {}).get("control_label"),
+                    "normalization_reference": definition.get("normalization", {}).get("reference"),
+                    "dependence_group": definition.get("dependence_group"),
+                    "raw_value": raw_value,
+                    "raw_value_label": raw_label,
+                    "source_factor": source_factor,
+                    "source_bayes_factor_before_absence_rule": source_bayes_factor,
+                    "pre_distribution_normalization_bayes_factor": pre_distribution_bayes_factor,
+                    "applied_bayes_factor": bayes_factor,
+                    "distribution_normalization": item["distribution_normalization"],
+                    "empirical_likelihood": item["empirical_likelihood"],
+                    "likelihood_hypothesis_class": (
+                        stream_analysis.get(stream_id) or {}
+                    ).get("likelihood_hypothesis_class"),
+                    "weighted_log2_odds_contribution": weighted_log / LOG_2,
+                    "negative_evidence_eligible": eligible,
+                    "observed": observed,
+                    "fixed_absence_penalty_applied": penalty,
+                    "continuous_negative_evidence_applied": continuous,
+                    "factor_distribution": item["distribution"],
+                    "distribution_position": distribution_position,
+                    "note": note,
+                }
+            )
+        stored_posterior = float(row["gui_posterior"])
+        reconstructed = _posterior_from_log_odds(reconstructed_log_odds)
+        results.append(
+            {
+                "kind": "node",
+                "symbol": symbol,
+                "name": _clean(row.get("node_name")),
+                "classes": _clean(row.get("node_classes")),
+                "prior_probability": prior,
+                "stored_posterior_probability": stored_posterior,
+                "reconstructed_posterior_probability": reconstructed,
+                "reconciliation_absolute_difference": abs(
+                    stored_posterior - reconstructed
+                ),
+                "rank": int(row["gui_rank"]),
+                "selected_in_graph": _bool(row["gui_selected_in_graph"]),
+                "output_probability_cutoff_exclusive": float(
+                    config["node_integration"]["output_probability_cutoff"]
+                ),
+                "equation": (
+                    "posterior log-odds = prior log-odds + sum(weight x ln(BF))"
+                ),
+                "streams": streams,
+            }
+        )
+    return results
+
+
 def _matrix_symbols_and_probability(
     matrix_path: Path,
     left_query: str,
@@ -604,6 +829,15 @@ def _factor_for_pair(
             continuous_negative=continuous_negative,
             minimum_bayes_factor=continuous_floor,
         )
+    elif definition["normalization"]["handler"] == "kinase_predictor":
+        table, _ = _incremental_kinase_site_concordance(
+            project,
+            list(pair),
+            multiplier,
+            pairs=[pair],
+            continuous_negative=continuous_negative,
+            minimum_bayes_factor=continuous_floor,
+        )
     else:
         table = incremental_pair_factor_table(
             project,
@@ -691,6 +925,7 @@ def inspect_edge_evidence(
     )
     stream_analysis = _stream_analysis_catalog(run, "edge_characterization")
     streams: list[dict[str, Any]] = []
+    kinase_concordance = _kinase_site_concordance_catalog(run)
     for stream_id, definition in definitions.items():
         state = _run_stream_state(config, "edge_streams", definition)
         enabled = bool(state["enabled"] and float(state["weight"]) > 0)
@@ -864,6 +1099,11 @@ def inspect_edge_evidence(
                 "factor_distribution": distribution,
                 "distribution_position": distribution_position,
                 "provenance_trace": provenance_trace,
+                "conditional_site_evidence": (
+                    kinase_concordance.get(pair, [])
+                    if stream_id == "kinase_predictor" and enabled
+                    else None
+                ),
                 "note": note,
             }
         )
@@ -962,6 +1202,7 @@ def inspect_edge_evidence_batch(
     curated_catalog_available, curated_catalog = _curated_edge_reference_catalog(
         project
     )
+    kinase_concordance = _kinase_site_concordance_catalog(run)
 
     prepared: dict[str, dict[str, Any]] = {}
     for stream_id, definition in definitions.items():
@@ -1013,16 +1254,27 @@ def inspect_edge_evidence_batch(
                     )
                 )
             if incremental_pairs:
-                tables.append(
-                    incremental_pair_factor_table(
+                if definition["normalization"]["handler"] == "kinase_predictor":
+                    incremental_table, _ = _incremental_kinase_site_concordance(
                         project,
-                        definition["normalization"]["handler"],
-                        _edge_incremental_scale(definition, state),
-                        sorted(incremental_pairs),
+                        relevant_symbols,
+                        _stream_multiplier(state),
+                        pairs=sorted(incremental_pairs),
                         continuous_negative=continuous_negative,
                         minimum_bayes_factor=continuous_floor,
                     )
-                )
+                    tables.append(incremental_table)
+                else:
+                    tables.append(
+                        incremental_pair_factor_table(
+                            project,
+                            definition["normalization"]["handler"],
+                            _edge_incremental_scale(definition, state),
+                            sorted(incremental_pairs),
+                            continuous_negative=continuous_negative,
+                            minimum_bayes_factor=continuous_floor,
+                        )
+                    )
             for table in tables:
                 for row in table.itertuples(index=False):
                     pair = _canonical_undirected_pair(row.node_a, row.node_b)
@@ -1186,6 +1438,11 @@ def inspect_edge_evidence_batch(
                     "derived": bool(definition.get("derived")),
                     "factor_distribution": distribution,
                     "distribution_position": distribution_position,
+                    "conditional_site_evidence": (
+                        kinase_concordance.get(pair, [])
+                        if stream_id == "kinase_predictor" and enabled
+                        else None
+                    ),
                     "note": note,
                 }
             )

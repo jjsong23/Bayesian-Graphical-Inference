@@ -267,11 +267,14 @@ The analysis uses only presence/absence in cytoplasm or nucleus, separately
 for basal and dDAVP conditions. It does not use spectral-count magnitude, fold
 change, or p-values.
 
-## Optional temporal input
+## Kirby response, site-concordance, and temporal input
 
 `data/phospho_data_original.xlsx` is the rat IMCD 1/2/5/15-minute
-dDAVP-versus-vehicle phosphoproteomic time course used only by optional temporal
-path validation. The exact workbook is a project study input and must be
+dDAVP-versus-vehicle phosphoproteomic time course used by the current Kirby
+phosphoprotein-response and inferred kinase-activity node streams, site-matched
+kinase edge evidence, and optional temporal path validation. It is needed by
+the current default evidence profile, not merely an optional plotting input.
+Preserve `data/node_selection/kirby_ddavp/` as well. The exact workbook is a project study input and must be
 restored from the controlled archive. The public study materials are indexed
 at <https://esbl.nhlbi.nih.gov/Databases/IMCDPhos-Supplemental/>, but those
 files must not be assumed byte-identical to the analysis workbook without a

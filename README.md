@@ -5,7 +5,7 @@ This research codebase builds and explores a probabilistic signaling graph for r
 1. **Node selection** estimates which candidate signaling participants are relevant to the biological system.
 2. **Edge characterization** estimates the probability that two selected nodes are associated.
 3. **Full-graph description** computes threshold-aware graph and node statistics without drawing the complete graph (enabled by default and independently configurable).
-4. **Path inference** ranks plausible paths from a chosen signaling receptor or regulator to a target protein.
+4. **Path inference** ranks plausible paths across one or more signaling inputs and targets, with optional or required known-intermediate constraints.
 5. **Temporal validation** optionally tests whether measured dDAVP phosphoproteomic response times are consistent with the proposed path order.
 
 The local workbench exposes evidence selection, per-dataset normalization controls, evidence weights, and default class-conditional empirical estimates of `P(Data|H1)` and `P(Data|H0)`. Edge calibration can either route curated edge subclasses only to biologically corresponding streams or apply every unique curated edge to every primary edge stream. This switch is edge-only; node evidence is unchanged. For each stream, V1 automatically selects the confirmed-negative/background mixture value `w` that maximizes Jensen–Shannon separation on a 0.01 grid while saving both directional KL indices. Completed runs retain the strategy, selected `w`, information indices, both distributions, raw and effective reference counts, smoothing, bins, bounds, conflicts, and resulting likelihood ratios for reconstruction in the evidence inspector. Missing or out-of-scope data remain neutral. The cross-stream BF-magnitude matcher remains available as a mutually exclusive sensitivity-analysis alternative. See [the empirical likelihood method](docs/empirical_likelihood_models.md).
@@ -188,6 +188,12 @@ exact-context knowledge, related-context evidence, and plausible novelty and
 adds a pathway-level synthesis. Its report and citations are downstream
 commentary only and never alter Bayesian scores. See
 [`docs/database_traceback_and_literature_interpreter.md`](docs/database_traceback_and_literature_interpreter.md).
+
+Kirby dDAVP response is now used both as node evidence and as an exact-site
+condition on KinasePredictor edges. Saved sessions also emit a complete
+agent-readable evidence graph beside the HTML. The equations, audit fields,
+and downstream-LLM instructions are documented in
+[`docs/KINASE_SITE_CONCORDANCE_AND_AGENT_EXPORT.md`](docs/KINASE_SITE_CONCORDANCE_AND_AGENT_EXPORT.md).
 
 For a complete scientific and software overview, read
 [`docs/PROJECT_COMPLETE_SUMMARY_2026-08-25.md`](docs/PROJECT_COMPLETE_SUMMARY_2026-08-25.md).
