@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-11-09T22:40:11.017084+00:00",
+  "input_path": "C:\\Users\\songjj\\Documents\\Codex\\2026-07-21\\un\\function_prediction_runs\\20261105_pka_functions_kirby_agent\\PKA_source_native_predictions_20261109.zip",
+  "archive_member": "PKA_source_native_predictions_20261109/additional_target_analyses/CRTC_regulation/agent_graph.json.gz",
+  "source_input_sha256": "47b4a07d649403e8d9d9209c1d2688fd52b41ba37954affd78b4e1410c01f528",
+  "session_id": "20261105_kirby_agent_native_crtc_paths2000",
+  "query_id": "Prkaca->Crtc2",
+  "source_nodes": [
+    "Prkaca"
+  ],
+  "target_nodes": [
+    "Crtc2"
+  ],
+  "counts": {
+    "sessions": 1,
+    "queries": 1,
+    "paths": 2000,
+    "distinct_path_sequences": 2000,
+    "nodes": 144,
+    "edges": 726
+  },
+  "original_session_counts": {
+    "nodes": 232,
+    "edges": 1367,
+    "paths": 6000
+  },
+  "output_graph": "C:\\Users\\songjj\\Documents\\Codex\\2026-07-21\\un\\path_picker_llm\\inputs\\prkaca_to_crtc2_source_native\\agent_graph.json.gz",
+  "graph_sha256": "f60600585047653feb03c34c1a3b181cd17c6161bc210066333a83440cb42713",
+  "all_selected_path_nodes_and_edges_covered": true,
+  "evidence_ledgers_preserved_exactly": true,
+  "paid_api_calls": 0,
+  "note": "Offline selection, not a rerun. Original ranks, scores, directionality, complete Bayes-factor ledgers, and interpretations are retained. No inventory database or LLM run was created."
+}

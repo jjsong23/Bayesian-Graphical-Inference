@@ -1,0 +1,43 @@
+{
+  "v1_root": "../graphical_bayesian_inference",
+  "v1_network_run": "",
+  "pooled_workbook": "../outputs/019f860e-7e5f-75f3-876a-7f443d20be08/ccd_multiregime_43_observation_causal_input.xlsx",
+  "ko_workbooks": [],
+  "edge_thresholds": [0.999, 0.9999],
+  "site_link_mode": "activity_to_observed_readout",
+  "treatment_target_gene": "PRKACA",
+  "full_space": {
+    "target_graph_count": 150000,
+    "runtime_budget_seconds": 1200,
+    "dynamic_fit_reserve_seconds": 300,
+    "finalization_reserve_seconds": 180,
+    "anchor_gene": "PRKACA",
+    "min_graph_edges": 18,
+    "max_graph_edges": 64,
+    "max_graph_nodes": 64,
+    "target_node_fraction": 0.03,
+    "target_edge_fraction": 0.00005,
+    "node_rank_temperature": 1.0,
+    "edge_rank_temperature": 1.0,
+    "epsilon": 0.0000001,
+    "alpha_node": 0.35,
+    "alpha_edge": 0.65,
+    "complexity_penalty": 0.03,
+    "seeds": [17, 29, 43, 71],
+    "coverage_scan": {
+      "enabled": false,
+      "shard_count": 64,
+      "shard_index": 0,
+      "seed_edges_per_graph": 16,
+      "passes": 1,
+      "seed": 101
+    }
+  },
+  "dynamic_fit": {
+    "budget": 100,
+    "diverse_fraction": 0.35,
+    "ridge": 1.0,
+    "max_parents_per_target": 1,
+    "minimum_fitted_targets": 3
+  }
+}

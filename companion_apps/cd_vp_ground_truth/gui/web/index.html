@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Configure and run the PKA-responsive collecting-duct ground-truth curation protocol." />
+    <title>PKA-responsive collecting-duct ground truth</title>
+    <link rel="stylesheet" href="/styles.css?v=20261027-stream-curation-v1" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Knepper Lab · literature calibration</p>
+        <h1>Ground-truth curation</h1>
+      </div>
+      <div class="project-state"><span class="status-dot"></span><span>Independent local application</span></div>
+    </header>
+
+    <main class="gt-workspace">
+      <form id="ground-truth-form" class="gt-configuration">
+        <section class="stage">
+          <div class="stage-heading">
+            <span class="stage-number">01</span>
+            <div>
+              <h2>Azure deployments</h2>
+              <p>The API key is sent once in a request header and is never written to disk.</p>
+            </div>
+          </div>
+          <div class="gt-grid">
+            <label class="gt-span-two"><span>Azure OpenAI endpoint</span><input id="gt-endpoint" type="url" required /></label>
+            <label><span>Generator deployment</span><input id="gt-generator" type="text" required /></label>
+            <label><span>Validator deployment</span><input id="gt-validator" type="text" required /></label>
+            <label class="gt-span-two"><span>API key for this launch only</span><input id="gt-api-key" type="password" autocomplete="off" placeholder="Required only for the paid production run" /></label>
+          </div>
+        </section>
+
+        <section class="stage">
+          <div class="stage-heading">
+            <span class="stage-number">02</span>
+            <div>
+              <h2>Evidence-specific PKA pair scouting</h2>
+              <p>Search bots alternate positive and explicit-negative searches for each evidence class. AQP2 is not required to be an endpoint.</p>
+            </div>
+          </div>
+          <div class="gt-grid gt-grid-three">
+            <label><span>Search bots per round</span><input id="gt-pair-calls" type="number" min="1" max="100" required /></label>
+            <label><span>Minimum rounds</span><input id="gt-min-pair-rounds" type="number" min="1" max="50" required /></label>
+            <label><span>Maximum rounds</span><input id="gt-max-pair-rounds" type="number" min="1" max="50" required /></label>
+            <label><span>Low-yield rounds to stop</span><input id="gt-saturation-rounds" type="number" min="1" max="10" required /></label>
+            <label><span>New-pair threshold</span><input id="gt-min-new-pairs" type="number" min="0" max="500" required /></label>
+            <label><span>Maximum pairs to validate</span><input id="gt-max-pairs" type="number" min="1" max="10000" required /></label>
+            <label><span>Minimum per class/polarity</span><input id="gt-min-profile-polarity" type="number" min="0" max="1000" required /></label>
+            <label><span>Decoy fraction</span><input id="gt-decoy-fraction" type="number" min="0" max="0.4" step="any" required /></label>
+            <label><span>Random seed</span><input id="gt-seed" type="number" min="0" required /></label>
+            <label><span>Co-mention query limit</span><input id="gt-comention" type="number" min="0" max="500" required /></label>
+            <label><span>API timeout, seconds</span><input id="gt-timeout" type="number" min="30" max="3600" required /></label>
+            <label><span>Luna web-search context</span><select id="gt-search-context"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+            <label><span>Parallel Luna calls</span><input id="gt-generator-concurrency" type="number" min="1" max="32" required /></label>
+            <label><span>Parallel Sol validators</span><input id="gt-validator-concurrency" type="number" min="1" max="16" required /></label>
+          </div>
+          <p class="gt-web-search-note"><strong>Live web search is on and required.</strong> Physical interaction, directed phosphorylation, acute regulation, targeted functional association, and messenger binding are searched separately. Every class receives positive and explicit-negative passes. Sol then runs separate positive and negative primary-literature queries and rejects methods that do not match the class.</p>
+          <div id="gt-cost-preview" class="gt-cost-preview" aria-live="polite"></div>
+        </section>
+
+        <div class="gt-form-actions">
+          <button id="gt-dry-run" type="button" class="secondary-button">Preview without API calls</button>
+          <button id="gt-run" type="submit" class="primary-button">Launch paid curation <span>→</span></button>
+        </div>
+      </form>
+
+      <aside class="gt-results" aria-live="polite">
+        <div id="gt-empty" class="gt-empty">
+          <div class="graph-mark"><i></i><i></i><i></i><i></i></div>
+          <p class="eyebrow">Protocol v0.6</p>
+          <h2>One biological claim per search. Positive and negative references.</h2>
+          <p>Run the free preview first. Production searches the full acute PKA-responsive network—not merely AQP2 interactions—and keeps each evidence class separate.</p>
+          <div class="gt-principles">
+            <span>No evidence ≠ negative</span><span>Exact quotes required</span><span>Assay-class matching</span><span>PKA-wide scope</span>
+          </div>
+        </div>
+
+        <div id="gt-job" class="gt-job hidden">
+          <div class="job-header">
+            <div><p id="gt-job-mode" class="eyebrow">Ground-truth run</p><h2 id="gt-job-title">Working</h2></div>
+            <span id="gt-job-percent">0%</span>
+          </div>
+          <div class="progress-track"><div id="gt-progress-bar"></div></div>
+          <p id="gt-job-message" class="muted">Preparing</p>
+          <p id="gt-job-id" class="gt-run-id"></p>
+          <button id="gt-cancel" type="button" class="danger-button">Cancel safely</button>
+        </div>
+
+        <div id="gt-complete" class="gt-complete hidden">
+          <div class="result-heading"><div><p class="eyebrow">Finished</p><h2 id="gt-complete-title">Run complete</h2></div><span class="complete-badge">Complete</span></div>
+          <div id="gt-result-metrics" class="gt-result-metrics"></div>
+          <div id="gt-result-warning" class="warning-box hidden"></div>
+          <div class="download-block"><h3>Auditable outputs</h3><div id="gt-files" class="download-links"></div></div>
+          <button id="gt-new-run" type="button" class="secondary-button">Return to configuration</button>
+        </div>
+
+        <div id="gt-error" class="error-state hidden">
+          <p class="eyebrow">Run stopped</p><h2>Ground-truth curation needs attention</h2>
+          <p id="gt-error-message"></p>
+          <div id="gt-retry-area" class="gt-retry-area hidden">
+            <p>The saved checkpoints will be reused. Completed API calls will not be repeated.</p>
+            <label><span>API key for this retry only</span><input id="gt-retry-api-key" type="password" autocomplete="off" placeholder="Required to resume" /></label>
+            <button id="gt-retry" type="button" class="primary-button">Retry from checkpoint <span>→</span></button>
+          </div>
+          <button id="gt-dismiss-error" type="button" class="secondary-button">Return to configuration</button>
+        </div>
+      </aside>
+    </main>
+
+    <script src="/app.js?v=20261027-stream-curation-v1" defer></script>
+  </body>
+</html>

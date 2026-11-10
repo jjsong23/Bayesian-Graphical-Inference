@@ -1,0 +1,34 @@
+{
+  "v1_root": "../graphical_bayesian_inference",
+  "v1_network_run": "",
+  "pooled_workbook": "../outputs/019f860e-7e5f-75f3-876a-7f443d20be08/ccd_multiregime_43_observation_causal_input.xlsx",
+  "ko_workbooks": [],
+  "edge_thresholds": [0.999, 0.9999],
+  "site_link_mode": "activity_to_observed_readout",
+  "treatment_target_gene": "PRKACA",
+  "random_seed": 17,
+  "exploration": {
+    "target_graph_count": 10000,
+    "max_candidate_nodes": 48,
+    "max_candidate_edges": 180,
+    "required_genes": ["PRKACA", "AQP2", "DYRK1A", "GSK3B", "CDK12"],
+    "epsilon": 0.02,
+    "alpha_node": 0.35,
+    "alpha_edge": 0.65,
+    "complexity_penalty": 0.03,
+    "low_confidence_coverage_target": 20,
+    "coverage_repair_graph_limit": 5000,
+    "checkpoint_every": 2500,
+    "seeds": [17, 29, 43, 71],
+    "direction_weights": {"a_to_b": 0.42, "b_to_a": 0.42, "both": 0.10, "unknown": 0.06},
+    "sign_weights": {"activation": 0.30, "inhibition": 0.25, "unknown": 0.45},
+    "mechanism_weights": {"regulatory": 0.30, "phosphorylation": 0.20, "physical_unspecified": 0.15, "unknown": 0.35}
+  },
+  "dynamic_fit": {
+    "budget": 100,
+    "diverse_fraction": 0.25,
+    "ridge": 1.0,
+    "max_parents_per_target": 1,
+    "minimum_fitted_targets": 3
+  }
+}

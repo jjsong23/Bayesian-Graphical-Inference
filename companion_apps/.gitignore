@@ -1,0 +1,23 @@
+# Research data/checkpoints are supplied in the private portable archive.
+**/runs/
+**/runtime/
+**/results/
+**/outputs/
+**/.vendor/
+**/.venv/
+**/node_modules/
+**/__pycache__/
+**/.scratch/
+**/tests/tmp*/
+**/tests/test_data/*/*
+!**/tests/test_data/*/.gitkeep
+*.pyc
+*.log
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.env
+.env*
+**/.path_picker_server.json
+**/.ground_truth_workbench.json
+**/.workbench*

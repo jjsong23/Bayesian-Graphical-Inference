@@ -1,0 +1,28 @@
+{
+  "protocol_version": "0.6",
+  "api_base_url": "https://songjj-5910-resource.services.ai.azure.com/openai/v1",
+  "api_key_env": "AZURE_OPENAI_API_KEY",
+  "deployments": {"generator": "gpt-6-luna", "validator": "gpt-6-sol"},
+  "generator_web_search": true,
+  "generator_web_search_required": true,
+  "generator_web_search_context_size": "low",
+  "generator_concurrency": 4,
+  "validator_concurrency": 4,
+  "timeout_seconds": 600,
+  "seed": 20261027,
+  "evidence_profiles": [
+    "physical_interaction",
+    "directed_phosphorylation",
+    "acute_regulatory_signaling",
+    "messenger_binding"
+  ],
+  "pair_search_calls_per_round": 30,
+  "max_pair_search_rounds": 10,
+  "min_pair_search_rounds": 3,
+  "pair_search_saturation_rounds": 2,
+  "pair_search_min_new_pairs": 10,
+  "max_pair_candidates": 500,
+  "minimum_candidates_per_profile_polarity": 10,
+  "decoy_fraction": 0.10,
+  "max_co_mention_decoy_queries": 100
+}

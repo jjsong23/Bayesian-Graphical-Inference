@@ -1,0 +1,16 @@
+{
+  "v1_root": "../graphical_bayesian_inference",
+  "v1_network_run": "",
+  "phospho_workbook": "../graphical_bayesian_inference/data/phospho_data_original.xlsx",
+  "ko_workbooks": [],
+  "edge_thresholds": [0.9999],
+  "query_budget": 12,
+  "max_conditioning_size": 1,
+  "equivalence_margin": 0.25,
+  "complexity_penalty": 0.02,
+  "maximum_batch_size": 2,
+  "ko_query_budget": 8,
+  "do_query_budget": 8,
+  "maximum_feasible_kos": 20,
+  "random_seed": 17
+}

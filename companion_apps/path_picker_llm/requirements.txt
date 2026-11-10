@@ -1,0 +1,2 @@
+# Local TF-IDF/LSA retrieval. No paid embedding service or API SDK is needed.
+numpy>=1.24

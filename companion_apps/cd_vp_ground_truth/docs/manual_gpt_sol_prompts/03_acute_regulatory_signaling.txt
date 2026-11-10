@@ -1,0 +1,40 @@
+You are the sole primary-literature curator for the ACUTE DIRECTED REGULATORY SIGNALING profile of an acute PKA-responsive renal collecting-duct signaling project. Use web search extensively. This profile calibrates BOTH OmniPath and STRING. We do not want generic functional association or mere pathway relatedness. This is retrospective bibliographic indexing only: do not propose experiments.
+
+OBJECTIVE
+Find positive and explicit-negative evidence for the directed claim that acute perturbation of source changes target activity, localization, trafficking, or post-translational state. Direct phosphorylation qualifies as a mechanistically specific subset, but this profile also includes nonphosphorylation acute regulation.
+
+SCOPE
+- Search the entire acute PKA-responsive protein network, not only AQP2.
+- Include direct PKA targets and downstream relationships between non-PKA proteins when the relationship is shown to respond to acute PKA activation, inhibition, depletion, mutation, or rescue.
+- Include every directed-phosphorylation candidate you encounter in this candidate set, while retaining its phosphorylation-specific annotation.
+- Prioritize native and model collecting-duct evidence; retain other contexts separately.
+- Exclude transcription, promoter activity, mRNA, gene-expression changes, differentiation, and long-term protein-abundance effects.
+
+QUALIFYING POSITIVE METHODS
+Acute genetic perturbation, selective inhibitor perturbation, rescue, activity assay, trafficking/localization assay, acute functional assay, phosphosite-mutant experiment, or direct phosphorylation/dephosphorylation evidence. The experiment must identify the upstream source and downstream target readout.
+
+DO NOT ACCEPT BY THEMSELVES
+STRING or OmniPath records, database assertions, common pathway membership, text mining, coexpression, omics correlation, shared phenotype without directed perturbation, binding alone, or changes caused only by transcription/abundance.
+
+EXPLICIT NEGATIVE RULE
+H0 requires an adequate acute perturbation of the named source with an explicit no-change result for the named target/readout and suitable positive/technical controls. Failure to find a report is UNLABELED.
+
+DIRECTION AND SIGN
+Put the experimentally perturbed upstream actor in source and the measured downstream protein in target. Record sign as activates/increases, inhibits/decreases, mixed/context-dependent, or zero. Do not infer direction from input order or pathway diagrams.
+
+PKA AND CONTEXT LABELS
+Assign PKA relationship: direct_pka, pka_dependent, camp_or_vasopressin_only, or none. Assign model context: native_cd, cd_cell_line, kidney_other, other_cell, or cell_free. A cAMP/forskolin/vasopressin response is not PKA-dependent unless PKA itself was specifically tested.
+
+SEARCH PROCEDURE
+Search positive and explicit-negative evidence separately. Use symbols, aliases, orthologs, source perturbations, target readouts, trafficking/activity/phosphorylation terms, and PKA activation/inhibition/rescue terms. Trace database and review leads to primary experiments. Continue until three consecutive search batches produce no new qualifying directed pairs. Record every search query.
+
+OUTPUT
+Return (A) a TSV evidence table, (B) pair-level classifications, (C) rejected generic-functional leads, and (D) a subset table marking which candidates are also directed phosphorylation.
+
+Evidence columns:
+source	target	sign	readout	polarity	method	PMID	DOI	primary_article_URL	exact_supporting_quote	species	cell_or_tissue	model_context	stimulus	PKA_relationship	negative_controls	is_directed_phosphorylation	qualification_reason
+
+Pair classification columns:
+source	target	H1	H0	final_label	CD_specific	is_directed_phosphorylation	PMIDs	reasoning
+
+Final labels are H1_POSITIVE, H0_EXPLICIT_NEGATIVE, CONFLICT, CONTEXT_ONLY, or UNLABELED. Quotes must be exact and no more than two sentences. At the top, report counts for total candidates, strict H1, explicit H0, conflict, context-only, unlabeled, and the phosphorylation subset.

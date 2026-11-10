@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Path Picker LLM</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main>
+  <header><p class="kicker">Evidence-grounded hypothesis selection</p><h1>Path Picker</h1>
+    <p class="lede">Start with candidate pathways. Research uncertain steps once, reuse the evidence, and build a small shortlist of cited, experimentally testable hypotheses.</p>
+  </header>
+  <section class="principles">
+    <article><b>Account for every path</b><span>Directly reviewed, uncertain, rule-excluded, and pending are shown separately.</span></article>
+    <article><b>Research once, reuse</b><span>Target searches at unresolved mechanisms. Missing literature is not negative evidence.</span></article>
+    <article><b>Readable endpoint</b><span>Aim for 5–12 cited pathway abstracts, including reasoning and a falsifiable experiment.</span></article>
+  </section>
+  <section class="panel">
+    <div class="row"><h2>1. Data and models</h2><button id="recommendedDefaults" class="secondary" type="button">Use recommended defaults</button></div>
+    <p id="presetNotice" class="muted small" role="status">Recommended: Sol RAG path-first with a shared evidence library. New RAG inventories preserve old runs and reuse accepted claims, not old path assessments.</p>
+    <p id="compatibilityNotice" class="estimate" hidden></p>
+    <label>Saved run<select id="savedRun"><option value="">New inventory</option></select></label>
+    <label>Workflow<select id="workflowMode"><option value="rag_path_first">RAG path-first (recommended)</option><option value="path_first">Legacy adaptive path-first</option><option value="evidence_first">Legacy evidence-first</option></select></label>
+    <p id="workflowNotice" class="muted small">Choose New inventory to change workflows. Resuming a saved run keeps its original mode.</p>
+    <label>BGI agent graph, archive, or session directory<input id="inputPath" type="text" placeholder="Paste an absolute local path"></label>
+    <p class="muted small">A BGI session HTML may be selected if its neighboring path and evidence ledgers are present. The inventory defines the review scope: imported candidate paths and their available evidence, not every possible path or the full scored BGI matrix.</p>
+    <div class="grid two">
+      <label>Azure/OpenAI endpoint<input id="endpoint" type="url"></label>
+      <label>API key <small>memory only; never saved</small><input id="apiKey" type="password" autocomplete="off"></label>
+    </div>
+    <fieldset id="ragSettings">
+      <div class="grid two equal">
+        <label>Path reasoning deployment<input id="ragModel"></label>
+        <label>Path reasoning effort<select id="ragReasoning"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+      </div>
+      <label>Shared evidence library · SQLite path<input id="ragKbPath" type="text"></label>
+      <label>Seed accepted claims from run · optional SQLite path<input id="ragSeedRun" type="text"></label>
+      <p class="muted small">One main Sol request per path uses retrieved evidence; it may request bounded new research and one optional follow-up. Independent claim checks and final writing add calls. Creating a free inventory imports only verified saved evidence into the local library, never old path assessments, and makes no paid calls. Library inspection is read-only and does not import anything.</p>
+      <div class="grid three">
+        <label>Maximum path rounds<input id="ragMaxRounds" type="number" min="1" max="2" step="1"></label>
+        <label>New claims per path round<input id="ragMaxNewClaims" type="number" min="1" max="100" step="1"></label>
+        <label>Investigations per path round<input id="ragMaxInvestigations" type="number" min="1" max="100" step="1"></label>
+      </div>
+      <details><summary>Retrieved evidence budget</summary><div class="grid two equal">
+        <label>Maximum retrieved claims<input id="ragClaimLimit" type="number" min="1" max="500" step="1"></label>
+        <label>Maximum retrieved context characters<input id="ragContextChars" type="number" min="1000" max="200000" step="1"></label>
+      </div></details>
+      <button id="inspectKnowledge" class="secondary" type="button">Inspect default library · read only</button>
+      <pre id="knowledgeSummary" class="knowledge-summary" aria-live="polite"></pre>
+    </fieldset>
+    <details id="deploymentSettings"><summary>Legacy and finalization deployments</summary><div class="grid three">
+      <label>Path screening deployment<input id="screeningModel"></label>
+      <label>Research deployment<input id="researchModel"></label>
+      <label>Verification deployment<input id="verificationModel"></label>
+      <label>Path reasoning deployment<input id="reasoningModel"></label>
+      <label>Synthesis deployment<input id="synthesisModel"></label>
+    </div></details>
+    <div class="grid three">
+      <label>Final deep path reviews<input id="maxReviews" type="number" min="5" max="2000"></label>
+      <label>Minimum hypotheses<input id="minCards" type="number" min="5" max="12"></label>
+      <label>Maximum hypotheses<input id="maxCards" type="number" min="5" max="12"></label>
+    </div>
+    <p class="muted small">The deep-review limit applies to the final shortlist stage, not initial path coverage. Endpoints, trafficking, scaffolding, and localization mechanisms are evaluated in context.</p>
+    <details id="safetySettings"><summary>Safety limits and screening settings</summary><div class="grid three">
+      <label>Paths per screening round<input id="pathRoundSize" type="number" min="1" max="100"></label>
+      <label>Unique research-item limit<input id="maxResearchItems" type="number" min="1" max="1000000"></label>
+      <label>Total API attempt limit<input id="maxTotalApiCalls" type="number" min="1" max="10000000"></label>
+      <label>Output-token ceiling per request · includes reasoning<input id="maxOutputTokens" type="number" min="256" max="128000"></label>
+      <label>Research reasoning effort<select id="researchReasoning"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+      <label>Edges per research batch<input id="edgeBatchSize" type="number" min="1" max="50" step="1"></label>
+      <label>Nodes per research batch<input id="nodeBatchSize" type="number" min="1" max="50" step="1"></label>
+      <label>Hosted tool calls per request<input id="maxToolCalls" type="number" min="1" max="100"></label>
+      <label>Automatic rule impact: max paths<input id="exclusionMaxPaths" type="number" min="1" max="1000000"></label>
+      <label>Automatic rule impact: max fraction<input id="exclusionMaxFraction" type="number" min="0.001" max="1" step="any"></label>
+    </div><p class="muted small">The output-token ceiling includes reasoning and final output; it is not a target. A higher ceiling may increase spend. Smaller research batches reduce the work packed into each response but can require more calls. Both rule-impact limits must be met; broad rules are held for review. Caps can stop a run with unresolved paths: partial coverage, not success. API attempts include retries. These limits are not a guaranteed dollar budget; monitor Azure usage too.</p></details>
+    <div id="recoveryControls" class="recovery-controls">
+      <p id="outputLimitWarning" class="error" role="alert" hidden></p>
+      <button id="outputLimitRecovery" class="secondary" type="button" disabled>Apply output-limit recovery settings</button>
+      <p class="muted small">For a stopped run: set a 32,000 output-token ceiling (including reasoning), medium research reasoning, and batches of 1 edge / 2 nodes. Changes only these four settings. A higher ceiling may increase spend. No paid calls start until launch/resume, which reuses completed checkpoints.</p>
+      <p id="recoveryNotice" class="small" role="status" aria-live="polite"></p>
+    </div>
+    <details id="pricingSettings"><summary>Cost estimate rates · editable USD references</summary>
+      <fieldset id="pricingControls">
+        <p class="muted small">These are reference estimates, not your Azure invoice. Enter rates from your deployment agreement. Rates match exact model/deployment names only; unknown aliases are not guessed. Blank means unknown, not free. Standard-tier token rates below are USD per million tokens.</p>
+        <div class="table-scroll"><table class="pricing-table"><thead><tr><th scope="col">Exact deployment / model</th><th scope="col">Input</th><th scope="col">Cache read</th><th scope="col">Cache write</th><th scope="col">Output</th></tr></thead><tbody id="pricingModels"></tbody></table></div>
+        <button id="addPricingModel" class="secondary" type="button">Add deployment rate</button>
+        <div class="grid two equal">
+          <label>Azure search · USD per 1,000 reported requests<input id="azureSearchRate" type="number" min="0" step="any" placeholder="Unknown"></label>
+          <label>OpenAI search · USD per 1,000 reported requests<input id="openaiSearchRate" type="number" min="0" step="any" placeholder="Unknown"></label>
+        </div>
+        <p class="muted small">Azure search starts at a $14 / 1,000 reference, not a verified account rate. Observed search actions are shown separately and are not assumed to be billable request counts.</p>
+        <div class="grid three">
+          <label>Long-context threshold · input tokens<input id="longContextThreshold" type="number" min="0" step="1" placeholder="Unknown"></label>
+          <label>Above threshold · input rate multiplier<input id="longInputMultiplier" type="number" min="0" step="any" placeholder="Unknown"></label>
+          <label>Above threshold · output rate multiplier<input id="longOutputMultiplier" type="number" min="0" step="any" placeholder="Unknown"></label>
+        </div>
+      </fieldset>
+      <p id="pricingNotice" class="muted small">Rates are saved with the next inventory/launch/resume. They cannot be changed while a run is active. Editing the form does not recalculate a saved run until it is resumed.</p>
+    </details>
+    <div class="actions"><button id="inventory" class="secondary">Create free inventory</button><button id="run">Launch/resume paid curation</button><button id="cancel" class="danger" disabled>Cancel safely</button></div>
+    <p id="error" class="error"></p>
+  </section>
+  <section class="panel">
+    <div class="row"><div><h2>2. Live audit</h2><p class="muted">Completed tasks are committed individually and reused after a stop.</p></div><span id="status" class="badge">Idle</span></div>
+    <p id="runMessage" role="status"></p>
+    <section id="ragStatus" class="usage-panel" hidden>
+      <h3>Shared evidence &amp; RAG progress</h3>
+      <div id="ragSummary" class="usage-summary"></div>
+      <p id="ragStage" class="small" role="status"></p><p id="ragLibrary" class="muted small"></p>
+      <p class="muted small">Library counts are shared across runs; review rounds and investigations belong to this run. Accepted facts still require pathway-specific context checks. An investigation does not guarantee a resolved step, and rejected evidence is not a biological contradiction.</p>
+      <details><summary>Raw provenance diagnostics</summary><pre id="ragProgress" class="knowledge-summary"></pre></details>
+    </section>
+    <section class="usage-panel" aria-labelledby="usageHeading">
+      <div class="row"><h3 id="usageHeading">Live usage &amp; estimated cost</h3><span id="usageState" class="badge">No run selected</span></div>
+      <div id="usageSummary" class="usage-summary"><p class="muted">Select an inventory or run to see recorded usage.</p></div>
+      <p id="usageNote" class="muted small">Updates every 2.5 seconds while active. Completed response records can lag an in-flight request. This is not a bill, spending cap, or completion forecast.</p>
+      <ul id="usageWarnings" class="usage-warnings" hidden></ul>
+      <details><summary>Token, search, and model breakdown</summary><div id="usageDetails"></div><ul id="billingCaveats" class="muted small"></ul></details>
+    </section>
+    <div id="counts" class="counts"></div><p id="coverageNote" class="muted small"></p><div id="stages" class="stages"></div><div id="estimate" class="estimate" hidden></div>
+    <details><summary>Reversible exclusion ledger</summary><p class="muted small">A rule is not a direct review of every affected path. Stop the run before undoing an active rule.</p><div id="exclusions"></div></details>
+    <h3>Recent events</h3><ol id="events" class="events"><li>No run yet.</li></ol>
+    <div id="files" class="files"></div>
+  </section>
+  <section class="panel guardrail"><h2>What “grounded” means here</h2>
+    <p>A proposed factual claim must pass source retrieval, quotation matching, and independent entailment checks. Failed checks stay visible but cannot support the final paragraph. Computational BFs, published facts, and mechanistic inferences remain distinct. This reduces hallucination risk; it does not guarantee correctness or exhaustive literature coverage. Inspect the sources before choosing a lab experiment.</p>
+  </section>
+</main><script src="app.js"></script>
+</body></html>
+

@@ -1,0 +1,21 @@
+{
+  "v1_root": "../graphical_bayesian_inference",
+  "v1_network_run": "",
+  "pooled_workbook": "../outputs/019f860e-7e5f-75f3-876a-7f443d20be08/ccd_multiregime_43_observation_causal_input.xlsx",
+  "ko_workbooks": [
+    "../graphical_bayesian_inference/data/pka_ko/PKA-KO_database_raw.xlsx",
+    "../graphical_bayesian_inference/data/node_selection/pka_subunit_ko/raw/Phosphopeptides-PKAsKO.xlsx"
+  ],
+  "edge_thresholds": [0.999, 0.9999],
+  "site_link_mode": "activity_to_observed_readout",
+  "treatment_target_gene": "PRKACA",
+  "query_budget": 120,
+  "max_conditioning_size": 3,
+  "equivalence_margin": 0.25,
+  "complexity_penalty": 0.02,
+  "maximum_batch_size": 3,
+  "ko_query_budget": 24,
+  "do_query_budget": 32,
+  "maximum_feasible_kos": null,
+  "random_seed": 17
+}

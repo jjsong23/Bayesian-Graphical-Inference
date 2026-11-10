@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+results/
+gui/.ground_truth_workbench.json
+gui/server.stdout.log
+gui/server.stderr.log

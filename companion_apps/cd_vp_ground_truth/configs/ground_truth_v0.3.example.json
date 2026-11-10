@@ -1,0 +1,15 @@
+{
+  "protocol_version": "0.3",
+  "api_base_url": "https://songjj-5910-resource.services.ai.azure.com/openai/v1",
+  "api_key_env": "AZURE_OPENAI_API_KEY",
+  "deployments": {"generator": "gpt-6-luna", "validator": "gpt-6-sol"},
+  "timeout_seconds": 600,
+  "seed": 20261001,
+  "node_generation_repeats": 5,
+  "edge_generation_repeats": 3,
+  "max_generation_rounds": 4,
+  "saturation_epsilon": 0.02,
+  "snowball_depth": 2,
+  "decoy_fraction": 0.10,
+  "max_co_mention_decoy_queries": 100
+}
